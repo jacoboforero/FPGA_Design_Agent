@@ -16,10 +16,7 @@ tests/
 │   ├── test_validation.py   # Validation and error handling tests
 │   ├── test_serialization.py # JSON serialization tests
 │   └── README.md           # Schema testing documentation
-├── orchestrator/            # Orchestrator component tests (future)
-├── agents/                  # Agent component tests (future)
-├── workers/                 # Worker component tests (future)
-└── integration/             # End-to-end integration tests (future)
+└── [other components]/      # Additional component tests (future)
 ```
 
 ## Running Tests
@@ -48,14 +45,8 @@ python3 -m pytest tests/ --cov=schemas --cov-report=term-missing
 # Schema tests
 python3 -m pytest tests/schemas/ -v
 
-# Future: Orchestrator tests
-python3 -m pytest tests/orchestrator/ -v
-
-# Future: Agent tests
-python3 -m pytest tests/agents/ -v
-
-# Future: Worker tests
-python3 -m pytest tests/workers/ -v
+# Future: Additional component tests
+python3 -m pytest tests/[component]/ -v
 ```
 
 ## Test Organization Philosophy
@@ -65,10 +56,7 @@ python3 -m pytest tests/workers/ -v
 Each major system component has its own test directory:
 
 - **`schemas/`** - Data contract validation
-- **`orchestrator/`** - Central coordination logic
-- **`agents/`** - LLM-based intelligent agents
-- **`workers/`** - Deterministic processing workers
-- **`integration/`** - End-to-end system tests
+- **`[other components]/`** - Additional component tests as needed
 
 ### Shared vs Component-Specific
 
@@ -95,10 +83,7 @@ This structure supports:
 
 ### 🔄 Future Components (Planned)
 
-- **Orchestrator tests** - Task routing, coordination logic
-- **Agent tests** - LLM integration, prompt handling, response processing
-- **Worker tests** - Tool execution, deterministic processing
-- **Integration tests** - End-to-end workflows, system interactions
+- **Additional component tests** - As new components are developed
 
 ## Best Practices
 
@@ -114,8 +99,8 @@ This structure supports:
 # During schema development
 python3 -m pytest tests/schemas/ -v
 
-# During orchestrator development
-python3 -m pytest tests/orchestrator/ -v
+# During component development
+python3 -m pytest tests/[component]/ -v
 
 # Before committing
 python3 -m pytest tests/ -v --cov
@@ -124,4 +109,4 @@ python3 -m pytest tests/ -v --cov
 python3 -m pytest tests/ --cov --cov-report=xml
 ```
 
-This structure ensures the test suite scales with your multi-agent system while maintaining clear organization and fast execution.
+This structure ensures the test suite scales with your system while maintaining clear organization and fast execution.

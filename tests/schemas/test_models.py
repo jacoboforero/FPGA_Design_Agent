@@ -283,8 +283,8 @@ class TestResultMessage:
 class TestModelIntegration:
     """Test integration between different models."""
     
-    def test_task_to_result_flow(self, sample_context):
-        """Test the flow from TaskMessage to ResultMessage."""
+    def test_task_to_result_relationship(self, sample_context):
+        """Test the relationship between TaskMessage and ResultMessage."""
         # Create a task
         task = TaskMessage(
             entity_type=EntityType.AGENT,
@@ -304,8 +304,8 @@ class TestModelIntegration:
         assert result.task_id == task.task_id
         assert result.correlation_id == task.correlation_id
     
-    def test_agent_task_flow(self, sample_context):
-        """Test agent task flow with cost metrics."""
+    def test_agent_task_with_metrics(self, sample_context):
+        """Test agent task with cost metrics."""
         task = TaskMessage(
             entity_type=EntityType.AGENT,
             task_type=AgentType.IMPLEMENTATION,
@@ -329,8 +329,8 @@ class TestModelIntegration:
         assert result.metrics == cost_metrics
         assert result.status == TaskStatus.SUCCESS
     
-    def test_worker_task_flow(self, sample_context):
-        """Test worker task flow without cost metrics."""
+    def test_worker_task_without_metrics(self, sample_context):
+        """Test worker task without cost metrics."""
         task = TaskMessage(
             entity_type=EntityType.WORKER,
             task_type=WorkerType.SIMULATOR,
@@ -345,5 +345,5 @@ class TestModelIntegration:
             artifacts_path="/path/to/simulation_results"
         )
         
-        assert result.metrics is None  # Workers don't have cost metrics
+        assert result.metrics is None  # This test doesn't include cost metrics
         assert result.artifacts_path == "/path/to/simulation_results"
