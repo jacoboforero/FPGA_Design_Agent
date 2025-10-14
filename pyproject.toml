@@ -1,0 +1,29 @@
+# /pyproject.toml
+
+[tool.poetry]
+name = "multi-agent-hardware-design"
+version = "0.1.0"
+description = "A multi-agent system for accelerating hardware design."
+authors = ["Jacobo Forero", "Dexter Pressley", "Mateus Verffel Mayer" , "Caleb Elliott", "Andrew Chambers", "Sammy Fares"]
+readme = "README.md"
+
+# --- VERSIONING SECTION ---
+
+python = ">=3.12, <4.0"
+
+
+
+pydantic = "^2.12.1"
+
+
+# Optional: Dependencies only needed for development (testing, linting, etc.)
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2.0"
+pytest-cov = "^4.1.0"
+pytest-mock = "^3.12.0"
+ruff = "^0.4.4"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
