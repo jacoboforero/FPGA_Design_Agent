@@ -71,7 +71,7 @@ class TestTaskMessage:
     def test_task_message_minimal_creation(self, sample_context):
         """Test creating TaskMessage with minimal required fields."""
         task = TaskMessage(
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context=sample_context
         )
@@ -80,7 +80,7 @@ class TestTaskMessage:
         assert isinstance(task.correlation_id, UUID)
         assert isinstance(task.created_at, datetime)
         assert task.priority == TaskPriority.MEDIUM
-        assert task.entity_type == EntityType.AGENT
+        assert task.entity_type == EntityType.REASONING
         assert task.task_type == AgentType.PLANNER
         assert task.context == sample_context
     
@@ -95,7 +95,7 @@ class TestTaskMessage:
             correlation_id=correlation_id,
             created_at=created_at,
             priority=TaskPriority.HIGH,
-            entity_type=EntityType.WORKER,
+            entity_type=EntityType.LIGHT_DETERMINISTIC,
             task_type=WorkerType.LINTER,
             context=sample_context
         )
@@ -104,7 +104,7 @@ class TestTaskMessage:
         assert task.correlation_id == correlation_id
         assert task.created_at == created_at
         assert task.priority == TaskPriority.HIGH
-        assert task.entity_type == EntityType.WORKER
+        assert task.entity_type == EntityType.LIGHT_DETERMINISTIC
         assert task.task_type == WorkerType.LINTER
         assert task.context == sample_context
     
@@ -112,29 +112,29 @@ class TestTaskMessage:
         """Test TaskMessage with different agent types."""
         for agent_type in AgentType:
             task = TaskMessage(
-                entity_type=EntityType.AGENT,
+                entity_type=EntityType.REASONING,
                 task_type=agent_type,
                 context=sample_context
             )
-            assert task.entity_type == EntityType.AGENT
+            assert task.entity_type == EntityType.REASONING
             assert task.task_type == agent_type
     
     def test_task_message_worker_types(self, sample_context):
         """Test TaskMessage with different worker types."""
         for worker_type in WorkerType:
             task = TaskMessage(
-                entity_type=EntityType.WORKER,
+                entity_type=EntityType.LIGHT_DETERMINISTIC,
                 task_type=worker_type,
                 context=sample_context
             )
-            assert task.entity_type == EntityType.WORKER
+            assert task.entity_type == EntityType.LIGHT_DETERMINISTIC
             assert task.task_type == worker_type
     
     def test_task_message_priorities(self, sample_context):
         """Test TaskMessage with different priorities."""
         for priority in TaskPriority:
             task = TaskMessage(
-                entity_type=EntityType.AGENT,
+                entity_type=EntityType.REASONING,
                 task_type=AgentType.PLANNER,
                 priority=priority,
                 context=sample_context
@@ -148,13 +148,13 @@ class TestTaskMessage:
             TaskMessage()
         
         with pytest.raises(ValidationError):
-            TaskMessage(entity_type=EntityType.AGENT, context=sample_context)
+            TaskMessage(entity_type=EntityType.REASONING, context=sample_context)
         
         with pytest.raises(ValidationError):
             TaskMessage(task_type=AgentType.PLANNER, context=sample_context)
         
         with pytest.raises(ValidationError):
-            TaskMessage(entity_type=EntityType.AGENT, task_type=AgentType.PLANNER)
+            TaskMessage(entity_type=EntityType.REASONING, task_type=AgentType.PLANNER)
     
     def test_task_message_context_types(self):
         """Test TaskMessage with different context types."""
@@ -169,7 +169,7 @@ class TestTaskMessage:
         
         for context in contexts:
             task = TaskMessage(
-                entity_type=EntityType.AGENT,
+                entity_type=EntityType.REASONING,
                 task_type=AgentType.PLANNER,
                 context=context
             )
@@ -287,7 +287,7 @@ class TestModelIntegration:
         """Test the relationship between TaskMessage and ResultMessage."""
         # Create a task
         task = TaskMessage(
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context=sample_context
         )
@@ -307,7 +307,7 @@ class TestModelIntegration:
     def test_agent_task_with_metrics(self, sample_context):
         """Test agent task with cost metrics."""
         task = TaskMessage(
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.IMPLEMENTATION,
             context=sample_context
         )
@@ -332,7 +332,7 @@ class TestModelIntegration:
     def test_worker_task_without_metrics(self, sample_context):
         """Test worker task without cost metrics."""
         task = TaskMessage(
-            entity_type=EntityType.WORKER,
+            entity_type=EntityType.LIGHT_DETERMINISTIC,
             task_type=WorkerType.SIMULATOR,
             context=sample_context
         )

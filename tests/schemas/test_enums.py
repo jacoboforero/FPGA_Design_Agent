@@ -69,12 +69,13 @@ class TestEntityType:
     
     def test_enum_values(self):
         """Test that EntityType has correct string values."""
-        assert EntityType.AGENT.value == "AGENT"
-        assert EntityType.WORKER.value == "WORKER"
+        assert EntityType.REASONING.value == "REASONING"
+        assert EntityType.LIGHT_DETERMINISTIC.value == "LIGHT_DETERMINISTIC"
+        assert EntityType.HEAVY_DETERMINISTIC.value == "HEAVY_DETERMINISTIC"
     
     def test_enum_members(self):
         """Test that all expected members exist."""
-        expected_members = {"AGENT", "WORKER"}
+        expected_members = {"REASONING", "LIGHT_DETERMINISTIC", "HEAVY_DETERMINISTIC"}
         actual_members = {member.name for member in EntityType}
         assert actual_members == expected_members
 
@@ -142,14 +143,14 @@ class TestWorkerType:
 class TestEnumIntegration:
     """Test integration between different enum types."""
     
-    def test_entity_type_agent_consistency(self):
-        """Test that EntityType.AGENT is consistent with AgentType values."""
+    def test_entity_type_reasoning_consistency(self):
+        """Test that EntityType.REASONING is consistent with AgentType values."""
         # All AgentType values should contain "Agent"
         for agent_type in AgentType:
             assert "Agent" in agent_type.value
     
-    def test_entity_type_worker_consistency(self):
-        """Test that EntityType.WORKER is consistent with WorkerType values."""
+    def test_entity_type_deterministic_consistency(self):
+        """Test that EntityType deterministic types are consistent with WorkerType values."""
         # All WorkerType values should contain "Worker"
         for worker_type in WorkerType:
             assert "Worker" in worker_type.value
@@ -167,6 +168,6 @@ class TestEnumIntegration:
         # Verify they are the correct types
         assert TaskPriority.LOW is not None
         assert TaskStatus.SUCCESS is not None
-        assert EntityType.AGENT is not None
+        assert EntityType.REASONING is not None
         assert AgentType.PLANNER is not None
         assert WorkerType.LINTER is not None

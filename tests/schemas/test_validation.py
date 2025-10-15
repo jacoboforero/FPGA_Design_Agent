@@ -54,11 +54,11 @@ class TestValidationErrors:
         assert "entity_type" in str(exc_info.value)
         
         with pytest.raises(ValidationError) as exc_info:
-            TaskMessage(entity_type=EntityType.AGENT)
+            TaskMessage(entity_type=EntityType.REASONING)
         assert "task_type" in str(exc_info.value)
         
         with pytest.raises(ValidationError) as exc_info:
-            TaskMessage(entity_type=EntityType.AGENT, task_type=AgentType.PLANNER)
+            TaskMessage(entity_type=EntityType.REASONING, task_type=AgentType.PLANNER)
         assert "context" in str(exc_info.value)
         
         # Test invalid enum values
@@ -71,7 +71,7 @@ class TestValidationErrors:
         
         with pytest.raises(ValidationError):
             TaskMessage(
-                entity_type=EntityType.AGENT,
+                entity_type=EntityType.REASONING,
                 task_type="INVALID_AGENT",
                 context={"test": "value"}
             )
@@ -79,7 +79,7 @@ class TestValidationErrors:
         # Test invalid priority
         with pytest.raises(ValidationError):
             TaskMessage(
-                entity_type=EntityType.AGENT,
+                entity_type=EntityType.REASONING,
                 task_type=AgentType.PLANNER,
                 priority="INVALID_PRIORITY",
                 context={"test": "value"}
@@ -89,7 +89,7 @@ class TestValidationErrors:
         with pytest.raises(ValidationError):
             TaskMessage(
                 task_id="not_a_uuid",
-                entity_type=EntityType.AGENT,
+                entity_type=EntityType.REASONING,
                 task_type=AgentType.PLANNER,
                 context={"test": "value"}
             )
@@ -97,7 +97,7 @@ class TestValidationErrors:
         with pytest.raises(ValidationError):
             TaskMessage(
                 correlation_id="not_a_uuid",
-                entity_type=EntityType.AGENT,
+                entity_type=EntityType.REASONING,
                 task_type=AgentType.PLANNER,
                 context={"test": "value"}
             )
@@ -106,7 +106,7 @@ class TestValidationErrors:
         with pytest.raises(ValidationError):
             TaskMessage(
                 created_at="not_a_datetime",
-                entity_type=EntityType.AGENT,
+                entity_type=EntityType.REASONING,
                 task_type=AgentType.PLANNER,
                 context={"test": "value"}
             )
@@ -173,14 +173,14 @@ class TestValidationErrors:
         """Test that entity_type and task_type are consistent."""
         # Agent entity with agent task type should work
         TaskMessage(
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context={"test": "value"}
         )
         
         # Worker entity with worker task type should work
         TaskMessage(
-            entity_type=EntityType.WORKER,
+            entity_type=EntityType.LIGHT_DETERMINISTIC,
             task_type=WorkerType.LINTER,
             context={"test": "value"}
         )
@@ -229,7 +229,7 @@ class TestEdgeCases:
     def test_empty_context(self):
         """Test TaskMessage with empty context."""
         task = TaskMessage(
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context={}
         )
@@ -254,7 +254,7 @@ class TestEdgeCases:
         }
         
         task = TaskMessage(
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context=large_context
         )
@@ -269,7 +269,7 @@ class TestEdgeCases:
         }
         
         task = TaskMessage(
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context=unicode_context
         )
@@ -315,7 +315,7 @@ class TestEdgeCases:
         specific_time = datetime(2024, 1, 1, 12, 0, 0)
         
         task = TaskMessage(
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context={"test": "value"},
             created_at=specific_time

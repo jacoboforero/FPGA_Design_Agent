@@ -166,8 +166,8 @@ The fundamental unit of result in the system.
 
 ### **Entity Type Consistency:**
 
-- When `TaskMessage.entity_type = EntityType.AGENT`, then `task_type` must be an `AgentType`
-- When `TaskMessage.entity_type = EntityType.WORKER`, then `task_type` must be a `WorkerType`
+- When `TaskMessage.entity_type = EntityType.REASONING`, then `task_type` must be an `AgentType`
+- When `TaskMessage.entity_type = EntityType.LIGHT_DETERMINISTIC` or `EntityType.HEAVY_DETERMINISTIC`, then `task_type` must be a `WorkerType`
 
 ---
 

@@ -47,7 +47,7 @@ class TestJSONSerialization:
             correlation_id=correlation_id,
             created_at=created_at,
             priority=TaskPriority.HIGH,
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context={"test": "value", "nested": {"key": "value"}}
         )
@@ -58,7 +58,7 @@ class TestJSONSerialization:
         assert data["task_id"] == str(task_id)
         assert data["correlation_id"] == str(correlation_id)
         assert data["priority"] == TaskPriority.HIGH.value
-        assert data["entity_type"] == EntityType.AGENT.value
+        assert data["entity_type"] == EntityType.REASONING.value
         assert data["task_type"] == AgentType.PLANNER.value
         assert data["context"] == {"test": "value", "nested": {"key": "value"}}
         assert "created_at" in data
@@ -101,7 +101,7 @@ class TestJSONSerialization:
         # Test individual enum serialization - enums serialize to their values
         assert TaskPriority.HIGH.value == 3
         assert TaskStatus.SUCCESS.value == "SUCCESS"
-        assert EntityType.AGENT.value == "AGENT"
+        assert EntityType.REASONING.value == "REASONING"
         assert AgentType.PLANNER.value == "PlannerAgent"
         assert WorkerType.LINTER.value == "LinterWorker"
     
@@ -152,7 +152,7 @@ class TestJSONDeserialization:
             "correlation_id": correlation_id,
             "created_at": created_at,
             "priority": TaskPriority.HIGH.value,
-            "entity_type": EntityType.AGENT.value,
+            "entity_type": EntityType.REASONING.value,
             "task_type": AgentType.PLANNER.value,
             "context": {"test": "value"}
         }
@@ -161,7 +161,7 @@ class TestJSONDeserialization:
         assert str(task.task_id) == task_id
         assert str(task.correlation_id) == correlation_id
         assert task.priority == TaskPriority.HIGH
-        assert task.entity_type == EntityType.AGENT
+        assert task.entity_type == EntityType.REASONING
         assert task.task_type == AgentType.PLANNER
         assert task.context == {"test": "value"}
     
@@ -202,7 +202,7 @@ class TestJSONDeserialization:
         # Test deserializing enum values - enums can be created from their values
         assert TaskPriority(3) == TaskPriority.HIGH
         assert TaskStatus("SUCCESS") == TaskStatus.SUCCESS
-        assert EntityType("AGENT") == EntityType.AGENT
+        assert EntityType("REASONING") == EntityType.REASONING
         assert AgentType("PlannerAgent") == AgentType.PLANNER
         assert WorkerType("LinterWorker") == WorkerType.LINTER
 
@@ -228,7 +228,7 @@ class TestRoundTripSerialization:
     def test_task_message_round_trip(self):
         """Test TaskMessage round-trip serialization."""
         original = TaskMessage(
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context={"test": "value", "nested": {"key": "value"}}
         )
@@ -295,7 +295,7 @@ class TestRoundTripSerialization:
         }
         
         original = TaskMessage(
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context=complex_context
         )
@@ -317,7 +317,7 @@ class TestSerializationEdgeCases:
         specific_time = datetime(2024, 1, 1, 12, 0, 0, 123456)
         
         task = TaskMessage(
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context={"test": "value"},
             created_at=specific_time
@@ -342,7 +342,7 @@ class TestSerializationEdgeCases:
         task = TaskMessage(
             task_id=specific_task_id,
             correlation_id=specific_correlation_id,
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context={"test": "value"}
         )
@@ -371,7 +371,7 @@ class TestSerializationEdgeCases:
         }
         
         task = TaskMessage(
-            entity_type=EntityType.AGENT,
+            entity_type=EntityType.REASONING,
             task_type=AgentType.PLANNER,
             context=large_context
         )
