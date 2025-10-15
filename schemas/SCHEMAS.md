@@ -1,6 +1,6 @@
 # Multi-Agent Hardware Design System - Schema Documentation
 
-**Version:** 1.0.0  
+**Version:** 1.0.1  
 **Author:** Jacobo Forero  
 **Team:** Jacobo Forero, Dexter Pressley, Mateus Verffel Mayer, Caleb Elliott, Andrew Chambers, Sammy Fares
 
@@ -44,12 +44,13 @@ Defines the outcome status of a completed task.
 
 ### **EntityType**
 
-Distinguishes between intelligent LLM-based agents and deterministic workers.
+Distinguishes between different types of processing entities based on their characteristics.
 
-| Value               | Description                     |
-| ------------------- | ------------------------------- |
-| `AGENT = "AGENT"`   | LLM-based intelligent agent     |
-| `WORKER = "WORKER"` | Deterministic processing worker |
+| Value                                         | Description                                          |
+| --------------------------------------------- | ---------------------------------------------------- |
+| `REASONING = "REASONING"`                     | LLM-based agents requiring creativity and reasoning  |
+| `LIGHT_DETERMINISTIC = "LIGHT_DETERMINISTIC"` | Fast, lightweight deterministic tasks                |
+| `HEAVY_DETERMINISTIC = "HEAVY_DETERMINISTIC"` | Resource-intensive, long-running deterministic tasks |
 
 ### **AgentType**
 
@@ -91,15 +92,15 @@ A structured model for tracking LLM-related costs, embedded in results.
 
 The fundamental unit of work in the system.
 
-| Field            | Type                      | Required | Default        | Description                                        |
-| ---------------- | ------------------------- | -------- | -------------- | -------------------------------------------------- |
-| `task_id`        | `UUID`                    | ✅       | Auto-generated | Unique identifier for this specific task instance  |
-| `correlation_id` | `UUID`                    | ✅       | Auto-generated | Identifier to trace a chain of related tasks       |
-| `created_at`     | `datetime`                | ✅       | Auto-generated | Timestamp in UTC when the task was created         |
-| `priority`       | `TaskPriority`            | ✅       | `MEDIUM`       | Execution priority                                 |
-| `entity_type`    | `EntityType`              | ✅       | -              | Type of entity that should process this task       |
-| `task_type`      | `AgentType \| WorkerType` | ✅       | -              | Specific type of Agent or Worker to invoke         |
-| `context`        | `Dict[str, Any]`          | ✅       | -              | Payload containing all necessary data for the task |
+| Field            | Type                      | Required | Default        | Description                                                                                           |
+| ---------------- | ------------------------- | -------- | -------------- | ----------------------------------------------------------------------------------------------------- |
+| `task_id`        | `UUID`                    | ✅       | Auto-generated | Unique identifier for this specific task instance                                                     |
+| `correlation_id` | `UUID`                    | ✅       | Auto-generated | Identifier to trace a chain of related tasks                                                          |
+| `created_at`     | `datetime`                | ✅       | Auto-generated | Timestamp in UTC when the task was created                                                            |
+| `priority`       | `TaskPriority`            | ✅       | `MEDIUM`       | Execution priority                                                                                    |
+| `entity_type`    | `EntityType`              | ✅       | -              | Type of entity that should process this task (REASONING, LIGHT_DETERMINISTIC, or HEAVY_DETERMINISTIC) |
+| `task_type`      | `AgentType \| WorkerType` | ✅       | -              | Specific type of Agent or Worker to invoke                                                            |
+| `context`        | `Dict[str, Any]`          | ✅       | -              | Payload containing all necessary data for the task                                                    |
 
 **Example TaskMessage:**
 
@@ -109,7 +110,7 @@ The fundamental unit of work in the system.
     "correlation_id": "987fcdeb-51a2-43d1-b789-123456789abc",
     "created_at": "2024-01-15T10:30:00Z",
     "priority": "HIGH",
-    "entity_type": "AGENT",
+    "entity_type": "REASONING",
     "task_type": "PlannerAgent",
     "context": {
         "node_id": "design_123",
@@ -191,7 +192,7 @@ from schemas import (
 
 ```python
 task = TaskMessage(
-    entity_type=EntityType.AGENT,
+    entity_type=EntityType.REASONING,
     task_type=AgentType.PLANNER,
     priority=TaskPriority.HIGH,
     context={
@@ -236,7 +237,7 @@ result = ResultMessage(
 
 ## 📝 **Schema Versioning**
 
-- **Current Version:** 1.0.0
+- **Current Version:** 1.0.1
 - **Backward Compatibility:** Maintained through careful field evolution
 - **Breaking Changes:** Will increment major version number
 - **Documentation:** All changes tracked in this document

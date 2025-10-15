@@ -109,4 +109,3 @@ python3 -m pytest tests/ -v --cov
 python3 -m pytest tests/ --cov --cov-report=xml
 ```
 
-This structure ensures the test suite scales with your system while maintaining clear organization and fast execution.

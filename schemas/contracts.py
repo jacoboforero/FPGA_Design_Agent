@@ -1,5 +1,5 @@
 # contracts.py
-# Version: 1.0.0
+# Version: 1.0.1
 # Author: Jacobo Forero
 # Description: This file defines the core data contracts for the asynchronous
 # multi-agent hardware design system. All communication between the Orchestrator
@@ -29,9 +29,10 @@ class TaskStatus(Enum):
     ESCALATED = "ESCALATED_TO_HUMAN"
 
 class EntityType(Enum):
-    """Distinguishes between intelligent LLM-based agents and deterministic workers."""
-    AGENT = "AGENT"
-    WORKER = "WORKER"
+    """Distinguishes between different types of processing entities based on their characteristics."""
+    REASONING = "REASONING"                    # LLM-based agents requiring creativity and reasoning
+    LIGHT_DETERMINISTIC = "LIGHT_DETERMINISTIC"  # Fast, lightweight deterministic tasks
+    HEAVY_DETERMINISTIC = "HEAVY_DETERMINISTIC"  # Resource-intensive, long-running deterministic tasks
 
 class AgentType(Enum):
     """Specifies which LLM-based agent should execute the task."""
