@@ -53,6 +53,67 @@ The system is built on the principle that **exhaustive upfront planning enables 
 - Enable parallel execution of independent design tasks
 - Maintain human oversight for strategic decisions
 
+## Development Setup
+
+### RabbitMQ (Local Development)
+
+The system uses RabbitMQ for asynchronous task distribution. To start the local development environment:
+
+```bash
+# Navigate to infrastructure directory
+cd infrastructure/
+
+# Start RabbitMQ with management UI
+docker-compose up -d
+
+# Verify the service is running
+docker-compose ps
+```
+
+**Access Points:**
+
+- **Management UI**: http://localhost:15672
+  - Username: `user`
+  - Password: `password`
+- **AMQP Connection**: `localhost:5672`
+
+**Configured Queues:**
+
+- `agent_tasks` - LLM-based reasoning tasks (with 3-level priority)
+- `process_tasks` - Light deterministic tasks
+- `simulation_tasks` - Heavy deterministic tasks
+- `dead_letter_queue` - Failed/unprocessable tasks
+
+**To stop the service:**
+
+```bash
+docker-compose down
+```
+
+### Testing Infrastructure
+
+The RabbitMQ setup includes comprehensive tests to ensure reliability:
+
+```bash
+# Run all infrastructure tests
+python run_infrastructure_tests.py
+
+# Quick health check
+python run_infrastructure_tests.py --quick
+
+# Run specific test categories
+pytest tests/infrastructure/test_docker_setup.py -v
+pytest tests/infrastructure/test_schema_integration.py -v
+```
+
+**Test Coverage:**
+
+- ✅ Docker Compose setup and service health
+- ✅ Queue configuration and bindings
+- ✅ Schema integration with message routing
+- ✅ End-to-end message flow
+- ✅ Dead Letter Queue functionality
+
 ## Documentation
 
 - **Architecture**: See `docs/Architecture.md` for detailed system design

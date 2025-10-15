@@ -88,16 +88,12 @@ The system is composed of four primary components: an Orchestrator, a Task Broke
 - **The Orchestrator:** The central "brain" of the system. It maintains the state of the entire design graph (DAG) but does not execute tasks itself. Its sole responsibilities are to monitor the state of design artifacts, determine which tasks are ready to run based on their dependencies, and publish those tasks to the Task Broker.
 - **The Task Broker (Queuing System):** The central nervous system for communication. It is a message bus that decouples the Orchestrator from the workers. It manages dedicated queues for different types of work, ensuring that long-running tasks do not block short ones and that tasks are distributed efficiently to available workers. **It is configured to route un-processable tasks to a Dead Letter Exchange, preventing system stalls.**
 - **Worker Pools:** Groups of independent processes that consume tasks from the queues and perform the actual work.
-
   - **Agent Pool:** Executes tasks requiring LLM-based intelligence (implementation, debugging, test generation). These workers are stateful during a task, leveraging short-term memory to learn from previous attempts. **They are responsible for identifying "poison pill" tasks (e.g., due to malformed data) and rejecting them to prevent infinite processing loops.**
   - **Process Pool:** Executes fast, deterministic tasks like linting and compilation. **They are responsible for identifying "poison pill" tasks and rejecting them to prevent infinite processing loops.**
   - **Simulation Pool:** Executes slow, resource-intensive simulation tasks. **They are responsible for identifying "poison pill" tasks and rejecting them to prevent infinite processing loops.**
-
 - **Data Stores:** The system's memory.
-
   - **Design Context:** A read-only (for now) database containing the complete, frozen output of the planning phase, including the DAG, all specifications, and interfaces.
   - **Task Memory:** A writeable, temporary store for each agent task, recording code attempts, test results, and reflections to support debugging loops.
-
 - **Dead Letter Exchange (DLX) & Dead Letter Queue (DLQ):** The dedicated routing and storage path for tasks that cannot be processed successfully. The DLX receives explicit rejections from workers and routes the corresponding messages to the DLQ for analysis.
 - **DLQ Monitor & Alerter:** A monitoring component that tracks DLQ depth/age and notifies the Human Designer (System Maintainer) when intervention is required.
 
@@ -203,17 +199,12 @@ These agents operate exclusively during the initial, human-supervised planning p
 
 - **Primary Goal:** To translate a high-level, human-provided specification into a complete, frozen, and implementable Directed Acyclic Graph (DAG).
 - **Inputs:**
-
   - The L1-L5 specification checklist (functional intent, interface contracts, verification plan, etc.).
   - Real-time feedback and corrections from the human designer.
   - The Standard Component Library definition.
-
 - **Outputs:**
-
   - The final, frozen **Design Context**, which includes the complete DAG of all modules, interfaces, and testbenches.
-
 - **Key Responsibilities:**
-
   - **Architectural Decomposition:** Proposes the initial high-level block diagram.
   - **Recursive Refinement:** Breaks down large, complex modules into smaller, manageable sub-modules until each leaf node is simple enough for a single agent to implement.
   - **Complexity Estimation:** Assesses each proposed module to decide if it needs further decomposition.
@@ -229,17 +220,12 @@ These agents are the workhorses of the automated execution phase. They are dispa
 
 - **Primary Goal:** To write synthesizable HDL code for a single module that correctly implements its frozen specification and adheres to its frozen interface.
 - **Inputs:**
-
   - The specific module's specification.
   - The module's frozen interface contract (port names, widths, protocols).
   - Global design constraints (from the L5 checklist).
-
 - **Outputs:**
-
   - A single, self-contained HDL file (e.g., `module.sv`).
-
 - **Key Responsibilities:**
-
   - **Code Generation:** Translates the declarative specification into imperative RTL code, including state machines, data paths, and storage elements.
   - **Strict Adherence:** Its creative freedom is strictly bounded by the provided interface. It cannot change ports or protocols.
 
@@ -247,16 +233,11 @@ These agents are the workhorses of the automated execution phase. They are dispa
 
 - **Primary Goal:** To write a verification environment (testbench) capable of stimulating a module and verifying its behavior against its verification plan.
 - **Inputs:**
-
   - The target module's frozen interface.
   - The module's L3 Verification Plan (test scenarios, pass/fail criteria, coverage goals).
-
 - **Outputs:**
-
   - A SystemVerilog testbench file.
-
 - **Key Responsibilities:**
-
   - **Stimulus Generation:** Creates logic to drive the module's inputs according to the scenarios in the verification plan.
   - **Oracle Implementation:** Writes checking logic (e.g., scoreboards, assertions) to determine if the module's output is correct.
   - **Coverage Implementation:** Adds constructs (covergroups, cover properties) to measure functional coverage as defined in the plan.
@@ -265,18 +246,13 @@ These agents are the workhorses of the automated execution phase. They are dispa
 
 - **Primary Goal:** To analyze a test failure, hypothesize the root cause, and propose a code modification to fix the bug. This is the most sophisticated execution agent.
 - **Inputs:**
-
   - The failing HDL code.
   - The testbench that triggered the failure.
   - The simulation log, error messages, and potentially waveform data.
   - The history of previous attempts and reflections from **Task Memory**.
-
 - **Outputs:**
-
   - A _new version_ of the HDL code with a targeted fix applied.
-
 - **Key Responsibilities:**
-
   - **Failure Analysis:** Parses simulation logs to understand the exact symptom of the failure.
   - **Hypothesis Generation:** Forms a theory about the underlying bug (e.g., "The state machine is transitioning on the wrong edge," "The FIFO's full flag is asserted one cycle too late").
   - **Reflexion:** Before proposing a fix, it reviews its own past attempts to avoid repeating mistakes.
@@ -286,16 +262,11 @@ These agents are the workhorses of the automated execution phase. They are dispa
 
 - **Primary Goal:** To combine several completed child modules into their single parent module by writing the necessary structural "glue" logic.
 - **Inputs:**
-
   - The parent module's specification and interface.
   - The `Frozen` code and interfaces of all direct child modules.
-
 - **Outputs:**
-
   - The HDL file for the parent module, containing instantiations of its children.
-
 - **Key Responsibilities:**
-
   - **Module Instantiation:** Writes the code to instantiate each child module.
   - **Port Mapping (Wiring):** Connects the ports of the child modules to each other and to the parent's external ports, as defined by the architecture.
   - **Glue Logic:** Creates any additional logic required at the parent level that was not part of any child module (e.g., a simple arbiter).

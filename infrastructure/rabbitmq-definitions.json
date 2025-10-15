@@ -1,0 +1,99 @@
+{
+  "rabbit_version": "3.11.8",
+  "vhosts": [
+    {
+      "name": "/"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "tasks_exchange",
+      "vhost": "/",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "tasks_dlx",
+      "vhost": "/",
+      "type": "fanout",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "agent_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-max-priority": 3,
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
+      "name": "process_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
+      "name": "simulation_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
+      "name": "dead_letter_queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    }
+  ],
+  "bindings": [
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "agent_tasks",
+      "destination_type": "queue",
+      "routing_key": "REASONING",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "process_tasks",
+      "destination_type": "queue",
+      "routing_key": "LIGHT_DETERMINISTIC",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "simulation_tasks",
+      "destination_type": "queue",
+      "routing_key": "HEAVY_DETERMINISTIC",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_dlx",
+      "vhost": "/",
+      "destination": "dead_letter_queue",
+      "destination_type": "queue",
+      "routing_key": "",
+      "arguments": {}
+    }
+  ]
+}

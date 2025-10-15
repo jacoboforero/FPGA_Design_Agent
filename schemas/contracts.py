@@ -5,6 +5,12 @@
 # multi-agent hardware design system. All communication between the Orchestrator
 # and the various execution entities (Agents and Workers) MUST adhere to these
 # schemas.
+#
+# RabbitMQ Integration:
+# - EntityType values map to routing keys: REASONING, LIGHT_DETERMINISTIC, HEAVY_DETERMINISTIC
+# - TaskPriority enum (1-3) maps to RabbitMQ priority levels
+# - Queues: agent_tasks, process_tasks, simulation_tasks, dead_letter_queue
+# - Infrastructure: See infrastructure/docker-compose.yml and rabbitmq-definitions.json
 
 from datetime import datetime, timezone
 from enum import Enum
