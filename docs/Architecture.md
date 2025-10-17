@@ -35,52 +35,83 @@ The system is composed of four primary components: an Orchestrator, a Task Broke
 ### 3.1 Component Diagram
 
 ```
-                ┌───────────────────────────┐
-                │      HUMAN DESIGNER       │
-                │  (Planning & Escalation)  │
-                └────────────┬──────────────┘
-                             │  (Approval, Alerts)
-                             ▼
-┌──────────────────┐   ┌───────────────────────────┐
-│    DATA STORES   │◀──▶│       ORCHESTRATOR        │
-│ ├─ Design Context│   │ (DAG State, Task Logic)   │
-│ └─ Task Memory   │   └────────────┬──────────────┘
-└──────────────────┘                │ (Publishes Tasks)
-                                    ▼
-                          ┌───────────────────┐
-                          │    TASK BROKER    │
-                          │ (Queuing System)  │
-                          │ + Dead Letter EX  │
-                          └─────────┬─────────┘
-        ┌───────────────────────────┼───────────────────────────┐
-        │       (agent_tasks)       │      (process_tasks)      │ (simulation_tasks)
-        ▼                           ▼                           ▼
-┌──────────────────┐      ┌──────────────────┐      ┌─────────────────────┐
-│    Agent Pool    │      │   Process Pool   │      │   Simulation Pool   │
-│   (LLM-driven)   │      │ (Deterministic)  │      │   (Long-running)    │
-└─────────┬────────┘      └─────────┬────────┘      └──────────┬──────────┘
-          │                         │                           │
-          │ (On Unrecoverable       │ (On Unrecoverable         │ (On Unrecoverable
-          │  Failure: reject msg)   │  Failure: reject msg)     │  Failure: reject msg)
-          ▼                         ▼                           ▼
-                      ┌───────────────────────────┐
-                      │  DEAD LETTER EXCHANGE     │
-                      │           (DLX)           │
-                      └────────────┬──────────────┘
-                                   │ (Route dead messages)
-                                   ▼
-                         ┌───────────────────────┐
-                         │   DEAD LETTER QUEUE   │
-                         │         (DLQ)         │
-                         └────────────┬──────────┘
-                                      │ (Monitor)
-                                      ▼
-                         ┌──────────────────────────┐
-                         │  DLQ MONITOR & ALERTER  │
-                         └────────────┬─────────────┘
-                                      │ (Notify)
-                                      ▼
-                                HUMAN DESIGNER
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                              PLANNING PHASE                                   │
+├───────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  ┌────────────────────┐        bidirectional guidance        ┌──────────────┐ │
+│  │  HUMAN DESIGNER    │◄────────────────────────────────────►│ SPEC HELPER  │ │
+│  │     (Architect)    │                                      │    AGENT     │ │
+│  └────────────────────┘                                      └──────────────┘ │
+│                                       │ finalize L1–L5                        │
+│                                       ▼                                       │
+│                          ┌────────────────────────────────┐                   │
+│                          │         PLANNER AGENT          │                   │
+│                          │ (Generates Design Context &    │                   │
+│                          │       DAG from frozen spec)    │                   │
+│                          └────────────────────────────────┘                   │
+│                                       │                                       │
+│                                       │  (Frozen Plan)                        │
+│                                       ▼                                       │
+└───────────────────────────────────────┴───────────────────────────────────────┘
+
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                              EXECUTION PHASE                                  │
+├───────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  ┌────────────────────┐      state/context       ┌──────────────────────────┐ │
+│  │  DESIGN CONTEXT    │◄────────────────────────►│       ORCHESTRATOR       │ │
+│  │     (Read-only)    │                          │ (DAG state & task logic) │ │
+│  └────────────────────┘                          └─────────────┬────────────┘ │
+│                                                               publish tasks   │
+│                                                               (per routing)   │
+│                                        ┌────────────────────────┴───────────┐ │
+│                                        │             TASK BROKER            │ │
+│                                        │             (Message Bus)          │ │
+│                                        │  routing keys:                     │ │
+│                                        │   • agent_tasks                    │ │
+│                                        │   • process_tasks                  │ │
+│                                        │   • simulation_tasks               │ │
+│                                        └───────────────┬─────────┬──────────┘ │
+│                                                        │         │            │
+│                                          consume/ack   │         │ consume/ack│
+│            consume/ack                                   │         │          │
+│  ┌────────────────────┐     ┌────────────────────┐     ┌────────────────────┐
+│  │    AGENT POOL      │     │   PROCESS POOL     │     │  SIMULATION POOL   │ │
+│  │ (LLM: impl/debug/  │     │ (lint/compile/     │     │   (long-running)   │ │
+│  │  testgen/reflect)  │     │   distillation)    │     │                      │
+│  └─────────┬──────────┘     └─────────┬──────────┘     └─────────┬──────────┘ │
+│            │                          │                          │            │
+│            │                          │                          │            │
+│            └──────────────┬───────────┴───────────────┬──────────┘            │
+│                           │                           │                       │
+│                     ┌─────▼─────┐               ┌─────▼─────┐                 │
+│                     │  RESULTS  │               │   DLX     │  (dead-letter   │
+│                     │  QUEUE    │               │ (per-queue│   routing per   │
+│                     └─────┬─────┘               │  exchange)│   broker config)│
+│                           │                      └─────┬─────┘                │
+│                 consume & │ update DAG                 │                      │
+│                 ┌─────────▼─────────┐                 ▼                       │
+│                 │    ORCHESTRATOR   │        ┌────────────────────┐           │
+│                 └─────────┬─────────┘        │        DLQ         │           │
+│                           │                   │ (quarantined msgs) │          │
+│                           │ escalation        └─────────┬──────────┘          │
+│                           ▼                             monitor               │
+│                   ┌───────────────────┐                 │                     │
+│                   │  HUMAN DESIGNER   │◄────────────────┘                     │
+│                   │ (Expert helper &  │         alerts & investigation        │
+│                   │   maintainer)     │                                       │
+│                   └───────────────────┘                                       │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐  │
+│  │                           DATA STORES                                   │  │
+│  │  • DESIGN CONTEXT (frozen spec, DAG, interfaces)                        │  │
+│  │  • TASK MEMORY (per-task artifacts: attempts, logs,                     │  │
+│  │    distilled datasets, reflection outputs, metadata)                    │  │
+│  └─────────────────────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────────────────────┘
+
 ```
 
 ### 3.2 Component Descriptions
