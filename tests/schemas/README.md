@@ -20,9 +20,10 @@ tests/
 The test suite provides **100% coverage** for all schema components:
 
 - **Enums**: TaskPriority, TaskStatus, EntityType, AgentType, WorkerType
-- **Models**: CostMetrics, TaskMessage, ResultMessage
+- **Models**: CostMetrics, AnalysisMetadata, DistilledDataset, ReflectionInsights, TaskMessage, ResultMessage
 - **Validation**: Error handling, edge cases, type checking
 - **Serialization**: JSON round-trip testing, complex data structures
+- **Analysis Pipeline**: Models for reflection agent and distillation process
 
 ## Running Tests
 
@@ -66,6 +67,8 @@ python3 -m pytest tests/ --cov=schemas --cov-report=html:htmlcov
 - **Validation**: Tests field validation and type checking
 - **Integration**: Tests interaction between different models
 - **Edge cases**: Tests with minimal and maximal data
+- **Analysis Models**: Tests for AnalysisMetadata, DistilledDataset, ReflectionInsights
+- **Analysis Pipeline**: Tests for agent types and worker types
 
 ### 3. Validation Tests (`test_validation.py`)
 
@@ -73,6 +76,7 @@ python3 -m pytest tests/ --cov=schemas --cov-report=html:htmlcov
 - **Edge cases**: Tests with extreme values, unicode, large data
 - **Optional fields**: Tests None values and optional field behavior
 - **Custom validation**: Tests complex validation scenarios
+- **Model Validation**: Tests validation for AnalysisMetadata, DistilledDataset, ReflectionInsights
 
 ### 4. Serialization Tests (`test_serialization.py`)
 
@@ -80,6 +84,18 @@ python3 -m pytest tests/ --cov=schemas --cov-report=html:htmlcov
 - **JSON deserialization**: Tests JSON-to-model conversion
 - **Round-trip testing**: Ensures data integrity through serialization cycles
 - **Complex data**: Tests with nested structures, unicode, large datasets
+- **Model Serialization**: Tests serialization for AnalysisMetadata, DistilledDataset, ReflectionInsights
+
+## Analysis Pipeline Testing
+
+The test suite includes comprehensive testing for analysis pipeline features:
+
+###ResultMessage
+
+- **Analysis Pipeline Artifacts**: Tests for fields supporting the three-stage analysis pipeline:
+  - `analysis_metadata`: Stage metadata and retry tracking
+  - `distilled_dataset`: Compressed dataset artifacts
+  - `reflection_insights`: AI-generated debugging insights
 
 ## Test Fixtures
 
@@ -126,6 +142,14 @@ These tests are designed to run in CI/CD pipelines:
 - Coverage metrics
 - No external dependencies
 
+## Test Statistics
+
+- **Total Tests**: 91 (increased from 67)
+- **Additional Tests**: 24 tests for analysis pipeline features
+- **Coverage**: 100% for all schema components
+- **Models Tested**: AnalysisMetadata, DistilledDataset, ReflectionInsights
+- **Enums Tested**: REFLECTION, SPECIFICATION_HELPER agents, DISTILLATION worker
+
 ## Schema Validation
 
 The tests ensure that all schemas:
@@ -136,3 +160,4 @@ The tests ensure that all schemas:
 - ✅ Maintain data integrity
 - ✅ Provide clear error messages
 - ✅ Support all required use cases
+- ✅ Support analysis pipeline workflows

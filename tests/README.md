@@ -77,13 +77,14 @@ This structure supports:
 
 ### ✅ Schema Tests (Complete)
 
-- **67 tests** covering all data contracts
+- **91 tests** covering all data contracts
 - **100% coverage** of schema validation
 - **Comprehensive validation** of enums, models, serialization
+- **Analysis pipeline support** with reflection agent and distillation process
 
 ### 🔄 Future Components (Planned)
 
-- **Additional component tests** - As new components are developed
+- **Additional component tests** - As components are developed
 
 ## Best Practices
 
@@ -108,4 +109,3 @@ python3 -m pytest tests/ -v --cov
 # CI/CD pipeline
 python3 -m pytest tests/ --cov --cov-report=xml
 ```
-
