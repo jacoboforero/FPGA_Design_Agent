@@ -1,35 +1,23 @@
-# docker-compose.yml
-# Description: Starts a RabbitMQ container for local development.
-#
-# Usage:
-#   1. Save this file as 'docker-compose.yml'.
-#   2. Save the corresponding 'rabbitmq-definitions.json' in the same directory.
-#   3. Run 'docker-compose up -d' to start the service in the background.
-#
 version: "3.8"
 
 services:
-  rabbitmq:
-    image: rabbitmq:3.11-management-alpine
-    container_name: multi-agent-task-broker
-    hostname: rabbitmq
+  chroma:
+    image: chromadb/chroma:latest   # or: ghcr.io/chroma-core/chroma:latest
+    container_name: chroma
     ports:
-      # Port for AMQP client connections (from Orchestrator/Workers)
-      - "5672:5672"
-      # Port for the RabbitMQ Management UI
-      - "15672:15672"
-    volumes:
-      # Mounts the definitions file to pre-configure exchanges, queues, and policies.
-      # This is how we provision the broker declaratively.
-      - ./rabbitmq-definitions.json:/etc/rabbitmq/definitions.json
-      # Mount the configuration file to enable automatic definitions loading
-      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      - "8000:8000"
     environment:
-      # Default user and password for the management UI and client connections.
-      # For local development only. Do NOT use these credentials in production.
-      - RABBITMQ_DEFAULT_USER=user
-      - RABBITMQ_DEFAULT_PASS=password
+      CHROMA_SERVER_HOST: "0.0.0.0"
+      CHROMA_SERVER_HTTP_PORT: "8000"
+      CHROMA_DB_IMPL: "duckdb+parquet"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - ./chroma-data:/chroma/.chromadb
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
 
-networks:
-  default:
-    name: multi-agent-network
+# RabbitMQ is unrelated to this task; keep only if you actually need it.
