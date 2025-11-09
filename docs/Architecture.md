@@ -170,7 +170,7 @@ The workflow is a continuous loop:
 
   1. **Distillation (`distill` task):** Deterministic processing of waveforms/logs to extract failure-focused datasets. Dispatched via **process_tasks**.
   2. **Reflection (`reflect` task):** LLM-based analysis of distilled data to produce debugging hints, root-cause hypotheses, and investigation suggestions. Dispatched via **agent_tasks**.
-  3. **Enhanced Debugging (`debug` task):** Application of reflection insights to propose targeted code fixes. Dispatched via **agent_tasks**.
+  3. **Debugging (`debug` task):** Application of reflection insights to propose targeted code fixes. Dispatched via **agent_tasks**.
 
 - **State Transitions:**
 
@@ -342,7 +342,7 @@ These agents are the workhorses of the automated execution phase. They are dispa
   - **AI-Powered Analysis:** Interpret failure-focused data to surface actionable insights.
   - **Guidance Artifacts:** Produce analysis notes attached to Task Memory for downstream debugging.
 
-### **6. The Debug Agent (Enhanced)**
+### **6. The Debug Agent**
 
 - **Primary Goal:** To analyze a test failure, hypothesize the root cause, and propose a code modification to fix the bug, leveraging reflection insights when available.
 - **Inputs:**
@@ -372,7 +372,7 @@ These agents are the workhorses of the automated execution phase. They are dispa
 | **Implementation Agent**       | Execution | Module Specification & Interface  | RTL Code (`.sv`)           | Code Generation           |
 | **Testbench Agent**            | Execution | Verification Plan & Interface     | Testbench Code (`.sv`)     | Verification Generation   |
 | **Reflection Agent**           | Execution | Distilled Data & Failure Context  | Debugging Insights         | AI-Powered Analysis       |
-| **Debug Agent (Enhanced)**     | Execution | Failing Code & Analysis Artifacts | Corrected RTL Code         | Targeted Bug Fixing       |
+| **Debug Agent**                | Execution | Failing Code & Analysis Artifacts | Corrected RTL Code         | Targeted Bug Fixing       |
 
 ---
 

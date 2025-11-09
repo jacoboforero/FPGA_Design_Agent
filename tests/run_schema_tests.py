@@ -9,7 +9,8 @@ from pathlib import Path
 
 def main():
     """Run the test suite with coverage reporting."""
-    project_root = Path(__file__).parent
+    # Change to project root directory (go up one level from tests/)
+    project_root = Path(__file__).parent.parent
     
     print("🧪 Running schema tests for multi-agent hardware design system...")
     print("=" * 60)
@@ -40,3 +41,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+

@@ -15,8 +15,8 @@ def run_infrastructure_tests():
     print("🧪 Running RabbitMQ Infrastructure Tests")
     print("=" * 50)
     
-    # Change to project root directory
-    project_root = Path(__file__).parent
+    # Change to project root directory (go up one level from tests/)
+    project_root = Path(__file__).parent.parent
     print(f"📁 Project root: {project_root}")
     
     # Run the tests
@@ -54,12 +54,15 @@ def run_quick_health_check():
     print("🏥 Running Quick Health Check")
     print("=" * 30)
     
+    # Change to project root directory (go up one level from tests/)
+    project_root = Path(__file__).parent.parent
+    
     try:
         result = subprocess.run([
             sys.executable, "-m", "pytest", 
             "tests/infrastructure/test_docker_setup.py::TestDockerSetup::test_amqp_connection",
             "-v"
-        ], cwd=Path(__file__).parent, check=True, capture_output=True, text=True)
+        ], cwd=project_root, check=True, capture_output=True, text=True)
         
         print("✅ Quick health check passed!")
         return True
@@ -76,3 +79,4 @@ if __name__ == "__main__":
         success = run_infrastructure_tests()
     
     sys.exit(0 if success else 1)
+
