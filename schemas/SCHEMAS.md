@@ -252,7 +252,7 @@ Supporting enums/classes include:
 - `BlockDiagramNode`, `DependencyEdge`, `ClockDomain`, `AssertionPlan`
 - `ArtifactRequirement`, `AcceptanceMetric`
 
-These models formalize the L1–L5 checklist described in `docs/Architecture.md` and should be used whenever persisting or validating planning artifacts.
+These models formalize the L1–L5 checklist described in `docs/spec-and-planning.md` and should be used whenever persisting or validating planning artifacts.
 
 ---
 

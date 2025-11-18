@@ -9,8 +9,8 @@ This project implements a sophisticated multi-agent system designed to accelerat
 The system is built on the principle that **exhaustive upfront planning enables mechanical, parallel execution**. It consists of four primary components:
 
 - **Orchestrator**: Central "brain" that maintains the design graph state and determines task readiness
-- **Task Broker**: Message bus with queuing system and dead letter handling for fault tolerance
-- **Worker Pools**: Specialized agents (Implementation, Testbench, Debug, Integration) and deterministic processes
+- **Task Broker**: RabbitMQ message bus with `agent_tasks`, `process_tasks`, `simulation_tasks`, `results`, and DLX/DLQ for fault tolerance
+- **Worker Pools**: An agent-worker runtime hosting LLM agents (Specification Helper, Planner, Implementation, Testbench, Reflection, Debug) and deterministic workers for lint/compile/sim/distill
 - **Data Stores**: Design context and task memory for state management
 
 ## Two-Phase Workflow
@@ -116,8 +116,12 @@ pytest tests/infrastructure/test_schema_integration.py -v
 
 ## Documentation
 
-- **Architecture**: See `docs/Architecture.md` for detailed system design
-- **Schemas**: See `schemas/SCHEMAS.md` for message contracts and data models
+- **Overview**: High-level system tour in `docs/overview.md`
+- **Architecture**: Runtime and logical design in `docs/architecture.md`
+- **Agents**: Roles and responsibilities in `docs/agents.md`
+- **Specification & Planning**: L1–L5 checklist in `docs/spec-and-planning.md`
+- **Queues & Workers**: Broker/DLQ details in `docs/queues-and-workers.md`
+- **Schemas**: Message contracts in `docs/schemas.md` and `schemas/SCHEMAS.md`
 - **Testing**: Comprehensive test suite in `tests/` directory
 
 ---
