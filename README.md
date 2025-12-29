@@ -4,15 +4,12 @@ LLM-driven agents + deterministic workers that take frozen hardware intent to ve
 
 ## Runtime Layout
 
-- `apps/cli/` — human entrypoints for demos and validation reports  
-- `apps/ui_backend/` — FastAPI bridge for the VS Code extension; spawns orchestrator + workers  
-- `apps/vscode-extension/` — frontend extension assets  
+- `apps/cli/` — CLI utilities (validation, reports)  
 - `core/schemas/` — shared message contracts; `core/observability/` defines structured events  
-- `orchestrator/` — control plane, state machine, task memory utils, demo `planner_stub.py` (temporarily kept here)  
+- `orchestrator/` — control plane, state machine, task memory utils; planner stub kept here for now  
 - `agents/` — per-role agent runtimes (implementation, testbench, debug, reflection, spec helper)  
 - `workers/` — deterministic runtimes (lint, simulation, distillation)  
 - `adapters/llm/` — LLM provider integrations; `adapters/observability/agentops.py` sink placeholder  
-- `artifacts/generated/`, `artifacts/task_memory/` — generated design context/RTL and runtime outputs  
 - `tests/core/schemas/`, `tests/infrastructure/` — contract and infrastructure suites  
 - `docs/` — architecture/process docs  
 
@@ -30,21 +27,6 @@ docker-compose ps           # verify
 - UI: http://localhost:15672 (user/password)  
 - AMQP: amqp://user:password@localhost:5672/  
 - Queues: `agent_tasks`, `process_tasks`, `simulation_tasks`, `dead_letter_queue`
-
-### Demo run (stubbed EDA)
-
-```bash
-# Planner stub → orchestrator → workers → task memory artifacts
-python apps/cli/run_full_demo.py
-```
-
-### FastAPI bridge (used by VS Code extension)
-
-```bash
-python apps/ui_backend/server.py
-```
-
-Endpoints: `POST /run`, `GET /state`, `GET /logs/{node}`, `GET/POST /chat`, `POST /chat/reset`, `POST /reset` (clears `artifacts/task_memory`).
 
 ### LLM configuration
 

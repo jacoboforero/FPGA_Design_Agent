@@ -40,6 +40,10 @@ venv.bak/
 
 # Project artifacts
 artifacts/task_memory/
+artifacts/generated/
+
+# Demo UI extension
+apps/vscode-extension/
 
 # VS Code extension build output
 apps/vscode-extension/node_modules/
