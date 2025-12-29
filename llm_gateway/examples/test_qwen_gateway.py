@@ -9,8 +9,8 @@ Requirements:
 """
 
 import asyncio
-from gateway import Message, MessageRole, GenerationConfig
-from adapter_qwen34b import Qwen34BLocalGateway
+from llm_gateway.gateway import Message, MessageRole, GenerationConfig
+from llm_gateway.adapters.adapter_qwen34b import Qwen34BLocalGateway
 
 
 async def main():

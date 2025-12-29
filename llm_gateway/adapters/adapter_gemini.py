@@ -1,14 +1,8 @@
 # adapter_gemini.py - Google Gemini implementation of the LLM Gateway interface
 
 from typing import Optional, List, Dict, Any
-from gateway.core import (
-    LLMGateway,
-    Message,
-    MessageRole,
-    ModelResponse,
-    GenerationConfig,
-)
-from gateway.transport import TransportProtocol
+from llm_gateway.gateway import LLMGateway, Message, MessageRole, ModelResponse, GenerationConfig
+from llm_gateway.transport import TransportProtocol
 
 
 class GeminiGateway(LLMGateway):

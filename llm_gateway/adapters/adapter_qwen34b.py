@@ -6,12 +6,7 @@ Handles local Qwen3:4b model calls through Ollama.
 
 from typing import Optional, List
 import httpx
-from gateway import (
-    LLMGateway,
-    Message,
-    ModelResponse,
-    GenerationConfig,
-)
+from llm_gateway.gateway import LLMGateway, Message, ModelResponse, GenerationConfig
 
 
 class Qwen34BLocalGateway(LLMGateway):

@@ -2,7 +2,7 @@
 
 from typing import List, Dict, Any, Optional
 import httpx
-from transport import TransportProtocol, TransportError
+from llm_gateway.transport.base import TransportProtocol, TransportError
 
 
 class OllamaTransport(TransportProtocol):

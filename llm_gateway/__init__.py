@@ -8,22 +8,10 @@ Public API exports for easy importing:
 """
 
 # Core abstractions
-from .core import (
-    LLMGateway,
-    Message,
-    MessageRole,
-    ModelResponse,
-    GenerationConfig,
-    quick_generate,
-)
+from .gateway import LLMGateway, Message, MessageRole, ModelResponse, GenerationConfig, quick_generate
 
 # Transport utilities
-from .transport import (
-    TransportProtocol,
-    TransportError,
-    create_transport_by_provider,
-    list_transports,
-)
+from .transport import TransportProtocol, TransportError, create_transport_by_provider, list_transports
 
 __all__ = [
     # Core

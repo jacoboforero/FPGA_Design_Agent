@@ -1,10 +1,7 @@
 # example_usage.py - Examples of using the transport system
 
 import asyncio
-from transport_registry import (
-    create_transport_by_provider,
-    list_transports,
-)
+from llm_gateway.transport import create_transport_by_provider, list_transports
 
 
 async def example_ollama():

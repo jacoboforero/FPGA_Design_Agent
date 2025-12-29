@@ -5,7 +5,7 @@ import inspect
 import pkgutil
 from typing import Dict, Type, Optional
 from pathlib import Path
-from transport import TransportProtocol
+from llm_gateway.transport.base import TransportProtocol
 
 
 class TransportRegistry:
@@ -38,17 +38,20 @@ class TransportRegistry:
         # Find all transport_*.py files
         for file_path in registry_dir.glob("transport_*.py"):
             module_name = file_path.stem  # Filename without .py
+            module_path = f"{__package__}.{module_name}"
             
             try:
-                # Import the module
-                module = importlib.import_module(module_name)
+                # Import the module with package-qualified name
+                module = importlib.import_module(module_path)
                 
                 # Find all classes in the module
                 for name, obj in inspect.getmembers(module, inspect.isclass):
                     # Check if it's a TransportProtocol subclass (but not the base)
-                    if (issubclass(obj, TransportProtocol) and 
-                        obj is not TransportProtocol and
-                        obj.__module__ == module_name):
+                        if (
+                            issubclass(obj, TransportProtocol)
+                            and obj is not TransportProtocol
+                            and obj.__module__ == module_path
+                        ):
                         
                         # Register using the class name
                         self._transports[name] = obj

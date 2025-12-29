@@ -2,13 +2,7 @@
 
 from typing import Optional, List
 from openai import AsyncOpenAI
-from gateway import (
-    LLMGateway,
-    Message,
-    MessageRole,
-    ModelResponse,
-    GenerationConfig,
-)
+from llm_gateway.gateway import LLMGateway, Message, MessageRole, ModelResponse, GenerationConfig
 
 class OpenAIGateway(LLMGateway):
     

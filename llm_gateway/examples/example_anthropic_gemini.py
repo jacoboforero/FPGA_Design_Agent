@@ -1,10 +1,10 @@
 # example_anthropic_gemini.py - Examples using Claude and Gemini
 
 import asyncio
-from gateway import Message, MessageRole, GenerationConfig
-from gateway.transport import create_transport_by_provider
-from gateway.adapters.adapter_anthropic import AnthropicGateway
-from gateway.adapters.adapter_gemini import GeminiGateway
+from llm_gateway.gateway import Message, MessageRole, GenerationConfig
+from llm_gateway.transport import create_transport_by_provider
+from llm_gateway.adapters.adapter_anthropic import AnthropicGateway
+from llm_gateway.adapters.adapter_gemini import GeminiGateway
 
 
 async def example_anthropic_claude():

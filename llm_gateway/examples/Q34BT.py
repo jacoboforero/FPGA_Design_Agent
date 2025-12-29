@@ -6,8 +6,8 @@ Run from the same directory as gateway.py and adapter_qwen34b.py
 
 import asyncio
 import json
-from gateway import Message, MessageRole, GenerationConfig
-from adapter_qwen34b import Qwen34BLocalGateway
+from llm_gateway.gateway import Message, MessageRole, GenerationConfig
+from llm_gateway.adapters.adapter_qwen34b import Qwen34BLocalGateway
 
 
 async def main():
