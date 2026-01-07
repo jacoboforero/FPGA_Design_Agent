@@ -53,10 +53,12 @@ Endpoints: `POST /run`, `GET /state`, `GET /logs/{node}`, `GET/POST /chat`, `POS
 - Groq: `LLM_PROVIDER=groq`, `GROQ_API_KEY`, optional `GROQ_MODEL` (e.g., `llama-3.1-8b-instant`).  
 - Spec Helper chat uses the same gateway; falls back to mock parsing when unset.
 
-### Planner stub templates
+### CLI
 
-- `PLANNER_TEMPLATE=counter4` → 4-bit counter with load/enable + default coverage goals.  
-- Unset → generic `demo_module` passthrough.
+- `python apps/cli/cli.py plan` — generate planner outputs  
+- `python apps/cli/cli.py run` — full pipeline (planner → workers → orchestrator)  
+- `python apps/cli/cli.py lint --rtl path/to/file.sv`  
+- `python apps/cli/cli.py sim --rtl path/to/file.sv --testbench path/to/tb.sv`
 
 ## Tests
 
