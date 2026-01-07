@@ -39,3 +39,40 @@ Agents never call each other directly; all work is mediated by the Orchestrator 
 - Workers validate messages against schemas before running; unrecoverable failures are rejected to the DLQ.  
 - Human escalation is triggered when retries stall or DLQ alerts fire; the Orchestrator packages context from Task Memory to speed triage.  
 See [queues-and-workers.md](./queues-and-workers.md) for DLQ mechanics and [schemas.md](./schemas.md) for message invariants.
+
+## Orchestrator State Machine (Actionable)
+
+- **Per-node states:** `PENDING` → `IMPLEMENTING` → `LINTING` → `TESTBENCHING` → `SIMULATING` → `DISTILLING` → `REFLECTING` → `DONE` (or `FAILED` on hard stop).  
+- **Task ordering:** Implementation → Lint (fail-fast) → Testbench → Simulation → Distill → Reflect. Debug can be injected after Reflect or on repeated failures.  
+- **Retries/timeouts:** One retry for transient errors per stage; stage timeout defaults: Impl/TB 120s, Sim 300s, Lint/Distill/Reflect 60s.  
+- **Advancement checks:** Require artifacts/logs per stage; interface/port checks after Impl/TB; sim exit code/coverage presence after Sim; distilled dataset presence after Distill; non-empty insights after Reflect.  
+- **DLQ policy:** Schema/interface mismatch or repeated empty outputs → NACK `requeue=false` so DLX sends to DLQ. Transient tool/LLM errors may retry once before DLQ.
+
+## Planner Inputs/Outputs (To Freeze)
+
+- **Inputs:** Frozen L1–L5 spec (short text), interface intents, verification goals, standard component library.  
+- **Outputs:**  
+  - `design_context.json` with `nodes` keyed by module: `rtl_file`, `testbench_file`, `interface.signals`, `clocking`, `coverage_goals`, `demo_behavior` (optional), `uses_library`.  
+  - `dag.json` with node list: `id`, `type` (module), `deps`, `state` (PENDING), `artifacts`, `metrics`.  
+- **Contracts:** Paths are immutable once emitted; orchestrator reads from these and writes only to Task Memory. Version/hash the design context for traceability.
+
+## Deterministic Workers (Tooling Defaults)
+
+- **Lint:** Verilator `--lint-only --quiet`; success = exit 0; failure logs stderr; timeout 60s.  
+- **Simulation:** Use `iverilog` + `vvp` on generated RTL/TB; success = exit 0 plus optional coverage report; timeout 300s.  
+- **Distill:** Convert sim logs/waveforms to distilled dataset JSON; success = writes dataset path; timeout 60s.  
+- **Contracts:** Each worker publishes `artifacts_path` and `log_output` in `ResultMessage`; rejects to DLQ on missing input files or non-transient tool errors.
+
+## Configuration Inputs (Env/Paths)
+
+- Broker: `RABBITMQ_URL` (amqp URL matching compose).  
+- LLM: `USE_LLM` (0/1), `LLM_PROVIDER` (`openai`/`groq`), `OPENAI_API_KEY`, `OPENAI_MODEL` (default gpt-4.1-mini), `GROQ_API_KEY`, `GROQ_MODEL`.  
+- Tooling: `VERILATOR_PATH` (optional override), sim tool env if applicable.  
+- Paths: `design_context_path`, `dag_path`, `task_memory_root`, `artifacts_root` resolved per CLI entrypoint; keep consistent in CLI and orchestrator.
+
+## Testing & CI (Outline)
+
+- Keep `tests/core/schemas` as source-of-truth for message validation.  
+- Add integration tests for queue flow: orchestrator publishes → workers consume → results update state; include DLQ cases (schema fail, missing files).  
+- Mock external tools/LLMs in CI; run real tools only in gated jobs.  
+- See `docs/test-plan.md` (to be completed) for concrete test cases and fixtures.

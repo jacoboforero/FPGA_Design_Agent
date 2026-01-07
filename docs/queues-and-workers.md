@@ -42,3 +42,13 @@ This doc covers how tasks flow through RabbitMQ, how worker pools consume them, 
 ## Schema Invariants
 
 Workers must validate inbound messages against shared schemas before processing. Controlled vocabularies (`AgentType`, `WorkerType`, `EntityType`, `TaskPriority`, `TaskStatus`) and payload validation help prevent malformed tasks from circulating. See [schemas.md](./schemas.md) for the canonical definitions.
+
+## Validation/Retry/DLQ Guidance (by role)
+
+- **All roles:** validate required context fields; reject to DLQ on schema/interface mismatch. Retry only transient LLM/tool errors once; log model/tool and assumptions.
+- **Implementation/Testbench:** DLQ on missing interface or repeated generation failure; timeout ~60–120s.
+- **Reflection/Debug:** DLQ on missing required inputs (distilled data, reflection insights, failure signature) or repeated empty output; timeout ~60–120s.
+- **Specification Helper:** DLQ on malformed checklist/spec or repeated empty replies; timeout ~60s.
+- **Lint/Sim/Distill workers:** DLQ on missing files or tool invocation errors that are not transient; retry once for transient tool failures; timeout per tool budget.
+
+Retries vs DLQ should be enforced consistently: one retry for transient issues, otherwise NACK with `requeue=false` to allow DLX/DLQ quarantine.
