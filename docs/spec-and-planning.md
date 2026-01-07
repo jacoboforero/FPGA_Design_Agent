@@ -50,3 +50,22 @@ Upfront planning freezes what will be built before any HDL is generated. Complet
 - All L-level artifacts live in Task Memory under `artifacts/task_memory/specs/` and retain hashes, authorship, and timestamps for deterministic replay.  
 - The frozen Design Context references these artifacts by hash, and downstream tasks carry correlation IDs so execution steps can be tied back to the exact planning snapshot.  
 - See [schemas.md](./schemas.md) for `TaskMessage`/`ResultMessage` fields used to transport this metadata.
+
+## Planner Output Schema (execution handoff)
+
+- **design_context.json**
+  - `design_context_hash`: hash of `nodes`
+  - `nodes` keyed by module id:
+    - `rtl_file`, `testbench_file`: relative artifact paths to be written by agents
+    - `interface.signals`: list of `{name, direction, width}`
+    - `clocking`: `{clk: {freq_hz, reset, reset_active_low}}`
+    - `coverage_goals`: `{branch, toggle}` (optional)
+    - `uses_library`: list of standard-library components (optional)
+  - `standard_library`: name→fingerprint map
+- **dag.json**
+  - `nodes`: list of DAG nodes with fields `id`, `type` (module), `deps` (list of ids), `state` (PENDING), `artifacts` (initially empty), `metrics` (initially empty)
+
+Contracts:
+- Paths in `design_context.json` are treated as immutable targets; the Orchestrator reads these, and agents/workers write artifacts to them.  
+- Planner must validate interfaces against L2 and embed hashes/ids so execution tasks carry consistent correlation IDs.  
+- If the format evolves, bump a version field and keep backward compatibility in the Orchestrator until all tasks are migrated.

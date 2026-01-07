@@ -61,7 +61,7 @@ See [queues-and-workers.md](./queues-and-workers.md) for DLQ mechanics and [sche
 - **Lint:** Verilator `--lint-only --quiet`; success = exit 0; failure logs stderr; timeout 60s.  
 - **Simulation:** Use `iverilog` + `vvp` on generated RTL/TB; success = exit 0 plus optional coverage report; timeout 300s.  
 - **Distill:** Convert sim logs/waveforms to distilled dataset JSON; success = writes dataset path; timeout 60s.  
-- **Contracts:** Each worker publishes `artifacts_path` and `log_output` in `ResultMessage`; rejects to DLQ on missing input files or non-transient tool errors.
+- **Contracts:** Each worker publishes `artifacts_path` and `log_output` in `ResultMessage`; rejects to DLQ on missing input files or non-transient tool errors. Coverage metrics (line/toggle) are captured if the sim tool emits them; otherwise mark as unavailable.
 
 ## Configuration Inputs (Env/Paths)
 

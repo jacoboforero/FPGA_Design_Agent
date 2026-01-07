@@ -9,10 +9,11 @@ Goal: cover schemas, orchestration flow, workers, and DLQ handling with fast tes
 - Happy path: implementation → lint → testbench → simulation → distill → reflect; assert state transitions and artifact/log presence.
 - Failure paths: missing files → DLQ, schema mismatch → DLQ, transient tool error → one retry then DLQ.
 - Timeout path: long-running sim triggers timeout and failure handling.
+- Orchestrator sequencing: ensure tasks are issued in defined order; retries do not duplicate artifacts; verify final `DONE`/`FAILED` states.
 
 ## Workers (tooling)
 - Lint worker: run Verilator on good/bad fixtures; assert success/failure logs and artifacts.
-- Simulation worker: stub or real sim on simple RTL; assert exit code, coverage/log capture.
+- Simulation worker: run iverilog/vvp on simple RTL/TB; assert exit code, capture stdout/stderr, and optional coverage artifacts.
 - Distill worker: feed sample sim log/waveform; assert distilled JSON written.
 
 ## Agents (LLM-backed)
@@ -22,6 +23,7 @@ Goal: cover schemas, orchestration flow, workers, and DLQ handling with fast tes
 ## DLQ/Retry
 - Publish malformed task; assert NACK→DLQ.
 - Publish transient-error task; assert one retry then DLQ on repeat failure.
+- Publish interface-mismatched task; ensure DLQ and no downstream tasks issued.
 
 ## CI Notes
 - Default CI: run schema + integration with mocked tools/LLMs; use lightweight fixtures.
