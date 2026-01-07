@@ -33,6 +33,8 @@ from workers.distill.worker import DistillWorker
 # Orchestrator
 from orchestrator.orchestrator_service import DemoOrchestrator
 from orchestrator import planner_stub
+from orchestrator import planner
+from apps.cli import spec_flow
 
 # Schema models
 from core.schemas.contracts import TaskMessage, EntityType, WorkerType
@@ -68,12 +70,32 @@ def stop_workers(workers: Iterable[threading.Thread], stop_event: threading.Even
 
 
 def cmd_plan(args: argparse.Namespace) -> None:
+    # Prefer real specs; fallback to stub if not locked or flag set.
+    use_stub = args.stub
+    if not use_stub:
+        try:
+            planner.generate_from_specs()
+            print("Generated design_context.json and dag.json from locked specs.")
+            return
+        except Exception as exc:  # noqa: BLE001
+            if not args.allow_stub:
+                raise
+            print(f"Spec-based planning failed ({exc}); falling back to stub.")
+            use_stub = True
     planner_stub.generate()
-    print("Generated design_context.json and dag.json under artifacts/generated/")
+    print("Generated design_context.json and dag.json via planner stub.")
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    planner_stub.generate()
+    # Ensure plan exists
+    try:
+        planner.generate_from_specs()
+    except Exception:
+        if args.allow_stub:
+            planner_stub.generate()
+            print("Using planner stub outputs (no locked specs found).")
+        else:
+            raise
     params = connection_params_from_env()
     stop_event = threading.Event()
     workers = start_workers(params, stop_event)
@@ -113,11 +135,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Hardware agent system CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_plan = sub.add_parser("plan", help="Generate design_context.json and dag.json (planner stub)")
+    p_plan = sub.add_parser("plan", help="Generate design_context.json and dag.json (from specs if locked, else stub with --stub or --allow-stub)")
+    p_plan.add_argument("--stub", action="store_true", help="Force use of planner stub instead of locked specs")
+    p_plan.add_argument("--allow-stub", action="store_true", help="If spec planning fails, fall back to stub")
     p_plan.set_defaults(func=cmd_plan)
 
     p_run = sub.add_parser("run", help="Run full pipeline (plan + workers + orchestrator)")
     p_run.add_argument("--timeout", type=float, default=120.0, help="Pipeline timeout in seconds")
+    p_run.add_argument("--allow-stub", action="store_true", help="Allow stub planner if specs are not locked")
     p_run.set_defaults(func=cmd_run)
 
     p_lint = sub.add_parser("lint", help="Run lint on RTL file")
@@ -128,6 +153,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_sim.add_argument("--rtl", required=True, help="Path to RTL file")
     p_sim.add_argument("--testbench", help="Path to testbench file")
     p_sim.set_defaults(func=cmd_sim)
+
+    p_spec = sub.add_parser("spec", help="Interactive spec helper to collect and lock L1–L5")
+    p_spec.set_defaults(func=lambda args: spec_flow.collect_specs())
 
     return parser
 
