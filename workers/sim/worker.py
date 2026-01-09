@@ -3,11 +3,10 @@ Simulation worker for demo. Consumes simulation_tasks and mocks a passing sim.
 """
 from __future__ import annotations
 
-import threading
-import time
-
 import shutil
 import subprocess
+import threading
+import time
 import pika
 from core.schemas.contracts import ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
@@ -47,23 +46,25 @@ class SimulationWorker(threading.Thread):
                 sources = [rtl_path]
                 if tb_path:
                     sources.append(tb_path)
-                build = subprocess.run([iverilog, "-o", "/tmp/sim.out", *sources], capture_output=True, text=True, timeout=10)
+                cmd = [iverilog, "-g2012", "-g2005-sv", "-o", "/tmp/sim.out", *sources]
+                build = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
                 if build.returncode != 0:
                     return ResultMessage(
                         task_id=task.task_id,
                         correlation_id=task.correlation_id,
                         status=TaskStatus.FAILURE,
                         artifacts_path=None,
-                        log_output=build.stderr or build.stdout,
+                        log_output=f"{' '.join(cmd)}\n{build.stderr or build.stdout}",
                     )
-                run = subprocess.run([vvp, "/tmp/sim.out"], capture_output=True, text=True, timeout=10)
+                run_cmd = [vvp, "/tmp/sim.out"]
+                run = subprocess.run(run_cmd, capture_output=True, text=True, timeout=30)
                 if run.returncode != 0:
                     return ResultMessage(
                         task_id=task.task_id,
                         correlation_id=task.correlation_id,
                         status=TaskStatus.FAILURE,
                         artifacts_path=None,
-                        log_output=run.stderr or run.stdout,
+                        log_output=f"{' '.join(run_cmd)}\n{run.stderr or run.stdout}",
                     )
                 emit_runtime_event(
                     runtime="worker_sim",

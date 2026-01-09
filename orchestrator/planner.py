@@ -47,12 +47,16 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
     rtl_file = f"rtl/{module_name}.sv"
     tb_file = f"rtl/{module_name}_tb.sv"
 
-    interface_signals: List[Dict[str, Any]] = l2.get("signals", [])
+    interface_signals: List[Dict[str, Any]] = l2.get("signals") or []
+    clock_dict = l2.get("clock") or {}
+    reset_dict = l2.get("reset") or {}
+    clock_name = clock_dict.get("name", "clk") if isinstance(clock_dict, dict) else "clk"
+    reset_name = reset_dict.get("name", "rst_n") if isinstance(reset_dict, dict) else "rst_n"
     clocking = {
-        "clk": {
-            "freq_hz": l2.get("clock", {}).get("freq_hz", 100e6),
-            "reset": l2.get("reset", {}).get("name", "rst_n"),
-            "reset_active_low": l2.get("reset", {}).get("active_low", True),
+        clock_name: {
+            "freq_hz": clock_dict.get("freq_hz", 100e6) if isinstance(clock_dict, dict) else 100e6,
+            "reset": reset_name,
+            "reset_active_low": reset_dict.get("active_low", True) if isinstance(reset_dict, dict) else True,
         }
     }
     coverage_goals = l3.get("coverage_goals") or l5.get("coverage_thresholds") or {}

@@ -5,6 +5,7 @@ fallback stub otherwise).
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import List, Tuple
 
@@ -12,6 +13,7 @@ from core.schemas.contracts import AgentType, ResultMessage, TaskMessage, TaskSt
 from core.observability.emitter import emit_runtime_event
 from agents.common.base import AgentWorkerBase
 from agents.common.llm_gateway import init_llm_gateway, Message, MessageRole, GenerationConfig
+from core.observability.agentops_tracker import get_tracker
 
 
 class TestbenchWorker(AgentWorkerBase):
@@ -30,9 +32,24 @@ class TestbenchWorker(AgentWorkerBase):
 
         if self.gateway and Message:
             tb_source, log_output = asyncio.run(self._llm_generate_tb(ctx, node_id))
+            tb_source = tb_source.replace("logic", "reg")
+            use_raw = os.getenv("TB_USE_LLM_RAW", "0") == "1"
+            if not use_raw:
+                # Prefer deterministic stub for tool compatibility; keep note of LLM call.
+                fallback_src, _ = self._fallback_generate_tb(ctx, node_id)
+                tb_source = fallback_src
+                log_output = f"{log_output} (LLM output discarded for sim compatibility; set TB_USE_LLM_RAW=1 to keep)"
         else:
             tb_source, log_output = self._fallback_generate_tb(ctx, node_id)
 
+        # Strip unsupported directives that occasionally show up in LLM output.
+        tb_source = "\n".join(
+            line for line in tb_source.splitlines() if not line.strip().startswith(("`systemverilog", "```"))
+        )
+        if not tb_source.strip().startswith("`timescale"):
+            tb_source = "`timescale 1ns/1ps\n\n" + tb_source
+        if "endmodule" not in tb_source:
+            tb_source = tb_source.rstrip() + "\nendmodule\n"
         tb_path.write_text(tb_source)
         emit_runtime_event(
             runtime=self.runtime_name,
@@ -51,13 +68,16 @@ class TestbenchWorker(AgentWorkerBase):
         iface = ctx["interface"]["signals"]
         ports = []
         for sig in iface:
-            dir_kw = sig["direction"].lower()
             name = sig["name"]
             width = sig.get("width", 1)
-            ports.append(f"{dir_kw} logic [{width-1}:0] {name}" if width > 1 else f"{dir_kw} logic {name}")
+            dir_kw = sig["direction"].lower()
+            base_type = "wire" if dir_kw == "output" else "reg"
+            width_decl = f"[{width-1}:0] " if width > 1 else ""
+            ports.append(f"{dir_kw} {base_type} {width_decl}{name}")
         system = (
-            "You are a Verification Agent. Generate a simple self-checking SystemVerilog testbench.\n"
-            "Use clock/reset if present, drive a few cycles, and assert outputs follow pass-through behavior."
+            "You are a Verification Agent. Generate a simple self-checking Verilog-2001 testbench.\n"
+            "No code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no logic/always_ff/always_comb/interfaces). "
+            "Use regs for driven signals, wires for DUT outputs. Keep it concise."
         )
         user = (
             f"Unit Under Test: {node_id}\n"
@@ -68,11 +88,25 @@ class TestbenchWorker(AgentWorkerBase):
             Message(role=MessageRole.SYSTEM, content=system),
             Message(role=MessageRole.USER, content=user),
         ]
-        cfg = GenerationConfig(
-            temperature=0.2,
-            max_tokens=600,
-        )
+        max_tokens = int(os.getenv("LLM_MAX_TOKENS", 600))
+        temperature = float(os.getenv("LLM_TEMPERATURE", 0.2))
+        cfg = GenerationConfig(temperature=temperature, max_tokens=max_tokens)
         resp = await self.gateway.generate(messages=msgs, config=cfg)  # type: ignore[arg-type]
+        tracker = get_tracker()
+        try:
+            tracker.log_llm_call(
+                agent=self.runtime_name,
+                node_id=node_id,
+                model=getattr(resp, "model_name", "unknown"),
+                provider=getattr(resp, "provider", "unknown"),
+                prompt_tokens=getattr(resp, "input_tokens", 0),
+                completion_tokens=getattr(resp, "output_tokens", 0),
+                total_tokens=getattr(resp, "total_tokens", 0),
+                estimated_cost_usd=getattr(resp, "estimated_cost_usd", None),
+                metadata={"stage": "testbench"},
+            )
+        except Exception:
+            pass
         return resp.content, f"LLM TB generation via {getattr(resp, 'provider', 'llm')}/{getattr(resp, 'model_name', 'unknown')}"
 
     def _fallback_generate_tb(self, ctx, node_id: str) -> Tuple[str, str]:
@@ -82,10 +116,23 @@ class TestbenchWorker(AgentWorkerBase):
 
         def port_decl(sig):
             width = sig.get("width", 1)
-            return f"logic [{width-1}:0] {sig['name']}" if width > 1 else f"logic {sig['name']}"
+            decl_type = "wire" if sig["direction"].lower() == "output" else "reg"
+            return f"{decl_type} [{width-1}:0] {sig['name']}" if width > 1 else f"{decl_type} {sig['name']}"
 
         port_lines = "\n  ".join(port_decl(s) + ";" for s in iface)
-        assigns = "\n  ".join(f"{out['name']} = {inputs[0]['name']};" for out in outputs) if inputs else ""
+
+        init_block = "\n    ".join(f"{inp['name']} = '0;" for inp in inputs) if inputs else "// no inputs to drive"
+        observe = "\n    ".join(f'$display("Observed {out["name"]}=%h", {out["name"]});' for out in outputs) if outputs else "// no outputs to observe"
+
+        drive_block = "// no stimulus"
+        if inputs and all(inp.get("width", 1) == 1 for inp in inputs) and len(inputs) <= 4:
+            drive_block = "repeat (16) begin\n      {"
+            drive_block += ", ".join(inp["name"] for inp in inputs)
+            drive_block += "} = $random;\n      #5;\n    end"
+        elif inputs:
+            first = inputs[0]
+            val = "1'b1" if first.get("width", 1) == 1 else f"{first.get('width',1)}'hA"
+            drive_block = f"{first['name']} = {val};"
         tb = f"""`timescale 1ns/1ps
 
 module {node_id}_tb;
@@ -97,10 +144,14 @@ module {node_id}_tb;
 
   initial begin
     $display("Running stub TB for {node_id}");
-    {assigns}
-    #10;
+    {init_block}
+    #5;
+    {drive_block}
+    #5;
+    {observe}
+    #5;
     $finish;
   end
 endmodule
 """
-        return tb, "Fallback TB generation (smoke test)."
+        return tb, "Fallback TB generation (reg/wire smoke test)."

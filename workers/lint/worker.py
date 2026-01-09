@@ -54,7 +54,7 @@ class LintWorker(threading.Thread):
 
         if self.verilator:
             try:
-                cmd = [self.verilator, "--lint-only", "--quiet", str(rtl_path)]
+                cmd = [self.verilator, "--lint-only", "--quiet", "--sv", str(rtl_path)]
                 completed = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
                 if completed.returncode != 0:
                     return ResultMessage(

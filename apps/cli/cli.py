@@ -10,9 +10,11 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List
 
@@ -38,6 +40,8 @@ from apps.cli import spec_flow
 
 # Schema models
 from core.schemas.contracts import TaskMessage, EntityType, WorkerType
+from core.observability.setup import configure_observability
+from core.observability.agentops_tracker import get_tracker
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -68,6 +72,19 @@ def stop_workers(workers: Iterable[threading.Thread], stop_event: threading.Even
     for w in workers:
         w.join(timeout=1.0)
 
+def _confirm(prompt: str, default: bool = True) -> bool:
+    suffix = " [Y/n]" if default else " [y/N]"
+    val = input(f"{prompt}{suffix} ").strip().lower()
+    if val in ("n", "no"):
+        return False
+    if val in ("y", "yes"):
+        return True
+    return default
+
+
+def _default_run_name(prefix: str) -> str:
+    return f"{prefix}_{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+
 
 def cmd_plan(args: argparse.Namespace) -> None:
     # Prefer real specs; fallback to stub if not locked or flag set.
@@ -87,6 +104,9 @@ def cmd_plan(args: argparse.Namespace) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
+    run_name = args.run_name or _default_run_name("cli_run")
+    configure_observability(run_name=run_name, default_tags=["cli", "run"])
+
     # Ensure plan exists
     try:
         planner.generate_from_specs()
@@ -107,6 +127,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         DemoOrchestrator(params, design_context, dag_path, rtl_root, task_memory_root).run(timeout_s=args.timeout)
     finally:
         stop_workers(workers, stop_event)
+        get_tracker().finalize()
 
 
 def cmd_lint(args: argparse.Namespace) -> None:
@@ -130,6 +151,49 @@ def cmd_sim(args: argparse.Namespace) -> None:
     print(result.status.value)
     print(result.log_output)
 
+def cmd_full(args: argparse.Namespace) -> None:
+    run_name = args.run_name or _default_run_name("cli_full")
+    configure_observability(run_name=run_name, default_tags=["cli", "full"])
+    # 1) Collect specs interactively
+    spec_flow.collect_specs()
+
+    # 2) Plan
+    planner.generate_from_specs()
+    design_context = REPO_ROOT / "artifacts" / "generated" / "design_context.json"
+    dag_path = REPO_ROOT / "artifacts" / "generated" / "dag.json"
+    dag = json.loads(dag_path.read_text())
+    nodes = ", ".join(n["id"] for n in dag.get("nodes", []))
+    print(f"Plan generated: {dag_path} (nodes: {nodes})")
+
+    if not _confirm("Proceed to execution?", True):
+        print("Aborted after planning.")
+        return
+
+    # 3) Execute
+    params = connection_params_from_env()
+    stop_event = threading.Event()
+    workers = start_workers(params, stop_event)
+    try:
+        rtl_root = REPO_ROOT / "artifacts" / "generated"
+        task_memory_root = REPO_ROOT / "artifacts" / "task_memory"
+        DemoOrchestrator(params, design_context, dag_path, rtl_root, task_memory_root).run(timeout_s=args.timeout)
+    finally:
+        stop_workers(workers, stop_event)
+        get_tracker().finalize()
+
+    # 4) Show RTL paths and contents
+    ctx = json.loads(design_context.read_text())
+    for node_id, node in ctx.get("nodes", {}).items():
+        rtl_rel = node.get("rtl_file")
+        if not rtl_rel:
+            continue
+        rtl_path = (REPO_ROOT / "artifacts" / "generated" / rtl_rel).resolve()
+        print(f"\n[{node_id}] RTL at: {rtl_path}")
+        try:
+            print(rtl_path.read_text())
+        except Exception as exc:  # noqa: BLE001
+            print(f"(Could not read RTL: {exc})")
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Hardware agent system CLI")
@@ -143,6 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="Run full pipeline (plan + workers + orchestrator)")
     p_run.add_argument("--timeout", type=float, default=120.0, help="Pipeline timeout in seconds")
     p_run.add_argument("--allow-stub", action="store_true", help="Allow stub planner if specs are not locked")
+    p_run.add_argument("--run-name", help="Optional run name for observability/AgentOps")
     p_run.set_defaults(func=cmd_run)
 
     p_lint = sub.add_parser("lint", help="Run lint on RTL file")
@@ -156,6 +221,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_spec = sub.add_parser("spec", help="Interactive spec helper to collect and lock L1–L5")
     p_spec.set_defaults(func=lambda args: spec_flow.collect_specs())
+
+    p_full = sub.add_parser("full", help="Spec helper -> plan -> run pipeline, with optional approval")
+    p_full.add_argument("--timeout", type=float, default=120.0, help="Pipeline timeout in seconds")
+    p_full.add_argument("--run-name", help="Optional run name for observability/AgentOps")
+    p_full.set_defaults(func=cmd_full)
 
     return parser
 

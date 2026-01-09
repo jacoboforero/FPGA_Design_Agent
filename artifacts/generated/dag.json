@@ -1,7 +1,7 @@
 {
   "nodes": [
     {
-      "id": "demo_module",
+      "id": "accum4",
       "type": "module",
       "deps": [],
       "state": "PENDING",

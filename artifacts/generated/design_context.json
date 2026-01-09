@@ -1,9 +1,9 @@
 {
-  "design_context_hash": "cf7cef31823e2112",
+  "design_context_hash": "1e515cf17502469e",
   "nodes": {
-    "demo_module": {
-      "rtl_file": "rtl/demo_module.sv",
-      "testbench_file": "rtl/demo_module_tb.sv",
+    "accum4": {
+      "rtl_file": "rtl/accum4.sv",
+      "testbench_file": "rtl/accum4_tb.sv",
       "interface": {
         "signals": [
           {
@@ -17,14 +17,19 @@
             "width": 1
           },
           {
-            "name": "in_data",
+            "name": "en",
             "direction": "INPUT",
-            "width": 8
+            "width": 1
           },
           {
-            "name": "out_data",
+            "name": "in_data",
+            "direction": "INPUT",
+            "width": 4
+          },
+          {
+            "name": "accum",
             "direction": "OUTPUT",
-            "width": 8
+            "width": 4
           }
         ]
       },
@@ -37,18 +42,11 @@
         }
       },
       "coverage_goals": {
-        "branch": 0.8,
+        "branch": 0.7,
         "toggle": 0.7
       },
-      "demo_behavior": "passthrough"
+      "demo_behavior": "Module: accum4\n4-bit accumulator with enable and synchronous active-low reset.\nSignals:\n- clk: input, clock\n- rst_n: input, active-low synchronous reset\n- en: input, active-high enable\n- in_data[3:0]: input, value to add\n- accum[3:0]: output, accumulated sum\nBehavior:\n- On reset, accum <= 0.\n- On each rising edge of clk, if en=1, accum <= accum + in_data (wrap on overflow); if en=0, hold value.\nVerification:\n- Test reset clears, enable-driven accumulation, hold when disabled, wraparound on overflow.\n- Coverage goals: branch 0.7, toggle 0.7.\nArchitecture:\n- Single always block with registered accumulator.\nAcceptance:\n- Accum reflects running sum per spec; tests pass and coverage goals met."
     }
   },
-  "standard_library": {
-    "fifo_sync": {
-      "fingerprint": "lib-fifo-sync-v1"
-    },
-    "cdc_sync2": {
-      "fingerprint": "lib-cdc-sync2-v1"
-    }
-  }
+  "standard_library": {}
 }

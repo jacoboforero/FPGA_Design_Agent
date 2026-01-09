@@ -1,21 +1,19 @@
 """
-AgentOps sink placeholder. Wire this sink into EventEmitter when AgentOps is
-available; keep semantics out of runtimes.
+AgentOps sink for EventEmitter. Best-effort: if AgentOps is not configured it
+acts as a no-op to avoid impacting runtimes.
 """
 from __future__ import annotations
 
-from typing import Any
-
 from core.observability.events import Event
+from core.observability.agentops_tracker import AgentOpsTracker
 
 
 class AgentOpsSink:
-    def __init__(self) -> None:
-        # Extend with AgentOps client initialization when available.
-        self.enabled = False
+    def __init__(self, tracker: AgentOpsTracker) -> None:
+        self.tracker = tracker
 
     def send(self, event: Event) -> None:
-        if not self.enabled:
+        # We only forward minimal metadata; detailed LLM cost tracking happens in the tracker.
+        if not self.tracker:
             return
-        # TODO: integrate with AgentOps SDK; keep as no-op placeholder for now.
-        _ = event
+        self.tracker.log_event(event.event_type, event.payload)

@@ -1,30 +1,30 @@
-# Testing Plan (Outline)
+# Testing plan
 
-Goal: cover schemas, orchestration flow, workers, and DLQ handling with fast tests; gate real tools/LLMs behind optional jobs.
+Cover contracts first, then the orchestration flow. Keep fast tests default; gate tool/LLM runs behind opt-in jobs.
 
-## Unit/Schema
-- `tests/core/schemas`: keep validating Task/Result/controlled vocabularies; add agent-specific payload validators if extended.
+## Unit / schema
+- `tests/core/schemas`: enums, Task/Result validation, any agent-specific payloads.
 
 ## Integration (broker + workers)
-- Happy path: implementation → lint → testbench → simulation → distill → reflect; assert state transitions and artifact/log presence.
-- Failure paths: missing files → DLQ, schema mismatch → DLQ, transient tool error → one retry then DLQ.
-- Timeout path: long-running sim triggers timeout and failure handling.
-- Orchestrator sequencing: ensure tasks are issued in defined order; retries do not duplicate artifacts; verify final `DONE`/`FAILED` states.
+- Happy path: implementation → lint → testbench → simulation → distill → reflect; assert states and artifacts/logs exist.
+- Failure: missing file → DLQ, schema mismatch → DLQ, transient tool error → one retry then DLQ.
+- Timeout: long sim triggers timeout → failure and no downstream tasks.
+- Ordering: verify orchestrator issues tasks in the defined sequence and marks DONE/FAILED correctly.
 
-## Workers (tooling)
-- Lint worker: run Verilator on good/bad fixtures; assert success/failure logs and artifacts.
-- Simulation worker: run iverilog/vvp on simple RTL/TB; assert exit code, capture stdout/stderr, and optional coverage artifacts.
-- Distill worker: feed sample sim log/waveform; assert distilled JSON written.
+## Workers
+- Lint: Verilator on good/bad fixtures; expect exit code + logs.
+- Simulation: iverilog/vvp on simple RTL/TB; expect exit code + stdout/stderr captured.
+- Distill: sample sim log/waveform → distilled JSON path.
 
-## Agents (LLM-backed)
-- With LLM off: ensure fallbacks produce minimal artifacts/logs.
-- With LLM on (optional job): smoke tests per agent using small prompts; assert non-empty outputs and interface adherence.
+## Agents
+- LLM off: fallbacks write minimal artifacts/logs and match interfaces.
+- LLM on (optional job): small prompts per agent; non-empty outputs and interface adherence.
 
-## DLQ/Retry
-- Publish malformed task; assert NACK→DLQ.
-- Publish transient-error task; assert one retry then DLQ on repeat failure.
-- Publish interface-mismatched task; ensure DLQ and no downstream tasks issued.
+## DLQ / retry
+- Malformed task → NACK (requeue=false) → DLQ.
+- Transient tool/LLM error → one retry → DLQ on repeat failure.
+- Interface mismatch → DLQ and no further tasks for that node.
 
-## CI Notes
-- Default CI: run schema + integration with mocked tools/LLMs; use lightweight fixtures.
-- Optional jobs: enable real Verilator/sim and LLM provider tests with secrets in CI env.
+## CI knobs
+- Default CI: schema + integration with mocked tools/LLMs.
+- Optional jobs: real Verilator/sim and LLM provider tests when secrets/tooling are available.

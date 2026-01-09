@@ -1,65 +1,26 @@
-# Project Completion Plan (Experiment Branch)
+# Project completion plan (experiment branch)
 
-This branch keeps the full demo/runtime scaffolding. The plan below lists the code files that must be implemented or completed to deliver a fully working CLI flow end-to-end.
+This branch keeps the full demo/runtime. The goal is a turnkey CLI flow that takes locked specs to RTL/TB, lint/sim, and analysis with clear artifacts and docs.
 
 ## Goals
-- Orchestrate tasks from frozen specs/DAG through agents and deterministic workers.
-- Produce RTL + testbenches, lint/sim/distill outputs, and persist task memory.
-- Run via CLI entrypoints without manual patching; optional UI/extension remains demo-only.
+- End-to-end pipeline runs from locked specs/DAG through agents and workers.
+- RTL + TB + lint/sim/distill outputs are persisted; task memory is readable.
+- CLI is the primary entrypoint; UI/extension stay optional.
 
-## Work Items by Area
+## Work items
+- **Contracts & gateway:** finalize `core/schemas/*`; tighten LLM gateway defaults, retries, and logging; drop unused observability stubs or wire a sink.
+- **Orchestrator & planner:** finalize lifecycle/transition policy, context builder, task memory, broker loop; replace stub planner with agent when ready.
+- **Agents:** implementation, testbench, reflection, debug, spec-helper — define inputs/outputs, success predicates, and logs; ensure interface adherence.
+- **Workers:** lint (Verilator), sim (iverilog/vvp), distill — enforce timeouts, DLQ policy, and artifact/log paths.
+- **CLI/UI:** keep `apps/cli/cli.py` the source of truth; align FastAPI bridge/VS Code extension if maintained.
+- **Infrastructure:** RabbitMQ compose/defs; `.env.example` with broker, LLM, tool paths; pytest config.
+- **Tests:** expand schema + integration (queue flow, DLQ); add worker/agent fallbacks and optional real-tool/LLM jobs.
+- **Docs:** keep README + `docs/*` aligned with the implemented flow (CLI-first).
 
-### Core Contracts & Gateway
-- `core/schemas/contracts.py`, `core/schemas/specifications.py` — lock final message/validation schemas (inputs/outputs for every stage).
-- `adapters/llm/` & `llm_gateway/` — wire provider selection, defaults, retries, logging; align agent usage with chosen models.
-- `adapters/observability/agentops.py` — hook runtime events/metrics sink (or remove if unused).
-
-### Orchestrator & Planner
-- `orchestrator/state_machine.py` — finalize per-node lifecycle, transitions, retry/DLQ policy.
-- `orchestrator/context_builder.py` — build task payloads (paths, specs, DAG metadata).
-- `orchestrator/orchestrator_service.py` — broker loop, task publication, result handling, task memory persistence.
-- `orchestrator/task_memory.py` — store logs/artifact paths per stage.
-- `orchestrator/planner_stub.py` (or replacement planner) — generate validated design_context + DAG from specs; integrate with CLI.
-
-### Agents (LLM-backed)
-- `agents/implementation/worker.py`
-- `agents/testbench/worker.py`
-- `agents/reflection/worker.py`
-- `agents/debug/worker.py`
-- `agents/spec_helper/worker.py`
-
-Implement per-agent contracts (inputs/outputs, artifacts, success/failure), integrate with LLM gateway, and add logging/metrics.
-
-### Workers (Deterministic)
-- `workers/lint/worker.py` — Verilator/HDL lint, emits logs/artifacts.
-- `workers/sim/worker.py` — simulation driver, coverage metrics placeholder.
-- `workers/distill/worker.py` — distill sim outputs to structured datasets.
-
-Wire queue bindings, timeouts, and status reporting.
-
-### CLI Entrypoints
-- `apps/cli/run_full_demo.py` — drive planner → orchestrator → agents/workers; parameterize broker/config paths.
-- `apps/cli/run_validation_report.py` — schema/report tooling; ensure compatibility with final schemas.
-- `apps/ui_backend/server.py` & `apps/vscode-extension/` (optional/demo) — keep aligned with orchestrator API if maintained.
-
-### Infrastructure & Config
-- `infrastructure/docker-compose.yml`, `Docker/` — ensure RabbitMQ + (optional) lint/sim images; health checks.
-- `.env.example` — complete required env vars (broker URL, LLM providers, tool paths, timeouts).
-- `pytest.ini` / `tests/run_*` — align coverage targets and paths.
-
-### Tests
-- Expand `tests/infrastructure/` for queue bindings, message flow, DLQ/retry behavior.
-- Expand `tests/core/schemas/` as schemas evolve.
-- Add integration tests for orchestrator ↔ agents/workers with mocks where external tools/LLMs are unavailable.
-
-### Docs
-- `README.md` — up-to-date runbook for CLI usage.
-- `docs/overview.md`, `docs/architecture.md`, `docs/agents.md`, `docs/spec-and-planning.md`, `docs/queues-and-workers.md`, `docs/schemas.md` — reflect finalized flows, configs, and artifacts layout.
-
-## Delivery Sequence (Suggested)
-1. Finalize schemas and LLM gateway defaults.
-2. Implement orchestrator (state machine, broker loop, task memory) and planner.
-3. Implement Implementation/Testbench agents and Lint/Sim workers; get end-to-end CLI run producing artifacts.
-4. Add Reflection/Debug agents and Distill worker; introduce coverage/failure handling paths.
-5. Harden observability, retries/DLQ, config/env handling.
-6. Finish docs/tests and polish CLI ergonomics.
+## Suggested sequence
+1) Freeze schemas and LLM gateway defaults.  
+2) Harden orchestrator, planner, and task memory.  
+3) Ship Implementation/Testbench + Lint/Sim for a passing end-to-end run.  
+4) Add Distill/Reflection/Debug loop and coverage hooks.  
+5) Polish observability, retries/DLQ, and config.  
+6) Finalize docs/tests and CLI ergonomics.

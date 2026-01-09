@@ -1,38 +1,50 @@
-# CLI Usage
+# CLI usage
 
-This CLI lives under `apps/cli/cli.py` and provides commands to generate planner outputs, run the full pipeline, or exercise individual workers.
+Entrypoint: `apps/cli/cli.py`. Run with `PYTHONPATH=.` from repo root.
 
-## Prerequisites
-- RabbitMQ running (from `infrastructure/docker-compose.yml`): `cd infrastructure && docker-compose up -d`
-- Python deps: `pip install -e .` from repo root
-- Tooling (for real runs): Verilator (`verilator`), Icarus Verilog (`iverilog`, `vvp`) on PATH (or override via env: `VERILATOR_PATH`, `IVERILOG_PATH`, `VVP_PATH`)
-- Optional LLM: set `USE_LLM=1` and provider keys in `.env` (`OPENAI_API_KEY` or `GROQ_API_KEY`)
+## Prereqs
+- RabbitMQ running: `cd infrastructure && docker-compose up -d`
+- Python deps: `pip install -e .`
+- Optional tools: `verilator`, `iverilog`, `vvp` on PATH (or set `VERILATOR_PATH`, `IVERILOG_PATH`, `VVP_PATH`)
+- Optional LLM: set `USE_LLM=1` and provider keys (`OPENAI_API_KEY`/`GROQ_API_KEY`)
 
 ## Commands
-
 ```bash
-# Generate design_context.json and dag.json
-python apps/cli/cli.py plan
+# Collect and lock specs (L1–L5)
+python apps/cli/cli.py spec
 
-# Run full pipeline (planner -> start workers -> orchestrator)
-python apps/cli/cli.py run --timeout 120
+# Generate design_context.json + dag.json (uses locked specs; fallback stub via flags)
+python apps/cli/cli.py plan [--stub | --allow-stub]
 
-# Run lint on an RTL file
+# Full pipeline (planner -> workers -> orchestrator)
+python apps/cli/cli.py run --timeout 120 [--allow-stub] [--run-name my_run]
+
+# Interactive spec -> plan -> run in one command
+python apps/cli/cli.py full --timeout 120 [--run-name my_run]
+
+# Lint once
 python apps/cli/cli.py lint --rtl path/to/module.sv
 
-# Run simulation on RTL (+ optional testbench)
+# Simulate once (TB optional)
 python apps/cli/cli.py sim --rtl path/to/module.sv --testbench path/to/module_tb.sv
 ```
 
-## Workflow (demo/full run)
-1) Start RabbitMQ (`docker-compose up -d` in `infrastructure/`)
-2) Ensure dependencies/tools and LLM env (optional) are set
-3) `python apps/cli/cli.py run`
-   - Planner stub writes `artifacts/generated/{design_context.json, dag.json}`
-   - Workers (agents + deterministic) start in-process
-   - Orchestrator publishes/consumes tasks through RabbitMQ until DONE/timeout
-4) Inspect artifacts:
-   - Generated RTL/TB: `artifacts/generated/rtl/`
-   - Logs/artifact paths: `artifacts/task_memory/<node>/<stage>/`
+## Typical flows
+- **Stubbed demo (no tools/LLM):**
+  ```bash
+  PYTHONPATH=. USE_LLM=0 python apps/cli/cli.py run --allow-stub --timeout 60
+  ```
+- **With LLM + tools:**
+  ```bash
+  export USE_LLM=1 OPENAI_API_KEY=...
+  PYTHONPATH=. python apps/cli/cli.py run --allow-stub --timeout 120 --run-name my_llm_run
+  ```
+- **Suite smoke (increasing complexity, non-interactive specs):**
+  ```bash
+  PYTHONPATH=. python apps/cli/run_suite.py --timeout 90
+  # Each case auto-sets run names suite_<case> for observability/cost logs.
+  ```
 
-If tools/LLM are missing, the CLI falls back to mocks and still completes. Use `--timeout` to adjust pipeline runtime.
+Artifacts end up in `artifacts/generated/` (design context + RTL/TB) and `artifacts/task_memory/<node>/<stage>/` (logs, artifact paths). Increase `--timeout` for slower sims or LLM calls.
+
+Observability/cost tracking with AgentOps is documented in `docs/observability.md`.
