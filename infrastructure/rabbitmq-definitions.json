@@ -5,6 +5,23 @@
       "name": "/"
     }
   ],
+  "users": [
+    {
+      "name": "user",
+      "password_hash": "Z/Xebyo6+u7R7VecbZBBL6vW3a7VBMOqG2QdCNY24M9dpa2f",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": "administrator"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "user",
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
   "exchanges": [
     {
       "name": "tasks_exchange",

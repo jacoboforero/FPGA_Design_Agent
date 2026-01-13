@@ -1,0 +1,64 @@
+Module: axi_lite_gpio
+Title: AXI-Lite GPIO block with direction and data registers
+
+L1 Functional intent
+- Provide memory-mapped GPIO control with AXI-Lite.
+- Two registers: DIR (1=output) and DATA (read/write).
+- Reads return current pin state; writes update output pins.
+Reset rules
+- Active-low async reset sets DIR=0, DATA=0.
+Edge cases
+- Byte enables control partial writes.
+- Writes to unknown addresses are ignored.
+
+L2 Interface
+- clk (INPUT, 1)
+- rst_n (INPUT, 1, async active-low)
+- s_axi_awaddr (INPUT, 32)
+- s_axi_awvalid (INPUT, 1)
+- s_axi_awready (OUTPUT, 1)
+- s_axi_wdata (INPUT, 32)
+- s_axi_wstrb (INPUT, 4)
+- s_axi_wvalid (INPUT, 1)
+- s_axi_wready (OUTPUT, 1)
+- s_axi_bresp (OUTPUT, 2)
+- s_axi_bvalid (OUTPUT, 1)
+- s_axi_bready (INPUT, 1)
+- s_axi_araddr (INPUT, 32)
+- s_axi_arvalid (INPUT, 1)
+- s_axi_arready (OUTPUT, 1)
+- s_axi_rdata (OUTPUT, 32)
+- s_axi_rresp (OUTPUT, 2)
+- s_axi_rvalid (OUTPUT, 1)
+- s_axi_rready (INPUT, 1)
+- gpio_in (INPUT, 8)
+- gpio_out (OUTPUT, 8)
+Handshake semantics
+- Standard AXI-Lite channels with independent read/write handshakes.
+Params/defaults
+- GPIO_WIDTH (default 8)
+
+L3 Verification
+Test goals
+- Correct register read/write behavior with byte enables.
+- Proper AXI-Lite handshakes and response codes.
+- Reset clears registers.
+Oracle plan
+- AXI-Lite BFMs check read/write and gpio_out updates.
+Stimulus strategy
+- Directed register accesses with random strobe patterns.
+Pass/fail criteria
+- Reads/writes match expected register semantics; valid/ready obey protocol.
+Coverage goals
+- branch: 0.9
+- toggle: 0.8
+
+L4 Architecture
+- Simple register file with AXI-Lite interface FSMs.
+- Single clock domain; no CDC.
+- Latency: single-cycle response where possible.
+
+L5 Acceptance
+- RTL + TB + lint/sim clean.
+- Coverage goals met.
+- Exclusions: no burst support, no AXI4 full features.

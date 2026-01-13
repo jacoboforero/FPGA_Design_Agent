@@ -4,40 +4,22 @@ Entrypoint: `apps/cli/cli.py`. Run with `PYTHONPATH=.` from repo root.
 
 ## Prereqs
 - RabbitMQ running: `cd infrastructure && docker-compose up -d`
-- Python deps: `pip install -e .`
+- Python deps: `poetry install`
 - Optional tools: `verilator`, `iverilog`, `vvp` on PATH (or set `VERILATOR_PATH`, `IVERILOG_PATH`, `VVP_PATH`)
-- Optional LLM: set `USE_LLM=1` and provider keys (`OPENAI_API_KEY`/`GROQ_API_KEY`)
+- LLM required: set `USE_LLM=1` and provider keys (`OPENAI_API_KEY`/`GROQ_API_KEY`)
 
-## Commands
+## Command
 ```bash
-# Collect and lock specs (L1–L5)
-python apps/cli/cli.py spec
-
-# Generate design_context.json + dag.json (uses locked specs; fallback stub via flags)
-python apps/cli/cli.py plan [--stub | --allow-stub]
-
-# Full pipeline (planner -> workers -> orchestrator)
-python apps/cli/cli.py run --timeout 120 [--allow-stub] [--run-name my_run]
-
 # Interactive spec -> plan -> run in one command
-python apps/cli/cli.py full --timeout 120 [--run-name my_run]
-
-# Lint once
-python apps/cli/cli.py lint --rtl path/to/module.sv
-
-# Simulate once (TB optional)
-python apps/cli/cli.py sim --rtl path/to/module.sv --testbench path/to/module_tb.sv
+python apps/cli/cli.py --timeout 120 [--run-name my_run]
 ```
+The CLI prompts you to press Enter to open `$EDITOR` so you can paste the initial specification.
 
 ## Typical flows
-- **Stubbed demo (no tools/LLM):**
-  ```bash
-  PYTHONPATH=. USE_LLM=0 python apps/cli/cli.py run --allow-stub --timeout 60
-  ```
 - **With LLM + tools:**
   ```bash
   export USE_LLM=1 OPENAI_API_KEY=...
-  PYTHONPATH=. python apps/cli/cli.py run --allow-stub --timeout 120 --run-name my_llm_run
+  PYTHONPATH=. python apps/cli/cli.py --timeout 120 --run-name my_llm_run
   ```
 - **Suite smoke (increasing complexity, non-interactive specs):**
   ```bash

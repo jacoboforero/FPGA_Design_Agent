@@ -32,6 +32,41 @@ class ImplementationWorker(AgentWorkerBase):
 
         iface_signals = ctx["interface"]["signals"]
 
+        def _width_expr(sig) -> str:
+            raw = sig.get("width", 1)
+            if isinstance(raw, bool):
+                return "1"
+            if isinstance(raw, (int, float)):
+                return str(int(raw))
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+            return "1"
+
+        def _width_int(sig) -> int | None:
+            raw = sig.get("width", 1)
+            if isinstance(raw, bool):
+                return None
+            if isinstance(raw, int):
+                return raw
+            if isinstance(raw, float):
+                return int(raw)
+            if isinstance(raw, str):
+                text = raw.strip()
+                if text.isdigit():
+                    return int(text)
+            return None
+
+        def _port_decl(sig) -> str:
+            dir_kw = sig["direction"].lower()
+            name = sig["name"]
+            width_expr = _width_expr(sig)
+            width_int = _width_int(sig)
+            if width_int and width_int > 1:
+                return f"{dir_kw} wire [{width_int-1}:0] {name}"
+            if width_expr not in ("1", ""):
+                return f"{dir_kw} wire [({width_expr})-1:0] {name}"
+            return f"{dir_kw} wire {name}"
+
         # Heuristics for deterministic fallbacks to avoid fragile LLM output.
         inputs = [s for s in iface_signals if s["direction"].lower() == "input"]
         outputs = [s for s in iface_signals if s["direction"].lower() == "output"]
@@ -44,12 +79,12 @@ class ImplementationWorker(AgentWorkerBase):
             clk_name = next(s["name"] for s in inputs if "clk" in s["name"].lower())
             rst = next((s for s in inputs if "rst" in s["name"].lower()), None)
             en = next((s for s in inputs if s["name"].lower() in ("en", "enable")), None)
-            width = count_out.get("width", 1)
+            width_expr = _width_expr(count_out)
+            width_int = _width_int(count_out) or 1
+            width_lit = width_expr if width_expr else str(width_int)
             rst_cond = f"!{rst['name']}" if rst else "1'b0"
             ports = [
-                f"{sig['direction'].lower()} wire [{sig.get('width',1)-1}:0] {sig['name']}"
-                if sig.get("width", 1) > 1
-                else f"{sig['direction'].lower()} wire {sig['name']}"
+                _port_decl(sig)
                 for sig in iface_signals
             ]
             port_block = ",\n    ".join(ports)
@@ -58,9 +93,9 @@ class ImplementationWorker(AgentWorkerBase):
 );
     always @(posedge {clk_name} or negedge {rst['name'] if rst else clk_name}) begin
         if ({rst_cond})
-            {count_out['name']} <= {width}'d0;
+            {count_out['name']} <= {width_lit}'d0;
         else if ({en['name']})
-            {count_out['name']} <= {count_out['name']} + {width}'d1;
+            {count_out['name']} <= {count_out['name']} + {width_lit}'d1;
     end
 endmodule
 """
@@ -77,9 +112,7 @@ endmodule
                     comb_expr = " & ".join(inp["name"] for inp in inputs)
                     assigns = [f"assign {out['name']} = {comb_expr};" for out in outputs]
                     ports = [
-                        f"{sig['direction'].lower()} wire [{sig.get('width',1)-1}:0] {sig['name']}"
-                        if sig.get("width", 1) > 1
-                        else f"{sig['direction'].lower()} wire {sig['name']}"
+                        _port_decl(sig)
                         for sig in iface_signals
                     ]
                     port_block = ",\n    ".join(ports)
@@ -123,8 +156,14 @@ endmodule
         for sig in iface:
             dir_kw = sig["direction"].lower()
             name = sig["name"]
-            width = sig.get("width", 1)
-            port_lines.append(f"{dir_kw} logic [{width-1}:0] {name}" if width > 1 else f"{dir_kw} logic {name}")
+            width_expr = _width_expr(sig)
+            width_int = _width_int(sig)
+            if width_int and width_int > 1:
+                port_lines.append(f"{dir_kw} logic [{width_int-1}:0] {name}")
+            elif width_expr not in ("1", ""):
+                port_lines.append(f"{dir_kw} logic [({width_expr})-1:0] {name}")
+            else:
+                port_lines.append(f"{dir_kw} logic {name}")
         system = (
             "You are an RTL Implementation Agent. Generate synthesizable Verilog-2001.\n"
             "Rules: no code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no always_ff/always_comb/logic/interfaces). "
@@ -169,14 +208,20 @@ endmodule
         for sig in iface:
             dir_kw = sig["direction"].lower()
             name = sig["name"]
-            width = sig.get("width", 1)
-            ports.append(f"{dir_kw} wire [{width-1}:0] {name}" if width > 1 else f"{dir_kw} wire {name}")
+            width_expr = _width_expr(sig)
+            width_int = _width_int(sig)
+            if width_int and width_int > 1:
+                ports.append(f"{dir_kw} wire [{width_int-1}:0] {name}")
+            elif width_expr not in ("1", ""):
+                ports.append(f"{dir_kw} wire [({width_expr})-1:0] {name}")
+            else:
+                ports.append(f"{dir_kw} wire {name}")
             if dir_kw == "output":
                 src = inputs[0] if inputs else None
-                if src and src.get("width", 1) == width:
+                if src and _width_expr(src) == width_expr:
                     assigns.append(f"  assign {name} = {src['name']};")
                 else:
-                    default_val = f"{width}'d0" if width > 1 else "1'b0"
+                    default_val = f"{width_expr}'d0" if width_expr not in ("1", "") else "1'b0"
                     assigns.append(f"  assign {name} = {default_val};")
         port_block = ",\n    ".join(ports)
         assign_block = "\n".join(assigns) if assigns else "  // passthrough stub"

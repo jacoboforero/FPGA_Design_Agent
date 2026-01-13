@@ -9,26 +9,18 @@ LLM-backed agents plus deterministic workers that turn a frozen hardware spec in
 
 ## Quick start (local)
 1) **Prereqs**
-   - Python 3.12+, `pip install -e .`
+   - Python 3.12+, `poetry install`
    - RabbitMQ: `cd infrastructure && docker-compose up -d`
    - Optional tools: Verilator (`verilator`), Icarus (`iverilog`, `vvp`)
    - Optional LLM: set `USE_LLM=1` and `OPENAI_API_KEY` (or Groq vars)
-2) **Run pipeline (stub path)**
+2) **Run the interactive CLI** (LLM required)
    ```bash
-   PYTHONPATH=. USE_LLM=0 python apps/cli/cli.py run --allow-stub --timeout 60
+   PYTHONPATH=. USE_LLM=1 python apps/cli/cli.py --timeout 120
    ```
    Artifacts land in `artifacts/generated/rtl/`; logs live in `artifacts/task_memory/<node>/<stage>/`.
-3) **Run with LLM + tools** (after keys/tools are set)
-   ```bash
-   PYTHONPATH=. USE_LLM=1 python apps/cli/cli.py run --allow-stub --timeout 120
-   ```
 
-## CLI cheatsheet
-- `python apps/cli/cli.py spec` — interactive L1–L5 collection and lock
-- `python apps/cli/cli.py plan` — generate `design_context.json` + `dag.json` (uses locked specs or stub with `--stub/--allow-stub`)
-- `python apps/cli/cli.py run` — full pipeline (planner → workers → orchestrator)
-- `python apps/cli/cli.py lint --rtl <file>` — lint once
-- `python apps/cli/cli.py sim --rtl <file> [--testbench <file>]` — simulate once
+## CLI usage
+- `python apps/cli/cli.py` — opens your `$EDITOR`, gathers the initial spec, and runs the full pipeline
 
 ## Repo map (you’ll touch these)
 - `apps/cli/` — main entrypoint

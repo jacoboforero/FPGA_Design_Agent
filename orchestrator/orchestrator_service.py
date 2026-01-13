@@ -74,7 +74,7 @@ class DemoOrchestrator:
     def _advance(self, node_id: str, new_state: NodeState) -> None:
         node = self.nodes[node_id]
         node.transition(new_state)
-        print(f"[Orchestrator] {node_id} -> {new_state.value}")
+        print(f"{node_id} -> {new_state.value}")
         emit_runtime_event(runtime="orchestrator", event_type="state_transition", payload={"node_id": node_id, "state": new_state.value})
         if self.state_callback:
             self.state_callback(node_id, new_state.value)
@@ -118,7 +118,7 @@ class DemoOrchestrator:
                 if result.artifacts_path:
                     self.task_memory.record_artifact_path(target_node, stage, result.artifacts_path)
 
-                print(f"[Orchestrator] Result for {target_node} stage {stage}: {result.status.value}")
+                print(f"Result for {target_node} stage {stage}: {result.status.value}")
                 if result.status is not TaskStatus.SUCCESS:
                     self._advance(target_node, NodeState.FAILED)
                     done_nodes.add(target_node)
@@ -150,4 +150,4 @@ class DemoOrchestrator:
                     done_nodes.add(target_node)
 
             if len(done_nodes) < len(node_ids):
-                print("[Orchestrator] Demo timed out before all nodes completed.")
+                print("Demo timed out before all nodes completed.")

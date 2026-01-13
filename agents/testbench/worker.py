@@ -64,15 +64,45 @@ class TestbenchWorker(AgentWorkerBase):
             log_output=log_output,
         )
 
+    def _width_expr(self, sig) -> str:
+        raw = sig.get("width", 1)
+        if isinstance(raw, bool):
+            return "1"
+        if isinstance(raw, (int, float)):
+            return str(int(raw))
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+        return "1"
+
+    def _width_int(self, sig) -> int | None:
+        raw = sig.get("width", 1)
+        if isinstance(raw, bool):
+            return None
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, float):
+            return int(raw)
+        if isinstance(raw, str):
+            text = raw.strip()
+            if text.isdigit():
+                return int(text)
+        return None
+
     async def _llm_generate_tb(self, ctx, node_id: str) -> Tuple[str, str]:
         iface = ctx["interface"]["signals"]
         ports = []
         for sig in iface:
             name = sig["name"]
-            width = sig.get("width", 1)
+            width_expr = self._width_expr(sig)
+            width_int = self._width_int(sig)
             dir_kw = sig["direction"].lower()
             base_type = "wire" if dir_kw == "output" else "reg"
-            width_decl = f"[{width-1}:0] " if width > 1 else ""
+            if width_int and width_int > 1:
+                width_decl = f"[{width_int-1}:0] "
+            elif width_expr not in ("1", ""):
+                width_decl = f"[({width_expr})-1:0] "
+            else:
+                width_decl = ""
             ports.append(f"{dir_kw} {base_type} {width_decl}{name}")
         system = (
             "You are a Verification Agent. Generate a simple self-checking Verilog-2001 testbench.\n"
@@ -115,9 +145,14 @@ class TestbenchWorker(AgentWorkerBase):
         outputs = [s for s in iface if s["direction"].lower() == "output"]
 
         def port_decl(sig):
-            width = sig.get("width", 1)
+            width_expr = self._width_expr(sig)
+            width_int = self._width_int(sig)
             decl_type = "wire" if sig["direction"].lower() == "output" else "reg"
-            return f"{decl_type} [{width-1}:0] {sig['name']}" if width > 1 else f"{decl_type} {sig['name']}"
+            if width_int and width_int > 1:
+                return f"{decl_type} [{width_int-1}:0] {sig['name']}"
+            if width_expr not in ("1", ""):
+                return f"{decl_type} [({width_expr})-1:0] {sig['name']}"
+            return f"{decl_type} {sig['name']}"
 
         port_lines = "\n  ".join(port_decl(s) + ";" for s in iface)
 
@@ -125,13 +160,14 @@ class TestbenchWorker(AgentWorkerBase):
         observe = "\n    ".join(f'$display("Observed {out["name"]}=%h", {out["name"]});' for out in outputs) if outputs else "// no outputs to observe"
 
         drive_block = "// no stimulus"
-        if inputs and all(inp.get("width", 1) == 1 for inp in inputs) and len(inputs) <= 4:
+        if inputs and all((self._width_int(inp) or 0) == 1 for inp in inputs) and len(inputs) <= 4:
             drive_block = "repeat (16) begin\n      {"
             drive_block += ", ".join(inp["name"] for inp in inputs)
             drive_block += "} = $random;\n      #5;\n    end"
         elif inputs:
             first = inputs[0]
-            val = "1'b1" if first.get("width", 1) == 1 else f"{first.get('width',1)}'hA"
+            width_expr = self._width_expr(first)
+            val = "1'b1" if width_expr in ("1", "") else f"{width_expr}'hA"
             drive_block = f"{first['name']} = {val};"
         tb = f"""`timescale 1ns/1ps
 

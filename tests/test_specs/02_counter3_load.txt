@@ -1,0 +1,53 @@
+Module: counter3_load
+Title: 3-bit counter with load and saturate option
+
+L1 Functional intent
+- Count up when en=1 and load=0.
+- When load=1, load load_value[2:0] on next clock.
+- If saturate=1, hold at 7 instead of wrapping.
+Reset rules
+- Active-low async reset clears count to 0.
+Edge cases
+- load has priority over enable.
+- If load_value > 7, clamp to 7.
+- Saturate mode holds at 7 with rollover=0.
+
+L2 Interface
+- clk (INPUT, 1)
+- rst_n (INPUT, 1, async active-low)
+- en (INPUT, 1)
+- load (INPUT, 1)
+- load_value (INPUT, 3)
+- saturate (INPUT, 1)
+- count (OUTPUT, 3)
+- rollover (OUTPUT, 1)
+Handshake semantics
+- None
+Params/defaults
+- None
+
+L3 Verification
+Test goals
+- Load priority over increment.
+- Wrap when saturate=0.
+- Saturate holds at 7 when saturate=1.
+- Reset clears count.
+Oracle plan
+- Reference model for count and rollover.
+Stimulus strategy
+- Directed tests for load, saturate, and wrap.
+Pass/fail criteria
+- Count matches reference; rollover only on wrap in non-saturate mode.
+Coverage goals
+- branch: 0.85
+- toggle: 0.75
+
+L4 Architecture
+- Priority mux for load vs increment.
+- Saturate compare against 7.
+- Single clock domain.
+
+L5 Acceptance
+- RTL + TB + lint/sim clean.
+- Coverage goals met.
+- Exclusions: none.

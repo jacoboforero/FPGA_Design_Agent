@@ -1,0 +1,50 @@
+Module: uart_tx
+Title: UART transmitter with configurable baud
+
+L1 Functional intent
+- Transmit 8-bit data with start bit, optional parity, and stop bits.
+- Accept tx_start when idle; assert tx_busy during transmission.
+Reset rules
+- Active-low async reset returns idle state and tx high.
+Edge cases
+- Ignore tx_start while busy.
+- If tx_start asserted for multiple cycles, accept only once.
+
+L2 Interface
+- clk (INPUT, 1)
+- rst_n (INPUT, 1, async active-low)
+- tx_start (INPUT, 1)
+- tx_data (INPUT, 8)
+- tx_busy (OUTPUT, 1)
+- tx (OUTPUT, 1)
+Handshake semantics
+- tx_start is a pulse; tx_busy indicates backpressure.
+Params/defaults
+- BAUD_DIV (default 868)
+- STOP_BITS (default 1)
+- PARITY (default none)
+
+L3 Verification
+Test goals
+- Correct framing: start, 8 data bits LSB-first, parity (if enabled), stop.
+- Busy asserted for full frame duration.
+- Reset returns tx to idle high.
+Oracle plan
+- Bit-level reference model from baud divider.
+Stimulus strategy
+- Directed vectors with parity on/off, different data patterns.
+Pass/fail criteria
+- tx waveform matches reference; tx_busy duration correct.
+Coverage goals
+- branch: 0.85
+- toggle: 0.8
+
+L4 Architecture
+- FSM: IDLE, START, DATA, PARITY, STOP.
+- Baud tick generator from BAUD_DIV.
+- Single clock domain.
+
+L5 Acceptance
+- RTL + TB + lint/sim clean.
+- Coverage goals met.
+- Exclusions: no multi-drop, no fractional baud support.

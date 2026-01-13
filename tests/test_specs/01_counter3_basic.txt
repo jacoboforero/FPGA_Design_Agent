@@ -1,0 +1,48 @@
+Module: counter3
+Title: 3-bit up counter with enable
+
+L1 Functional intent
+- Count up on each rising clock edge when enable is high.
+- Wrap from 7 back to 0 on overflow.
+- Output count[2:0] and an optional rollover pulse.
+Reset rules
+- Active-low async reset drives count to 0 and rollover to 0.
+Edge cases
+- If enable is low, hold the current count.
+- Rollover asserted only for the cycle that wraps 7 -> 0.
+
+L2 Interface
+- clk (INPUT, 1)
+- rst_n (INPUT, 1, async active-low)
+- en (INPUT, 1)
+- count (OUTPUT, 3)
+- rollover (OUTPUT, 1)
+Handshake semantics
+- None (simple synchronous signals)
+Params/defaults
+- None
+
+L3 Verification
+Test goals
+- Happy path count increments 0..7 and wraps.
+- Reset forces count to 0 immediately.
+- Enable gating holds count when en=0.
+Oracle plan
+- Reference model compares cycle-by-cycle count and rollover.
+Stimulus strategy
+- Directed sequences for reset, enable, and wrap.
+Pass/fail criteria
+- count matches reference and rollover only on wrap.
+Coverage goals
+- branch: 0.8
+- toggle: 0.7
+
+L4 Architecture
+- Single 3-bit register and adder with wrap logic.
+- No CDC; single clock domain.
+- Latency: 1 cycle to observe increment.
+
+L5 Acceptance
+- RTL + TB + lint/sim clean.
+- Coverage goals met.
+- Exclusions: none.

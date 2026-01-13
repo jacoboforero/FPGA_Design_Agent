@@ -11,7 +11,7 @@ This repo now emits lightweight observability and cost data via AgentOps plus lo
 ## Configure
 Install dependency (if not already installed):
 ```
-pip install agentops
+poetry install -E observability
 ```
 
 Set environment (e.g., in `.env`):

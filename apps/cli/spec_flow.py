@@ -1,25 +1,43 @@
 """
-Interactive Spec Helper CLI: ask for a spec, surface clarifications, then write L1–L5 artifacts.
-The L1–L5 checklist stays internal; the user only sees plain clarifying questions.
+Interactive Spec Helper CLI: open an editor for the initial spec, then use
+LLM-driven follow-ups to complete the L1-L5 checklist and lock the specs.
 """
 from __future__ import annotations
 
 import json
-from datetime import datetime
+import os
+import shlex
+import shutil
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
-from threading import Event
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
-from agents.spec_helper.worker import SpecHelperWorker
-from core.schemas.contracts import AgentType, EntityType, TaskMessage
+from agents.common.llm_gateway import init_llm_gateway
+from agents.spec_helper.checklist import (
+    FieldInfo,
+    build_empty_checklist,
+    list_missing_fields,
+    set_field,
+)
+from agents.spec_helper.llm_helper import (
+    generate_field_draft,
+    generate_followup_question,
+    update_checklist_from_spec,
+)
 
 SPEC_DIR = Path("artifacts/task_memory/specs")
 
+WELCOME_BANNER = r"""
+========================================
+  Welcome to the Hardware Design CLI
+========================================
+"""
 
-def _prompt(text: str, default: str | None = None) -> str:
-    suffix = f" [{default}]" if default else ""
-    val = input(f"{text}{suffix}: ").strip()
-    return val or (default or "")
+
+def _print_banner() -> None:
+    print(WELCOME_BANNER)
+    print("Multi-Agent Hardware Design CLI\n")
 
 
 def _sanitize_name(name: str) -> str:
@@ -29,206 +47,328 @@ def _sanitize_name(name: str) -> str:
     return cleaned
 
 
-def _read_spec_text() -> str:
-    print("Paste your spec (plain text). Finish with a blank line:")
-    lines = []
-    while True:
-        try:
-            line = input()
-        except EOFError:
-            break
-        if not line.strip():
-            break
-        lines.append(line)
-    return "\n".join(lines).strip()
+def _confirm(prompt: str, default: bool = True) -> bool:
+    suffix = " [Y/n]" if default else " [y/N]"
+    val = input(f"{prompt}{suffix} ").strip().lower()
+    if val in ("n", "no"):
+        return False
+    if val in ("y", "yes"):
+        return True
+    return default
 
 
-def _decode_reflections(reflections: str | None) -> Dict[str, Any]:
-    if not reflections:
-        return {}
+def _select_editor() -> List[str]:
+    editor = os.getenv("EDITOR", "").strip()
+    if editor:
+        return shlex.split(editor)
+    for candidate in ("nano", "vim", "vi"):
+        if shutil.which(candidate):
+            return [candidate]
+    raise RuntimeError("No editor found. Set $EDITOR to your preferred editor.")
+
+
+def _open_editor_for_spec() -> str:
+    SPEC_DIR.mkdir(parents=True, exist_ok=True)
+    spec_path = SPEC_DIR / "spec_input.txt"
+    if not spec_path.exists():
+        spec_path.write_text("")
+    print("Press Enter to open your editor and paste the initial specification.")
+    print("Save and close the editor when you're done.")
+    print(f"File: {spec_path}")
     try:
-        return json.loads(reflections)
-    except Exception:
-        return {}
+        input()
+    except KeyboardInterrupt:
+        print("\nAborted.")
+        return ""
+    cmd = _select_editor() + [str(spec_path)]
+    try:
+        subprocess.run(cmd, check=True)
+    except KeyboardInterrupt:
+        print("\nAborted.")
+        return ""
+    return spec_path.read_text().strip()
 
-def _normalize_structured(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize different field shapes from the helper into the expected keys."""
-    if not data:
-        return {}
-    normalized = dict(data)
-    if not normalized.get("signals") and normalized.get("interface_signals"):
-        normalized["signals"] = normalized["interface_signals"]
-    cr = normalized.get("clock_reset_details")
-    if not normalized.get("clock") and isinstance(cr, dict):
-        clock = cr.get("clock", {}) if isinstance(cr.get("clock"), dict) else {}
-        if clock:
-            normalized["clock"] = {"name": clock.get("name")}
-    if not normalized.get("reset") and isinstance(cr, dict):
-        reset = cr.get("reset", {}) if isinstance(cr.get("reset"), dict) else {}
-        if reset:
-            normalized["reset"] = {"name": reset.get("name"), "active_low": reset.get("active_level") == "low", "asynchronous": reset.get("type") == "asynchronous"}
-    if not normalized.get("architecture") and normalized.get("architecture/microarchitecture"):
-        normalized["architecture"] = normalized.get("architecture/microarchitecture")
-    if not normalized.get("acceptance") and normalized.get("acceptance_criteria"):
-        normalized["acceptance"] = normalized.get("acceptance_criteria")
-    # Normalize test plan if provided as string
-    if isinstance(normalized.get("test_plan"), str):
-        normalized["test_plan"] = [p.strip() for p in normalized["test_plan"].replace(";", ",").split(",") if p.strip()]
+
+def _append_spec_notes(spec_text: str, label: str, content: str) -> str:
+    trimmed = content.strip()
+    if not trimmed:
+        return spec_text
+    return f"{spec_text}\n\n[{label}]\n{trimmed}".strip()
+
+
+def _normalize_signals(signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for sig in signals or []:
+        if not isinstance(sig, dict):
+            continue
+        entry = dict(sig)
+        if "direction" in entry and isinstance(entry["direction"], str):
+            entry["direction"] = entry["direction"].upper()
+        normalized.append(entry)
     return normalized
 
-def _prompt_signals() -> List[Dict[str, Any]]:
-    sigs: List[Dict[str, Any]] = []
-    print("Enter interface signals (blank name to stop). Include at least one input and one output if applicable.")
-    while True:
-        name = _prompt("Signal name", "")
-        if not name:
-            break
-        direction = _prompt("Direction (INPUT/OUTPUT)", "INPUT").upper()
-        width_str = _prompt("Width (e.g., 1 or 8)", "1")
-        try:
-            width = int(float(width_str))
-        except Exception:
-            width = 1
-        sigs.append({"name": name, "direction": direction, "width": width})
-    return sigs
+
+def _clock_reset_dict(value: str) -> Dict[str, Any]:
+    lowered = value.strip().lower()
+    if lowered in ("none", "n/a", "na", "combinational", "no clock", "no reset", ""):
+        return {}
+    return {"name": value.strip()}
 
 
-def _finalize_spec(module_name: str, user_spec: Dict[str, Any], helper_structured: Dict[str, Any], interactive: bool = True) -> Dict[str, Any]:
-    spec = {**user_spec, **(helper_structured or {})}
-    spec["module_name"] = _sanitize_name(spec.get("module_name") or module_name)
-    spec["behavior"] = spec.get("behavior") or spec.get("spec_text") or user_spec.get("spec_text", "")
-    spec["spec_text"] = spec.get("spec_text") or user_spec.get("spec_text", "")
+def _none_value(field: FieldInfo) -> Any:
+    field_type = field.field_type
+    if field_type == "text":
+        return "none"
+    if field_type == "list":
+        return ["none"]
+    if field_type == "map":
+        return {"note": "none"}
+    if field_type == "list_of_objects":
+        keys = field.item_keys or []
+        if keys:
+            return [{key: "none" for key in keys}]
+        return [{"note": "none"}]
+    return "none"
 
-    if not spec.get("signals"):
+
+def _is_none_token(value: str) -> bool:
+    return value.strip().lower() in ("none", "n/a", "na")
+
+
+def _clean_text(value: Any) -> str:
+    text = str(value or "").strip()
+    return "" if _is_none_token(text) else text
+
+
+def _clean_list(values: Any) -> List[Any]:
+    if not isinstance(values, list):
+        return []
+    if not values:
+        return []
+    cleaned: List[Any] = []
+    for item in values:
+        if isinstance(item, str):
+            if _is_none_token(item):
+                continue
+            cleaned.append(item)
+        else:
+            cleaned.append(item)
+    return cleaned
+
+
+def _dict_all_none(item: Dict[str, Any]) -> bool:
+    if not item:
+        return True
+    for val in item.values():
+        if isinstance(val, str):
+            if not _is_none_token(val):
+                return False
+        elif val not in (None, "", []):
+            return False
+    return True
+
+
+def _clean_list_of_objects(values: Any) -> List[Dict[str, Any]]:
+    if not isinstance(values, list):
+        return []
+    cleaned: List[Dict[str, Any]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        if _dict_all_none(item):
+            continue
+        cleaned.append(item)
+    return cleaned
+
+
+def _clean_map(values: Any) -> Dict[str, Any]:
+    if not isinstance(values, dict):
+        return {}
+    if not values:
+        return {}
+    if all(isinstance(v, str) and _is_none_token(v) for v in values.values()):
+        return {}
+    return values
+
+
+def _coerce_answer_value(field: FieldInfo, value: Any) -> Any:
+    if value is None:
+        return _none_value(field)
+    if field.field_type == "text":
+        return value if str(value).strip() else _none_value(field)
+    if field.field_type == "list":
+        return value if isinstance(value, list) and value else _none_value(field)
+    if field.field_type == "map":
+        return value if isinstance(value, dict) and value else _none_value(field)
+    if field.field_type == "list_of_objects":
+        return value if isinstance(value, list) and value else _none_value(field)
+    return value
+
+
+def _write_artifacts(spec_text: str, checklist: Dict[str, Any]) -> None:
+    SPEC_DIR.mkdir(parents=True, exist_ok=True)
+    module_name = _sanitize_name(str(checklist.get("module_name", "demo_module")))
+    checklist["module_name"] = module_name
+    l1 = checklist.get("L1", {})
+    l2 = checklist.get("L2", {})
+    l3 = checklist.get("L3", {})
+    l4 = checklist.get("L4", {})
+    l5 = checklist.get("L5", {})
+
+    (SPEC_DIR / "spec_input.txt").write_text(spec_text.strip() + "\n")
+    (SPEC_DIR / "spec_checklist.json").write_text(json.dumps(checklist, indent=2))
+
+    (SPEC_DIR / "L1_functional.json").write_text(json.dumps({
+        "module_name": module_name,
+        "behavior": _clean_text(l1.get("functional_intent", "")),
+        "spec_text": spec_text,
+        "reset_rules": _clean_text(l1.get("reset_rules", "")),
+        "edge_cases": _clean_list(l1.get("edge_cases", [])),
+    }, indent=2))
+
+    (SPEC_DIR / "L2_interface.json").write_text(json.dumps({
+        "module_name": module_name,
+        "clock": _clock_reset_dict(_clean_text(l2.get("clock", ""))),
+        "reset": _clock_reset_dict(_clean_text(l2.get("reset", ""))),
+        "signals": _normalize_signals(l2.get("signals") or []),
+        "handshake_semantics": _clean_text(l2.get("handshake_semantics", "")),
+        "params_defaults": _clean_list_of_objects(l2.get("params_defaults", [])),
+        "deps": [],
+    }, indent=2))
+
+    (SPEC_DIR / "L3_verification.json").write_text(json.dumps({
+        "test_plan": _clean_list(l3.get("test_goals", [])),
+        "oracle_plan": _clean_text(l3.get("oracle_plan", "")),
+        "stimulus_strategy": _clean_text(l3.get("stimulus_strategy", "")),
+        "pass_fail_criteria": _clean_text(l3.get("pass_fail_criteria", "")),
+        "coverage_goals": _clean_map(l3.get("coverage_goals", {})),
+    }, indent=2))
+
+    (SPEC_DIR / "L4_architecture.json").write_text(json.dumps({
+        "architecture": _clean_text(l4.get("architecture", "")),
+        "clocking_cdc": _clean_text(l4.get("clocking_cdc", "")),
+        "resource_choices": _clean_text(l4.get("resource_choices", "")),
+        "latency_throughput": _clean_text(l4.get("latency_throughput", "")),
+    }, indent=2))
+
+    (SPEC_DIR / "L5_acceptance.json").write_text(json.dumps({
+        "acceptance": _clean_text(l5.get("acceptance", "")),
+        "required_artifacts": _clean_list(l5.get("required_artifacts", [])),
+        "coverage_thresholds": _clean_map(l5.get("coverage_thresholds", {})),
+        "exclusions_assumptions": _clean_list(l5.get("exclusions_assumptions", [])),
+    }, indent=2))
+
+    lock = {"locked_at": datetime.now(timezone.utc).isoformat(), "module_name": module_name}
+    (SPEC_DIR / "lock.json").write_text(json.dumps(lock, indent=2))
+
+
+def _require_gateway() -> object:
+    gateway = init_llm_gateway()
+    if not gateway:
+        raise RuntimeError("Spec helper requires LLMs. Set USE_LLM=1 and provider keys.")
+    return gateway
+
+
+def _complete_checklist(
+    gateway: object,
+    spec_text: str,
+    checklist: Dict[str, Any],
+    interactive: bool,
+) -> Tuple[Dict[str, Any], str]:
+    checklist = update_checklist_from_spec(gateway, spec_text, checklist)
+    missing = list_missing_fields(checklist)
+
+    while missing:
+        field = missing[0]
         if not interactive:
-            raise ValueError("Missing interface signals; include them in the spec text.")
-        spec["signals"] = _prompt_signals()
-    if spec.get("signals") is None:
-        spec["signals"] = []
+            draft = generate_field_draft(gateway, field, checklist, spec_text)
+            if draft.get("value") is None:
+                raise RuntimeError(f"Missing field {field.path} and no draft could be generated.")
+            set_field(checklist, field.path, draft["value"])
+            if draft.get("draft_text"):
+                spec_text = _append_spec_notes(spec_text, f"Spec helper draft for {field.path}", draft["draft_text"])
+            checklist = update_checklist_from_spec(gateway, spec_text, checklist)
+            missing = list_missing_fields(checklist)
+            continue
 
-    if spec.get("clock") is None:
-        if interactive:
-            clk_name = _prompt("Clock signal name (blank if combinational)", "clk")
-            spec["clock"] = {"name": clk_name} if clk_name else {}
-        else:
-            spec["clock"] = {}
-    if spec.get("reset") is None:
-        if interactive:
-            rst_name = _prompt("Reset signal name (blank if none)", "rst_n")
-            spec["reset"] = {"name": rst_name, "active_low": True, "asynchronous": True} if rst_name else {}
-        else:
-            spec["reset"] = {}
-
-    if not spec.get("coverage_goals"):
-        if interactive:
-            branch_cov = _prompt("Target branch coverage (0-1)", "0.8")
-            toggle_cov = _prompt("Target toggle coverage (0-1)", "0.7")
+        question = generate_followup_question(gateway, field, checklist)
+        print(f"\nSpec Helper: {question}")
+        while True:
             try:
-                spec["coverage_goals"] = {"branch": float(branch_cov), "toggle": float(toggle_cov)}
-            except Exception:
-                spec["coverage_goals"] = {"branch": 0.8, "toggle": 0.7}
-        else:
-            spec["coverage_goals"] = {"branch": 0.8, "toggle": 0.7}
+                answer = input("Your answer (type 'gen' to draft, 'none' if not applicable): ").strip()
+            except KeyboardInterrupt:
+                raise
+            if not answer:
+                continue
+            lowered = answer.lower()
+            if lowered in ("none", "n/a", "na", "not applicable"):
+                set_field(checklist, field.path, _none_value(field))
+                spec_text = _append_spec_notes(spec_text, f"User answered none for {field.path}", answer)
+                break
+            if lowered in ("gen", "g", "draft"):
+                draft = generate_field_draft(gateway, field, checklist, spec_text)
+                draft_text = draft.get("draft_text", "").strip()
+                if draft_text:
+                    print("\nDraft proposal:")
+                    print(draft_text)
+                else:
+                    print("\nDraft proposal ready.")
+                if _confirm("Accept this draft?", True):
+                    value = _coerce_answer_value(field, draft.get("value"))
+                    set_field(checklist, field.path, value)
+                    if draft_text:
+                        spec_text = _append_spec_notes(spec_text, f"Spec helper draft for {field.path}", draft_text)
+                    break
+                follow_up = input("Provide your answer (or type 'gen' to try again): ").strip()
+                if follow_up.lower() in ("gen", "g", "draft"):
+                    continue
+                if not follow_up:
+                    print("Missing input. Let's try again.")
+                    continue
+                spec_text = _append_spec_notes(spec_text, f"User answer for {field.path}", follow_up)
+                break
 
-    if spec.get("test_plan") is None:
-        if interactive:
-            tp = _prompt("Test plan notes (happy/reset/boundary, optional)", "")
-            spec["test_plan"] = [s.strip() for s in tp.split(",") if s.strip()]
-        else:
-            spec["test_plan"] = []
+            spec_text = _append_spec_notes(spec_text, f"User answer for {field.path}", answer)
+            break
 
-    if not spec.get("architecture"):
-        spec["architecture"] = "" if not interactive else _prompt("Architecture/microarchitecture notes (optional)", "")
-    if not spec.get("acceptance"):
-        spec["acceptance"] = "Tests pass and coverage meets targets" if not interactive else _prompt("Acceptance criteria (text)", "Tests pass and coverage meets targets")
+        checklist = update_checklist_from_spec(gateway, spec_text, checklist)
+        missing = list_missing_fields(checklist)
 
-    return spec
+    return checklist, spec_text
 
 
 def collect_specs_from_text(module_name: str, spec_text: str, interactive: bool = True) -> Dict[str, Any]:
     SPEC_DIR.mkdir(parents=True, exist_ok=True)
-    module_name = _sanitize_name(module_name)
-    helper = SpecHelperWorker(None, Event())
-    helper_structured: Dict[str, Any] = {}
-    spec_payload: Dict[str, Any] = {"module_name": module_name, "spec_text": spec_text, "behavior": spec_text}
+    gateway = _require_gateway()
+    spec_text = spec_text.strip()
+    if module_name:
+        spec_text = f"Module: {module_name}\n{spec_text}".strip()
 
-    for _ in range(3):
-        payload = {**spec_payload, **helper_structured}
-        msg = TaskMessage(entity_type=EntityType.REASONING, task_type=AgentType.SPECIFICATION_HELPER, context={"spec": payload})
-        res = helper.handle_task(msg)
-        if interactive and res.log_output:
-            print(res.log_output)
+    checklist = build_empty_checklist()
+    if module_name:
+        checklist["module_name"] = _sanitize_name(module_name)
 
-        decoded = _decode_reflections(res.reflections)
-        helper_structured = _normalize_structured(decoded.get("structured") or helper_structured)
-        clarifications = decoded.get("clarifications") or []
-        status = decoded.get("status") or ("needs_clarification" if clarifications else "complete")
-
-        if status == "complete" and not clarifications:
-            break
-        if clarifications:
-            if not interactive:
-                raise RuntimeError(f"Spec incomplete: {clarifications}")
-            print("Please answer the missing items below (press Enter to skip any):")
-            answers = []
-            for q in clarifications:
-                ans = input(f"{q} ").strip()
-                if ans:
-                    answers.append(f"{q} {ans}")
-            if answers:
-                appended = "\n".join(answers)
-                spec_payload["spec_text"] = spec_payload.get("spec_text", "") + "\n\nAdditional notes:\n" + appended
-                spec_payload["behavior"] = spec_payload["spec_text"]
-            else:
-                break
-        else:
-            break
-
-    spec = _finalize_spec(module_name, spec_payload, helper_structured, interactive=interactive)
-
-    (SPEC_DIR / "L1_functional.json").write_text(json.dumps({
-        "module_name": spec["module_name"],
-        "behavior": spec.get("behavior"),
-        "spec_text": spec.get("spec_text", ""),
-    }, indent=2))
-    (SPEC_DIR / "L2_interface.json").write_text(json.dumps({
-        "module_name": spec["module_name"],
-        "clock": spec.get("clock", {}),
-        "reset": spec.get("reset", {}),
-        "signals": spec.get("signals", []) or [],
-        "deps": [],
-    }, indent=2))
-    (SPEC_DIR / "L3_verification.json").write_text(json.dumps({
-        "coverage_goals": spec.get("coverage_goals", {}),
-        "test_plan": spec.get("test_plan", []),
-    }, indent=2))
-    (SPEC_DIR / "L4_architecture.json").write_text(json.dumps({
-        "architecture": spec.get("architecture", ""),
-    }, indent=2))
-    (SPEC_DIR / "L5_acceptance.json").write_text(json.dumps({
-        "acceptance": spec.get("acceptance", ""),
-        "coverage_thresholds": spec.get("coverage_goals", {}),
-    }, indent=2))
-    lock = {"locked_at": datetime.utcnow().isoformat(), "module_name": spec["module_name"]}
-    (SPEC_DIR / "lock.json").write_text(json.dumps(lock, indent=2))
-    if interactive:
-        print(f"Specs locked for module '{spec['module_name']}' under {SPEC_DIR}/")
-    return spec
+    checklist, spec_text = _complete_checklist(gateway, spec_text, checklist, interactive=interactive)
+    _write_artifacts(spec_text, checklist)
+    return checklist
 
 
 def collect_specs() -> None:
-    SPEC_DIR.mkdir(parents=True, exist_ok=True)
-    raw_module_name = _prompt("Module name", "demo_module")
-    module_name = _sanitize_name(raw_module_name)
-    if module_name != raw_module_name:
-        print(f"Note: normalized module name to '{module_name}' for tool compatibility.")
-
-    spec_text = _read_spec_text()
+    _print_banner()
+    gateway = _require_gateway()
+    spec_text = _open_editor_for_spec()
     if not spec_text:
         print("No spec text provided; aborting.")
         return
-
-    collect_specs_from_text(module_name, spec_text, interactive=True)
+    checklist = build_empty_checklist()
+    try:
+        checklist, spec_text = _complete_checklist(gateway, spec_text, checklist, interactive=True)
+    except KeyboardInterrupt:
+        print("\nAborted.")
+        return
+    _write_artifacts(spec_text, checklist)
+    module_name = checklist.get("module_name", "demo_module")
+    print(f"\nSpecs locked for module '{module_name}' under {SPEC_DIR}/")
 
 
 if __name__ == "__main__":

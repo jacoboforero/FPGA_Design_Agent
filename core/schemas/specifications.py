@@ -14,7 +14,7 @@ from enum import Enum
 from typing import Dict, List, Optional, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, ConfigDict
 
 
 class SpecificationLevel(str, Enum):
@@ -61,8 +61,7 @@ class SpecificationDocument(BaseModel):
         description="References to upstream documents (e.g., {'L1': uuid}). Used to detect stale dependencies.",
     )
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +74,7 @@ class L1Specification(SpecificationDocument):
 
     level: Literal[SpecificationLevel.L1] = SpecificationLevel.L1
     role_summary: str = Field(..., description="One paragraph summary of the hardware block's responsibility.")
-    key_rules: List[str] = Field(..., min_items=1, description="List of ordering, losslessness, flag, or error rules.")
+    key_rules: List[str] = Field(..., min_length=1, description="List of ordering, losslessness, flag, or error rules.")
     performance_intent: str = Field(..., description="Qualitative throughput/latency expectations.")
     reset_semantics: str = Field(..., description="Definition of what 'safe after reset' means.")
     corner_cases: List[str] = Field(..., description="Corner or illegal scenarios that must be handled.")
@@ -143,9 +142,9 @@ class L2Specification(SpecificationDocument):
 
     level: Literal[SpecificationLevel.L2] = SpecificationLevel.L2
     clocking: List[ClockingInfo] = Field(
-        ..., min_items=1, description="One or more clock/reset domains applicable to this module."
+        ..., min_length=1, description="One or more clock/reset domains applicable to this module."
     )
-    signals: List[SignalDefinition] = Field(..., min_items=1)
+    signals: List[SignalDefinition] = Field(..., min_length=1)
     handshake_semantics: List[HandshakeProtocol] = Field(default_factory=list)
     transaction_unit: str = Field(..., description="Beat/packet/word and ordering guarantees.")
     configuration_parameters: List[ConfigurationParameter] = Field(default_factory=list)
@@ -182,7 +181,7 @@ class L3Specification(SpecificationDocument):
     """Verification plan."""
 
     level: Literal[SpecificationLevel.L3] = SpecificationLevel.L3
-    test_goals: List[str] = Field(..., min_items=1, description="Happy-path, boundary, and illegal goals.")
+    test_goals: List[str] = Field(..., min_length=1, description="Happy-path, boundary, and illegal goals.")
     oracle_strategy: str = Field(..., description="Scoreboard rules or reference models.")
     stimulus_strategy: str = Field(..., description="Directed scenarios plus randomization ranges.")
     pass_fail_criteria: List[str] = Field(..., description="Global pass/fail rules.")
@@ -226,7 +225,7 @@ class L4Specification(SpecificationDocument):
     """Architecture / microarchitecture."""
 
     level: Literal[SpecificationLevel.L4] = SpecificationLevel.L4
-    block_diagram: List[BlockDiagramNode] = Field(..., min_items=1)
+    block_diagram: List[BlockDiagramNode] = Field(..., min_length=1)
     dependencies: List[DependencyEdge] = Field(default_factory=list)
     clock_domains: List[ClockDomain] = Field(default_factory=list)
     resource_strategy: str = Field(..., description="Resource allocations (FIFO/RAM sizes, etc.).")
@@ -259,8 +258,8 @@ class L5Specification(SpecificationDocument):
     """Acceptance and sign-off plan."""
 
     level: Literal[SpecificationLevel.L5] = SpecificationLevel.L5
-    required_artifacts: List[ArtifactRequirement] = Field(..., min_items=1)
-    acceptance_metrics: List[AcceptanceMetric] = Field(..., min_items=1)
+    required_artifacts: List[ArtifactRequirement] = Field(..., min_length=1)
+    acceptance_metrics: List[AcceptanceMetric] = Field(..., min_length=1)
     exclusions: List[str] = Field(default_factory=list, description="Explicitly documented limitations.")
     synthesis_target: Optional[str] = Field(None, description="Target technology/tool (FPGA, ASIC, etc.).")
 
