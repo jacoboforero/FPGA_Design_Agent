@@ -13,6 +13,7 @@ class NodeState(str, Enum):
     PENDING = "PENDING"
     IMPLEMENTING = "IMPLEMENTING"
     LINTING = "LINTING"
+    DEBUGGING = "DEBUGGING"
     TESTBENCHING = "TESTBENCHING"
     SIMULATING = "SIMULATING"
     DISTILLING = "DISTILLING"
@@ -24,9 +25,10 @@ class NodeState(str, Enum):
 ALLOWED_TRANSITIONS = {
     NodeState.PENDING: {NodeState.IMPLEMENTING},
     NodeState.IMPLEMENTING: {NodeState.LINTING, NodeState.FAILED},
-    NodeState.LINTING: {NodeState.TESTBENCHING, NodeState.FAILED},
+    NodeState.LINTING: {NodeState.TESTBENCHING, NodeState.DEBUGGING, NodeState.FAILED},
+    NodeState.DEBUGGING: {NodeState.DONE, NodeState.FAILED},
     NodeState.TESTBENCHING: {NodeState.SIMULATING, NodeState.FAILED},
-    NodeState.SIMULATING: {NodeState.DISTILLING, NodeState.FAILED},
+    NodeState.SIMULATING: {NodeState.DISTILLING, NodeState.DONE, NodeState.FAILED},
     NodeState.DISTILLING: {NodeState.REFLECTING, NodeState.FAILED},
     NodeState.REFLECTING: {NodeState.DONE, NodeState.FAILED},
 }

@@ -30,65 +30,20 @@ class ImplementationWorker(AgentWorkerBase):
         rtl_path = Path(ctx["rtl_path"])
         rtl_path.parent.mkdir(parents=True, exist_ok=True)
 
-        iface_signals = ctx["interface"]["signals"]
-
-        # Heuristics for deterministic fallbacks to avoid fragile LLM output.
-        inputs = [s for s in iface_signals if s["direction"].lower() == "input"]
-        outputs = [s for s in iface_signals if s["direction"].lower() == "output"]
-        has_clock = any("clk" in s["name"].lower() for s in inputs)
-        has_en = any(s["name"].lower() in ("en", "enable") for s in inputs)
-        count_out = next((s for s in outputs if "count" in s["name"].lower()), None)
-
-        if has_clock and has_en and count_out:
-            # Deterministic up-counter stub.
-            clk_name = next(s["name"] for s in inputs if "clk" in s["name"].lower())
-            rst = next((s for s in inputs if "rst" in s["name"].lower()), None)
-            en = next((s for s in inputs if s["name"].lower() in ("en", "enable")), None)
-            width = count_out.get("width", 1)
-            rst_cond = f"!{rst['name']}" if rst else "1'b0"
-            ports = [
-                f"{sig['direction'].lower()} wire [{sig.get('width',1)-1}:0] {sig['name']}"
-                if sig.get("width", 1) > 1
-                else f"{sig['direction'].lower()} wire {sig['name']}"
-                for sig in iface_signals
-            ]
-            port_block = ",\n    ".join(ports)
-            rtl_source = f"""module {node_id} (
-    {port_block}
-);
-    always @(posedge {clk_name} or negedge {rst['name'] if rst else clk_name}) begin
-        if ({rst_cond})
-            {count_out['name']} <= {width}'d0;
-        else if ({en['name']})
-            {count_out['name']} <= {count_out['name']} + {width}'d1;
-    end
-endmodule
-"""
-            log_output = "Deterministic up-counter stub emitted (clock/en/count detected)."
-        else:
-            if self.gateway and Message:
-                rtl_source, log_output = asyncio.run(self._llm_generate_impl(ctx, node_id, iface_signals))
-            else:
-                rtl_source, log_output = self._fallback_generate_impl(ctx, node_id)
-
-            if not has_clock:
-                # Force a deterministic combinational stub for pure combinational modules.
-                if inputs and outputs:
-                    comb_expr = " & ".join(inp["name"] for inp in inputs)
-                    assigns = [f"assign {out['name']} = {comb_expr};" for out in outputs]
-                    ports = [
-                        f"{sig['direction'].lower()} wire [{sig.get('width',1)-1}:0] {sig['name']}"
-                        if sig.get("width", 1) > 1
-                        else f"{sig['direction'].lower()} wire {sig['name']}"
-                        for sig in iface_signals
-                    ]
-                    port_block = ",\n    ".join(ports)
-                    rtl_source = f"""module {node_id} (
-    {port_block}
-);
-\n  {' '.join(assigns)}\n\nendmodule
-"""
-                    log_output = f"{log_output} (LLM output replaced with deterministic combinational stub)"
+        try:
+            if not (self.gateway and Message):
+                raise RuntimeError("LLM gateway unavailable; implementation agent requires LLM.")
+            iface_signals = ctx["interface"]["signals"]
+            rtl_source, log_output = asyncio.run(self._llm_generate_impl(ctx, node_id, iface_signals))
+            rtl_source = self._validate_and_clean_rtl(rtl_source, node_id)
+        except Exception as exc:  # noqa: BLE001
+            return ResultMessage(
+                task_id=task.task_id,
+                correlation_id=task.correlation_id,
+                status=TaskStatus.FAILURE,
+                artifacts_path=None,
+                log_output=f"Implementation failed: {exc}",
+            )
 
         # Sanitize for Verilog-only toolchains.
         lines = []
@@ -118,7 +73,20 @@ endmodule
             log_output=log_output,
         )
 
+    def _validate_and_clean_rtl(self, rtl_source: str, node_id: str) -> str:
+        if not rtl_source or not rtl_source.strip():
+            raise RuntimeError("LLM returned empty RTL.")
+        cleaned = rtl_source.strip()
+        if "module" not in cleaned:
+            raise RuntimeError("LLM RTL missing module declaration.")
+        if node_id not in cleaned:
+            cleaned = cleaned.replace("module ", f"module {node_id} ", 1)
+        return cleaned
+
     async def _llm_generate_impl(self, ctx, node_id: str, iface) -> Tuple[str, str]:
+        behavior = ctx.get("demo_behavior", "")
+        clocking = ctx.get("clocking", {})
+        clock_name = next(iter(clocking.keys()), None) if isinstance(clocking, dict) else None
         port_lines = []
         for sig in iface:
             dir_kw = sig["direction"].lower()
@@ -129,12 +97,15 @@ endmodule
             "You are an RTL Implementation Agent. Generate synthesizable Verilog-2001.\n"
             "Rules: no code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no always_ff/always_comb/logic/interfaces). "
             "If no clock is provided, emit pure combinational logic with continuous assigns only. "
-            "If sequential logic is used, declare outputs as reg and drive them in always blocks; no delays inside sequential logic. Output ONLY code."
+            "If sequential logic is used, declare outputs as reg and drive them in always blocks; no delays inside sequential logic. "
+            "Honor any ready/valid or reset semantics described. Output ONLY code."
         )
         user = (
             f"Module name: {node_id}\n"
             f"Ports:\n" + "\n".join(f"- {p}" for p in port_lines) + "\n"
-            "Implement a simple passthrough/placeholder consistent with interface."
+            f"Behavior summary: {behavior or 'Implement basic ready/valid passthrough'}\n"
+            f"Clock: {clock_name or 'none'}\n"
+            "Implement the described behavior faithfully and include reset handling if a reset signal exists."
         )
         msgs: List[Message] = [
             Message(role=MessageRole.SYSTEM, content=system),
@@ -160,32 +131,3 @@ endmodule
         except Exception:
             pass
         return resp.content, f"LLM generation via {getattr(resp, 'provider', 'llm')}/{getattr(resp, 'model_name', 'unknown')}"
-
-    def _fallback_generate_impl(self, ctx, node_id: str) -> Tuple[str, str]:
-        iface = ctx["interface"]["signals"]
-        ports = []
-        assigns = []
-        inputs = [s for s in iface if s["direction"].lower() == "input"]
-        for sig in iface:
-            dir_kw = sig["direction"].lower()
-            name = sig["name"]
-            width = sig.get("width", 1)
-            ports.append(f"{dir_kw} wire [{width-1}:0] {name}" if width > 1 else f"{dir_kw} wire {name}")
-            if dir_kw == "output":
-                src = inputs[0] if inputs else None
-                if src and src.get("width", 1) == width:
-                    assigns.append(f"  assign {name} = {src['name']};")
-                else:
-                    default_val = f"{width}'d0" if width > 1 else "1'b0"
-                    assigns.append(f"  assign {name} = {default_val};")
-        port_block = ",\n    ".join(ports)
-        assign_block = "\n".join(assigns) if assigns else "  // passthrough stub"
-        rtl = f"""module {node_id} (
-    {port_block}
-);
-
-{assign_block}
-
-endmodule
-"""
-        return rtl, "Fallback RTL generation (wire-based passthrough stub)."

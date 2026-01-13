@@ -52,11 +52,21 @@ class DemoOrchestrator:
         self.context_builder = DemoContextBuilder(design_context_path, rtl_root)
         self.dag = json.loads(dag_path.read_text())
         self.nodes: Dict[str, Node] = {n["id"]: Node(n["id"]) for n in self.dag["nodes"]}
+        self.deps: Dict[str, list[str]] = {n["id"]: n.get("deps", []) for n in self.dag["nodes"]}
         self.task_memory = TaskMemory(task_memory_root)
         self.state_callback = state_callback
 
-    def _publish_task(self, ch: pika.adapters.blocking_connection.BlockingChannel, entity: EntityType, task_type: Any, node_id: str) -> TaskMessage:
-        ctx = self.context_builder.build(node_id)
+    def _publish_task(
+        self,
+        ch: pika.adapters.blocking_connection.BlockingChannel,
+        entity: EntityType,
+        task_type: Any,
+        node_id: str,
+        extra_context: Dict[str, Any] | None = None,
+    ) -> TaskMessage:
+        ctx = {**self.context_builder.build(node_id)}
+        if extra_context:
+            ctx.update(extra_context)
         task = TaskMessage(entity_type=entity, task_type=task_type, context=ctx)
         ch.basic_publish(
             exchange=TASK_EXCHANGE,
@@ -86,16 +96,25 @@ class DemoOrchestrator:
             ch.queue_bind(queue="results", exchange=TASK_EXCHANGE, routing_key=RESULTS_ROUTING_KEY)
 
             node_ids = list(self.nodes.keys())
-            tasks: Dict[str, Dict[str, TaskMessage]] = {}
-            for node_id in node_ids:
-                self._advance(node_id, NodeState.IMPLEMENTING)
-                impl_task = self._publish_task(ch, EntityType.REASONING, AgentType.IMPLEMENTATION, node_id)
-                tasks[node_id] = {"impl": impl_task, "lint": None, "tb": None, "sim": None, "distill": None, "reflect": None}
+            tasks: Dict[str, Dict[str, TaskMessage]] = {
+                nid: {"impl": None, "lint": None, "tb": None, "sim": None, "distill": None, "reflect": None, "debug": None}
+                for nid in node_ids
+            }
+            failure_context: Dict[str, Dict[str, Any]] = {}
 
             start = time.time()
             done_nodes = set()
 
             while time.time() - start < timeout_s and len(done_nodes) < len(node_ids):
+                # Schedule ready nodes (dependencies satisfied)
+                for nid in node_ids:
+                    if self.nodes[nid].state == NodeState.PENDING:
+                        deps = self.deps.get(nid, [])
+                        if all(dep in done_nodes for dep in deps):
+                            self._advance(nid, NodeState.IMPLEMENTING)
+                            impl_task = self._publish_task(ch, EntityType.REASONING, AgentType.IMPLEMENTATION, nid)
+                            tasks[nid]["impl"] = impl_task
+
                 method, props, body = ch.basic_get(queue="results", auto_ack=True)
                 if body is None:
                     time.sleep(0.1)
@@ -114,11 +133,50 @@ class DemoOrchestrator:
                 if not target_node:
                     continue
 
-                self.task_memory.record_log(target_node, stage, result.log_output)
+                log_path = self.task_memory.record_log(target_node, stage, result.log_output)
                 if result.artifacts_path:
                     self.task_memory.record_artifact_path(target_node, stage, result.artifacts_path)
 
                 print(f"[Orchestrator] Result for {target_node} stage {stage}: {result.status.value}")
+
+                # Stage handling
+                if stage == "lint" and result.status is not TaskStatus.SUCCESS:
+                    failure_context[target_node] = {
+                        "failure_stage": "lint",
+                        "failure_log": result.log_output,
+                        "failure_log_path": str(log_path),
+                        "rtl_path": self.context_builder.build(target_node).get("rtl_path"),
+                    }
+                    self._advance(target_node, NodeState.DEBUGGING)
+                    debug_task = self._publish_task(
+                        ch,
+                        EntityType.REASONING,
+                        AgentType.DEBUG,
+                        target_node,
+                        extra_context=failure_context.get(target_node),
+                    )
+                    tasks[target_node]["debug"] = debug_task
+                    continue
+
+                if stage == "sim" and result.status is not TaskStatus.SUCCESS:
+                    failure_context[target_node] = {
+                        "failure_stage": "sim",
+                        "failure_log": result.log_output,
+                        "failure_log_path": str(log_path),
+                        "failure_artifact_path": result.artifacts_path,
+                    }
+                    # On simulation failure, distill waveforms/logs and reflect.
+                    self._advance(target_node, NodeState.DISTILLING)
+                    distill = self._publish_task(
+                        ch,
+                        EntityType.LIGHT_DETERMINISTIC,
+                        WorkerType.DISTILLATION,
+                        target_node,
+                        extra_context=failure_context.get(target_node),
+                    )
+                    tasks[target_node]["distill"] = distill
+                    continue
+
                 if result.status is not TaskStatus.SUCCESS:
                     self._advance(target_node, NodeState.FAILED)
                     done_nodes.add(target_node)
@@ -137,16 +195,30 @@ class DemoOrchestrator:
                     sim_task = self._publish_task(ch, EntityType.HEAVY_DETERMINISTIC, WorkerType.SIMULATOR, target_node)
                     tasks[target_node]["sim"] = sim_task
                 elif stage == "sim":
-                    # Coverage gating could be added here when metrics are available.
-                    self._advance(target_node, NodeState.DISTILLING)
-                    distill = self._publish_task(ch, EntityType.LIGHT_DETERMINISTIC, WorkerType.DISTILLATION, target_node)
-                    tasks[target_node]["distill"] = distill
+                    # Sim success: mark done (no distill/reflect on success).
+                    self._advance(target_node, NodeState.DONE)
+                    done_nodes.add(target_node)
                 elif stage == "distill":
                     self._advance(target_node, NodeState.REFLECTING)
-                    reflect = self._publish_task(ch, EntityType.REASONING, AgentType.REFLECTION, target_node)
+                    extra = failure_context.get(target_node, {}).copy()
+                    if result.distilled_dataset:
+                        extra["distilled_dataset"] = result.distilled_dataset.model_dump()
+                    reflect = self._publish_task(ch, EntityType.REASONING, AgentType.REFLECTION, target_node, extra_context=extra)
                     tasks[target_node]["reflect"] = reflect
                 elif stage == "reflect":
-                    self._advance(target_node, NodeState.DONE)
+                    if result.reflection_insights is not None:
+                        self.task_memory.record_reflection(target_node, result.reflection_insights.model_dump_json())  # type: ignore[arg-type]
+                    # Chain into debug for concrete fix suggestions.
+                    debug_ctx = failure_context.get(target_node, {}).copy()
+                    if result.reflection_insights is not None:
+                        debug_ctx["reflection_insights"] = result.reflection_insights.model_dump()
+                    debug_task = self._publish_task(ch, EntityType.REASONING, AgentType.DEBUG, target_node, extra_context=debug_ctx)
+                    tasks[target_node]["debug"] = debug_task
+                elif stage == "debug":
+                    if result.status is TaskStatus.SUCCESS:
+                        self._advance(target_node, NodeState.DONE)
+                    else:
+                        self._advance(target_node, NodeState.FAILED)
                     done_nodes.add(target_node)
 
             if len(done_nodes) < len(node_ids):

@@ -1,8 +1,7 @@
 """
 Specification helper agent runtime.
 Receives a draft spec payload and either confirms completeness or returns
-clarifying questions to lock it down. Uses the LLM gateway when enabled,
-falls back to a deterministic checklist otherwise.
+clarifying questions to lock it down. LLM-only: no deterministic fallback.
 """
 from __future__ import annotations
 
@@ -27,74 +26,96 @@ class SpecHelperWorker(AgentWorkerBase):
         self.gateway = init_llm_gateway()
 
     def handle_task(self, task: TaskMessage) -> ResultMessage:
-        ctx = task.context or {}
-        draft = ctx.get("spec", {})
+        try:
+            if not (self.gateway and Message):
+                raise RuntimeError("LLM gateway unavailable for spec helper (USE_LLM must be enabled).")
+            ctx = task.context or {}
+            draft = ctx.get("spec", {})
 
-        seed_structured: Dict[str, Any] = {
-            "module_name": draft.get("module_name") or ctx.get("module_name"),
-            "spec_text": draft.get("spec_text") or draft.get("behavior") or "",
-            "behavior": draft.get("behavior") or draft.get("spec_text") or "",
-            "signals": draft.get("signals") or ctx.get("signals") or [],
-            "clock": draft.get("clock") or ctx.get("clock"),
-            "reset": draft.get("reset") or ctx.get("reset"),
-            "coverage_goals": draft.get("coverage_goals") or ctx.get("coverage_goals"),
-            "test_plan": draft.get("test_plan") or ctx.get("test_plan"),
-            "architecture": draft.get("architecture") or draft.get("architecture_notes") or ctx.get("architecture"),
-            "acceptance": draft.get("acceptance") or draft.get("acceptance_criteria") or ctx.get("acceptance"),
-        }
+            seed_structured: Dict[str, Any] = {
+                "module_name": draft.get("module_name") or ctx.get("module_name"),
+                "spec_text": draft.get("spec_text") or draft.get("behavior") or "",
+                "behavior": draft.get("behavior") or draft.get("spec_text") or "",
+                "signals": draft.get("signals") or ctx.get("signals") or [],
+                "clock": draft.get("clock") or ctx.get("clock"),
+                "reset": draft.get("reset") or ctx.get("reset"),
+                "coverage_goals": draft.get("coverage_goals") or ctx.get("coverage_goals"),
+                "test_plan": draft.get("test_plan") or ctx.get("test_plan"),
+                "architecture": draft.get("architecture") or draft.get("architecture_notes") or ctx.get("architecture"),
+                "acceptance": draft.get("acceptance") or draft.get("acceptance_criteria") or ctx.get("acceptance"),
+            }
 
-        used_llm = False
-        llm_payload = None
-        if self.gateway and Message:
-            try:
-                llm_payload = asyncio.run(self._llm_review(seed_structured))
-                used_llm = llm_payload is not None
-            except Exception:  # noqa: BLE001
-                llm_payload = None
-                used_llm = False
-
-        if llm_payload:
+            llm_payload, raw_content = asyncio.run(self._llm_review(seed_structured))
+            if not llm_payload or not isinstance(llm_payload, dict):
+                raise RuntimeError(f"LLM returned no structured output for spec helper. Raw response: {raw_content}")
+            if llm_payload.get("structured_raw") and not llm_payload.get("structured"):
+                raise RuntimeError(f"LLM response was not valid JSON. Raw response: {raw_content}")
             structured = {**seed_structured, **(llm_payload.get("structured") or {})}
+            if not structured and llm_payload.get("structured_raw"):
+                structured = {**seed_structured, "structured_raw": llm_payload["structured_raw"]}
             clarifications = llm_payload.get("clarifications") or []
             status = llm_payload.get("status") or ("needs_clarification" if clarifications else "complete")
-        else:
-            status, clarifications, structured = self._fallback_check(seed_structured)
 
-        log_lines = []
-        if clarifications:
-            log_lines.append("Spec is incomplete; clarify the following:")
-            log_lines.extend(f"- {q}" for q in clarifications)
-        else:
-            log_lines.append("Spec appears complete and can be locked.")
+            log_lines = []
+            if status == "invalid":
+                log_lines.append("Spec appears invalid or unrelated to hardware. Please provide a hardware design spec.")
+            elif clarifications:
+                log_lines.append("Spec is incomplete; clarify the following:")
+                log_lines.extend(f"- {q}" for q in clarifications)
+            else:
+                log_lines.append("Spec appears complete and can be locked.")
 
-        emit_runtime_event(
-            runtime=self.runtime_name,
-            event_type="task_completed",
-            payload={"task_id": str(task.task_id)},
-        )
-        payload = {
-            "status": status,
-            "clarifications": clarifications,
-            "structured": structured,
-            "used_llm": used_llm,
-        }
-        return ResultMessage(
-            task_id=task.task_id,
-            correlation_id=task.correlation_id,
-            status=TaskStatus.SUCCESS,
-            artifacts_path=None,
-            log_output="\n".join(log_lines),
-            reflections=json.dumps(payload),
-        )
+            emit_runtime_event(
+                runtime=self.runtime_name,
+                event_type="task_completed",
+                payload={"task_id": str(task.task_id)},
+            )
+            payload = {
+                "status": status,
+                "clarifications": clarifications,
+                "structured": structured,
+                "used_llm": True,
+            }
+            return ResultMessage(
+                task_id=task.task_id,
+                correlation_id=task.correlation_id,
+                status=TaskStatus.SUCCESS,
+                artifacts_path=None,
+                log_output="\n".join(log_lines),
+                reflections=json.dumps(payload),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ResultMessage(
+                task_id=task.task_id,
+                correlation_id=task.correlation_id,
+                status=TaskStatus.FAILURE,
+                artifacts_path=None,
+                log_output=f"Spec helper failed: {exc}",
+            )
 
-    async def _llm_review(self, spec: Dict[str, Any]) -> Dict[str, Any] | None:
+    async def _llm_review(self, spec: Dict[str, Any]) -> Tuple[Dict[str, Any] | None, str]:
         system = (
-            "You are a hardware specification helper. "
-            "Given a free-form spec, decide if it is complete. "
-            "Keep L1-L5 style requirements internal; only return concise clarifying questions if something is missing. "
-            "Extract structured fields when present: module_name, behavior/spec_text, interface signals (name, direction INPUT/OUTPUT, width), "
-            "clock/reset details, coverage goals, test plan notes, architecture/microarchitecture, and acceptance criteria. "
-            "Respond with JSON ONLY, no prose, no code fences."
+            "You are a hardware specification helper. Given a free-form hardware spec, you must:\n"
+            "1) Interpret the raw spec text and extract structured fields for the L1-L5 checklist.\n"
+            "2) INFER as much as possible (clock/reset names, ready/valid signals, widths, FIFO depths, goals, and any module-to-module wiring/connection intent if a system is described) from the text; only ask for truly missing or ambiguous items.\n"
+            "3) If the text is clearly not a hardware design spec, mark status='invalid' and add a concise request for a valid hardware spec.\n"
+            "Keep the L1-L5 checklist internal. Return JSON ONLY (no prose, no code fences) with keys:\n"
+            "- status: 'complete', 'needs_clarification', or 'invalid'\n"
+            "- clarifications: list of concise questions for remaining gaps ONLY (omit/empty if none). When something is missing, offer the user two options: provide it directly or ask you to draft it for them.\n"
+            "- structured: {\n"
+            "    module_name,\n"
+            "    spec_text,\n"
+            "    behavior,\n"
+            "    signals: [{name, direction (INPUT/OUTPUT), width}],\n"
+            "    clock: {name} if sequential else {},\n"
+            "    reset: {name, active_low: bool, asynchronous: bool} if applicable else {},\n"
+            "    coverage_goals: {branch,toggle} if provided,\n"
+            "    test_plan: list of scenarios/notes,\n"
+            "    architecture: str,\n"
+            "    acceptance: str,\n"
+            "    connection_intent: [{from_module, from_port, to_module, to_port, notes}] when a system with multiple modules is described\n"
+            "  }\n"
+            "Avoid redundant questions; assume ready/valid semantics if mentioned; reuse names and widths from the text."
         )
         hints = {
             "module_name": spec.get("module_name"),
@@ -120,66 +141,100 @@ class SpecHelperWorker(AgentWorkerBase):
         ]
         max_tokens = int(os.getenv("LLM_MAX_TOKENS_SPEC", os.getenv("LLM_MAX_TOKENS", 800) or 800))
         temperature = float(os.getenv("LLM_TEMPERATURE_SPEC", os.getenv("LLM_TEMPERATURE", 0.2) or 0.2))
-        cfg = GenerationConfig(temperature=temperature, max_tokens=max_tokens)
-        resp = await self.gateway.generate(messages=messages, config=cfg)  # type: ignore[arg-type]
+        cfg = GenerationConfig(temperature=temperature, max_tokens=max_tokens, stop_sequences=["```"])
+
+        async def _once(msgs: List[Message]) -> Tuple[Dict[str, Any] | None, str, Any]:
+            resp_inner = await self.gateway.generate(messages=msgs, config=cfg)  # type: ignore[arg-type]
+            raw_inner = resp_inner.content.strip()
+            if raw_inner.startswith("```"):
+                raw_inner = raw_inner.strip("`")
+            parsed_inner = self._safe_json(raw_inner)
+            return parsed_inner, raw_inner, resp_inner
+
+        parsed, raw, last_resp = await _once(messages)
+        if parsed is None:
+            # Retry once with explicit JSON-only instruction
+            retry_msgs = messages + [
+                Message(
+                    role=MessageRole.USER,
+                    content="Previous response was not valid JSON. Return ONLY JSON with the same keys (status, clarifications, structured) and no extra text.",
+                )
+            ]
+            parsed, raw, last_resp = await _once(retry_msgs)
+
         tracker = get_tracker()
         try:
             tracker.log_llm_call(
                 agent=self.runtime_name,
                 node_id=spec.get("module_name"),
-                model=getattr(resp, "model_name", "unknown"),
-                provider=getattr(resp, "provider", "unknown"),
-                prompt_tokens=getattr(resp, "input_tokens", 0),
-                completion_tokens=getattr(resp, "output_tokens", 0),
-                total_tokens=getattr(resp, "total_tokens", 0),
-                estimated_cost_usd=getattr(resp, "estimated_cost_usd", None),
+                model=getattr(last_resp, "model_name", "unknown"),
+                provider=getattr(last_resp, "provider", "unknown"),
+                prompt_tokens=getattr(last_resp, "input_tokens", 0),
+                completion_tokens=getattr(last_resp, "output_tokens", 0),
+                total_tokens=getattr(last_resp, "total_tokens", 0),
+                estimated_cost_usd=getattr(last_resp, "estimated_cost_usd", None),
                 metadata={"stage": "spec_helper"},
             )
         except Exception:
             pass
-        content = resp.content.strip()
-        if content.startswith("```"):
-            content = content.strip("`")
-        parsed = self._safe_json(content)
-        return parsed
+        return parsed, raw
 
     def _safe_json(self, text: str) -> Dict[str, Any] | None:
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.strip("`")
+        # direct JSON load
         try:
-            return json.loads(text)
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+                return parsed[0]
+            if isinstance(parsed, dict):
+                return parsed
         except Exception:
             pass
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(text[start : end + 1])
-            except Exception:
-                return None
+        # try to extract first balanced JSON object
+        frag = self._extract_first_json_object(cleaned)
+        if frag:
+            for loader in (json.loads, self._ast_load):
+                try:
+                    parsed = loader(frag)
+                    if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+                        return parsed[0]
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    continue
+        # final fallback: wrap raw as structured_raw so caller can inspect
+        return {"structured_raw": text}
+
+    def _extract_first_json_object(self, text: str) -> str | None:
+        in_string = False
+        escape = False
+        depth = 0
+        start_idx = None
+        for idx, ch in enumerate(text):
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+            if in_string:
+                continue
+            if ch == "{":
+                if depth == 0:
+                    start_idx = idx
+                depth += 1
+            elif ch == "}":
+                if depth > 0:
+                    depth -= 1
+                    if depth == 0 and start_idx is not None:
+                        return text[start_idx : idx + 1]
         return None
 
-    def _fallback_check(self, spec: Dict[str, Any]) -> Tuple[str, List[str], Dict[str, Any]]:
-        clarifications: List[str] = []
-        structured = dict(spec)
+    def _ast_load(self, frag: str) -> Any:
+        import ast
 
-        if not structured.get("module_name"):
-            clarifications.append("What is the module name?")
-        if not structured.get("behavior"):
-            clarifications.append("Provide a concise behavior/intent description.")
-        if not structured.get("signals"):
-            clarifications.append("List interface signals (name, direction, width) or share an interface summary.")
-        else:
-            for sig in structured["signals"]:
-                if "name" not in sig or "direction" not in sig:
-                    clarifications.append("Each signal needs a name and direction (INPUT/OUTPUT).")
-                    break
-        if not structured.get("clock") and not structured.get("reset"):
-            clarifications.append("Confirm if this is combinational only or provide clock/reset details.")
-        if not structured.get("coverage_goals") and not structured.get("test_plan"):
-            clarifications.append("Provide coverage goals or a brief test plan (happy/reset/boundary).")
-        if not structured.get("architecture"):
-            clarifications.append("Add a brief architecture/microarchitecture note (e.g., FSM/datapath outline).")
-        if not structured.get("acceptance"):
-            clarifications.append("State acceptance criteria (tests pass/coverage thresholds).")
-
-        status = "complete" if not clarifications else "needs_clarification"
-        return status, clarifications, structured
+        return ast.literal_eval(frag)

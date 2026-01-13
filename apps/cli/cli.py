@@ -14,11 +14,36 @@ import json
 import os
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List
 
 import pika
+
+def _load_env() -> None:
+    """Lightweight .env loader to honor local API keys without extra deps."""
+    dotenv_path = Path(__file__).resolve().parents[2] / ".env"
+    if not dotenv_path.exists():
+        return
+    for line in dotenv_path.read_text().splitlines():
+        striped = line.strip()
+        if not striped or striped.startswith("#") or "=" not in striped:
+            continue
+        key, val = striped.split("=", 1)
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key and val and key not in os.environ:
+            os.environ[key] = val
+    # Default to enabling LLMs when API keys are present.
+    if os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY"):
+        os.environ.setdefault("USE_LLM", "1")
+
+# Ensure repo root is on sys.path for direct invocation without PYTHONPATH=.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+_load_env()
 
 # Agents
 from agents.implementation.worker import ImplementationWorker
@@ -42,8 +67,6 @@ from apps.cli import spec_flow
 from core.schemas.contracts import TaskMessage, EntityType, WorkerType
 from core.observability.setup import configure_observability
 from core.observability.agentops_tracker import get_tracker
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def connection_params_from_env() -> pika.ConnectionParameters:
@@ -83,7 +106,7 @@ def _confirm(prompt: str, default: bool = True) -> bool:
 
 
 def _default_run_name(prefix: str) -> str:
-    return f"{prefix}_{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+    return f"{prefix}_{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
 
 def cmd_plan(args: argparse.Namespace) -> None:
@@ -154,8 +177,19 @@ def cmd_sim(args: argparse.Namespace) -> None:
 def cmd_full(args: argparse.Namespace) -> None:
     run_name = args.run_name or _default_run_name("cli_full")
     configure_observability(run_name=run_name, default_tags=["cli", "full"])
-    # 1) Collect specs interactively
-    spec_flow.collect_specs()
+    # 1) Collect specs interactively (single-module or system-level)
+    if getattr(args, "system", False):
+        system_info = spec_flow.collect_system_specs(copy_primary=False) or {}
+        modules = [m.get("name", "unnamed") for m in system_info.get("modules", [])]
+        if not modules:
+            print("System spec collection did not produce any modules; aborting.")
+            return
+        if system_info.get("aborted"):
+            print(f"Spec collection aborted; failed modules: {', '.join(system_info.get('failed_modules', []))}")
+            return
+        print(f"Locked system specs for modules: {', '.join(modules) if modules else 'none'}")
+    else:
+        spec_flow.collect_specs()
 
     # 2) Plan
     planner.generate_from_specs()
@@ -165,7 +199,7 @@ def cmd_full(args: argparse.Namespace) -> None:
     nodes = ", ".join(n["id"] for n in dag.get("nodes", []))
     print(f"Plan generated: {dag_path} (nodes: {nodes})")
 
-    if not _confirm("Proceed to execution?", True):
+    if not _confirm("Proceed to execution?", default=False):
         print("Aborted after planning.")
         return
 
@@ -193,6 +227,51 @@ def cmd_full(args: argparse.Namespace) -> None:
             print(rtl_path.read_text())
         except Exception as exc:  # noqa: BLE001
             print(f"(Could not read RTL: {exc})")
+
+
+def cmd_system(args: argparse.Namespace) -> None:
+    """
+    System-level flow: interactive system spec helper (multi-module) -> planner -> orchestrator/agents/workers.
+    """
+    run_name = args.run_name or _default_run_name("cli_system")
+    configure_observability(run_name=run_name, default_tags=["cli", "system"])
+
+    # 1) Collect system specs (multi-module)
+    system_info = spec_flow.collect_system_specs(copy_primary=args.copy_primary) or {}
+    modules = [m.get("name", "unnamed") for m in system_info.get("modules", [])]
+    primary = system_info.get("primary_module")
+    if not modules:
+        print("System spec collection did not produce any modules; aborting.")
+        return
+    if system_info.get("aborted"):
+        print(f"Spec collection aborted; failed modules: {', '.join(system_info.get('failed_modules', []))}")
+        return
+
+    # 2) Plan
+    planner.generate_from_specs()
+    design_context = REPO_ROOT / "artifacts" / "generated" / "design_context.json"
+    dag_path = REPO_ROOT / "artifacts" / "generated" / "dag.json"
+    dag = json.loads(dag_path.read_text())
+    nodes = ", ".join(n["id"] for n in dag.get("nodes", []))
+    print(f"Plan generated: {dag_path} (nodes: {nodes})")
+    if modules:
+        print(f"Modules locked: {', '.join(modules)} (primary: {primary or 'n/a'})")
+
+    if not _confirm("Proceed to execution?", default=False):
+        print("Aborted after planning.")
+        return
+
+    # 3) Execute
+    params = connection_params_from_env()
+    stop_event = threading.Event()
+    workers = start_workers(params, stop_event)
+    try:
+        rtl_root = REPO_ROOT / "artifacts" / "generated"
+        task_memory_root = REPO_ROOT / "artifacts" / "task_memory"
+        DemoOrchestrator(params, design_context, dag_path, rtl_root, task_memory_root).run(timeout_s=args.timeout)
+    finally:
+        stop_workers(workers, stop_event)
+        get_tracker().finalize()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -225,7 +304,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_full = sub.add_parser("full", help="Spec helper -> plan -> run pipeline, with optional approval")
     p_full.add_argument("--timeout", type=float, default=120.0, help="Pipeline timeout in seconds")
     p_full.add_argument("--run-name", help="Optional run name for observability/AgentOps")
+    p_full.add_argument("--system", action="store_true", help="Use system-level spec helper for multi-module DAGs")
     p_full.set_defaults(func=cmd_full)
+
+    p_system = sub.add_parser("system", help="System-level spec helper (multi-module) -> plan -> run pipeline")
+    p_system.add_argument("--timeout", type=float, default=120.0, help="Pipeline timeout in seconds")
+    p_system.add_argument("--run-name", help="Optional run name for observability/AgentOps")
+    p_system.add_argument("--copy-primary", action="store_true", help="Also copy the chosen primary module into single-module spec dir for legacy flows")
+    p_system.set_defaults(func=cmd_system)
 
     return parser
 
@@ -234,7 +320,10 @@ def main(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
     parser = build_parser()
     args = parser.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        print("\nCancelled by user.")
 
 
 if __name__ == "__main__":
