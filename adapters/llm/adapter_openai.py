@@ -2,7 +2,7 @@
 
 from typing import Optional, List
 from openai import AsyncOpenAI
-from gateway import (
+from adapters.llm.gateway import (
     LLMGateway,
     Message,
     MessageRole,

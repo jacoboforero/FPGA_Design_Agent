@@ -47,12 +47,11 @@ class TransportRegistry:
                 # Find all classes in the module
                 for name, obj in inspect.getmembers(module, inspect.isclass):
                     # Check if it's a TransportProtocol subclass (but not the base)
-                        if (
-                            issubclass(obj, TransportProtocol)
-                            and obj is not TransportProtocol
-                            and obj.__module__ == module_path
-                        ):
-                        
+                    if (
+                        issubclass(obj, TransportProtocol)
+                        and obj is not TransportProtocol
+                        and obj.__module__ == module_path
+                    ):
                         # Register using the class name
                         self._transports[name] = obj
                         
