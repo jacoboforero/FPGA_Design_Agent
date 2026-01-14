@@ -33,4 +33,6 @@ class DemoContextBuilder:
             "clocking": node.get("clocking", {}),
             "library_refs": self._context.get("standard_library", {}),
             "demo_behavior": node.get("demo_behavior", "passthrough"),
+            "verification": node.get("verification", {}),
+            "acceptance": node.get("acceptance", {}),
         }

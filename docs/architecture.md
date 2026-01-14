@@ -5,7 +5,7 @@ Short map of the moving pieces. For the story, start with [overview.md](./overvi
 ## Components
 - **Orchestrator** — reads `design_context.json` + `dag.json`, walks the DAG, publishes tasks, consumes results, advances state, and writes task memory.
 - **RabbitMQ** — queues for agents (`agent_tasks`), deterministic work (`process_tasks`), simulations (`simulation_tasks`), results (`results`), and DLQ.
-- **Agents (LLM-backed)** — spec-helper, planner (stub), implementation, testbench, reflection, debug.
+- **Agents (LLM-backed)** — spec-helper, planner, implementation, testbench, reflection, debug.
 - **Workers (deterministic)** — lint, simulation, distillation.
 - **Storage** — `artifacts/generated/` (design context + RTL/TB) and `artifacts/task_memory/` (logs, artifact paths, insights).
 

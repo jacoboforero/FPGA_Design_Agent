@@ -4,7 +4,7 @@ All agents run inside the agent-worker runtime and are selected by `AgentType`. 
 
 ## Planning
 - **Spec Helper** — guides L1–L5, asks clarifying questions, and produces the locked checklist under `artifacts/task_memory/specs/`.
-- **Planner** — consumes locked specs and emits `design_context.json` + `dag.json`. Today a stub lives in `orchestrator/planner_stub.py` until the agent is hardened.
+- **Planner** — consumes locked specs and emits `design_context.json` + `dag.json`.
 
 ## Execution
 - **Implementation**

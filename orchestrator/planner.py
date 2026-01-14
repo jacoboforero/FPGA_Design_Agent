@@ -16,6 +16,14 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from core.schemas.specifications import (
+    L1Specification,
+    L2Specification,
+    L3Specification,
+    L4Specification,
+    L5Specification,
+)
+
 SPEC_DIR = Path("artifacts/task_memory/specs")
 OUT_DIR = Path("artifacts/generated")
 
@@ -31,6 +39,40 @@ def _load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text())
 
 
+def _module_spec_paths(spec_dir: Path, module_name: str) -> Dict[str, Path]:
+    suffix = f"_{module_name}.json"
+    return {
+        "L1": spec_dir / f"L1_functional{suffix}",
+        "L2": spec_dir / f"L2_interface{suffix}",
+        "L3": spec_dir / f"L3_verification{suffix}",
+        "L5": spec_dir / f"L5_acceptance{suffix}",
+    }
+
+
+def _extract_module_nodes(l4: L4Specification, default_module: str) -> List[str]:
+    if l4.block_diagram:
+        nodes = [node.node_id for node in l4.block_diagram]
+        return nodes or [default_module]
+    return [default_module]
+
+
+def _build_deps_map(
+    module_nodes: List[str],
+    l4: L4Specification,
+) -> Dict[str, List[str]]:
+    deps_map = {module: set() for module in module_nodes}
+    for dep in l4.dependencies:
+        parent = dep.parent_id
+        child = dep.child_id
+        if parent and child:
+            deps_map.setdefault(child, set()).add(parent)
+    for child, parents in deps_map.items():
+        missing = [p for p in parents if p not in module_nodes]
+        if missing:
+            raise RuntimeError(f"Unknown DAG deps for {child}: {missing}")
+    return {child: sorted(parents) for child, parents in deps_map.items()}
+
+
 def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> None:
     spec_dir = spec_dir.resolve()
     out_dir = out_dir.resolve()
@@ -38,58 +80,130 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
     if not lock_path.exists():
         raise RuntimeError("Specs are not locked. Run the spec helper to lock L1–L5 before planning.")
 
-    l1 = _load_json(spec_dir / "L1_functional.json")
-    l2 = _load_json(spec_dir / "L2_interface.json")
-    l3 = _load_json(spec_dir / "L3_verification.json")
-    l5 = _load_json(spec_dir / "L5_acceptance.json")
+    lock = _load_json(lock_path)
+    module_name = lock.get("module_name") or "demo_module"
 
-    module_name = l2.get("module_name") or l1.get("module_name") or "demo_module"
-    rtl_file = f"rtl/{module_name}.sv"
-    tb_file = f"rtl/{module_name}_tb.sv"
+    l1 = L1Specification.model_validate_json((spec_dir / "L1_functional.json").read_text())
+    l2 = L2Specification.model_validate_json((spec_dir / "L2_interface.json").read_text())
+    l3 = L3Specification.model_validate_json((spec_dir / "L3_verification.json").read_text())
+    l4 = L4Specification.model_validate_json((spec_dir / "L4_architecture.json").read_text())
+    l5 = L5Specification.model_validate_json((spec_dir / "L5_acceptance.json").read_text())
 
-    interface_signals: List[Dict[str, Any]] = l2.get("signals") or []
-    clock_dict = l2.get("clock") or {}
-    reset_dict = l2.get("reset") or {}
-    clock_name = clock_dict.get("name", "clk") if isinstance(clock_dict, dict) else "clk"
-    reset_name = reset_dict.get("name", "rst_n") if isinstance(reset_dict, dict) else "rst_n"
-    clocking = {
-        clock_name: {
-            "freq_hz": clock_dict.get("freq_hz", 100e6) if isinstance(clock_dict, dict) else 100e6,
-            "reset": reset_name,
-            "reset_active_low": reset_dict.get("active_low", True) if isinstance(reset_dict, dict) else True,
+    module_nodes = _extract_module_nodes(l4, module_name)
+    if len(set(module_nodes)) != len(module_nodes):
+        raise RuntimeError(f"Duplicate module ids in block diagram: {module_nodes}")
+
+    l2_by_module: Dict[str, L2Specification] = {}
+    l1_by_module: Dict[str, L1Specification] = {}
+    l3_by_module: Dict[str, L3Specification] = {}
+    l5_by_module: Dict[str, L5Specification] = {}
+
+    for module in module_nodes:
+        if module == module_name:
+            l1_by_module[module] = l1
+            l2_by_module[module] = l2
+            l3_by_module[module] = l3
+            l5_by_module[module] = l5
+            continue
+        paths = _module_spec_paths(spec_dir, module)
+        for key, path in paths.items():
+            if not path.exists():
+                raise RuntimeError(f"Missing {key} spec for module '{module}': {path}")
+        l1_by_module[module] = L1Specification.model_validate_json(paths["L1"].read_text())
+        l2_by_module[module] = L2Specification.model_validate_json(paths["L2"].read_text())
+        l3_by_module[module] = L3Specification.model_validate_json(paths["L3"].read_text())
+        l5_by_module[module] = L5Specification.model_validate_json(paths["L5"].read_text())
+
+    nodes: Dict[str, Dict[str, Any]] = {}
+    for module in module_nodes:
+        mod_l1 = l1_by_module[module]
+        mod_l2 = l2_by_module[module]
+        mod_l3 = l3_by_module[module]
+        mod_l5 = l5_by_module[module]
+
+        rtl_file = f"rtl/{module}.sv"
+        tb_file = f"rtl/{module}_tb.sv"
+
+        interface_signals: List[Dict[str, Any]] = [
+            {
+                "name": sig.name,
+                "direction": sig.direction.value,
+                "width": sig.width_expr,
+                "semantics": sig.semantics,
+            }
+            for sig in mod_l2.signals
+        ]
+        clocking = [
+            {
+                "clock_name": clk.clock_name,
+                "clock_polarity": clk.clock_polarity.value,
+                "reset_name": clk.reset_name,
+                "reset_polarity": clk.reset_polarity.value if clk.reset_polarity else None,
+                "reset_is_async": clk.reset_is_async,
+                "description": clk.description,
+            }
+            for clk in mod_l2.clocking
+        ]
+        coverage_goals = {
+            target.coverage_id: target.goal
+            for target in mod_l3.coverage_targets
+            if target.goal is not None
         }
-    }
-    coverage_goals = l3.get("coverage_goals") or l5.get("coverage_thresholds") or {}
+        verification = {
+            "test_goals": mod_l3.test_goals,
+            "oracle_strategy": mod_l3.oracle_strategy,
+            "stimulus_strategy": mod_l3.stimulus_strategy,
+            "pass_fail_criteria": mod_l3.pass_fail_criteria,
+            "coverage_targets": [t.model_dump() for t in mod_l3.coverage_targets],
+            "reset_constraints": mod_l3.reset_constraints.model_dump(),
+        }
+        acceptance = {
+            "required_artifacts": [a.model_dump() for a in mod_l5.required_artifacts],
+            "acceptance_metrics": [m.model_dump() for m in mod_l5.acceptance_metrics],
+            "exclusions": mod_l5.exclusions,
+            "synthesis_target": mod_l5.synthesis_target,
+        }
 
-    nodes = {
-        module_name: {
+        behavior_lines = [
+            mod_l1.role_summary,
+            f"Key rules: {', '.join(mod_l1.key_rules)}" if mod_l1.key_rules else "",
+            f"Reset: {mod_l1.reset_semantics}" if mod_l1.reset_semantics else "",
+            f"Corner cases: {', '.join(mod_l1.corner_cases)}" if mod_l1.corner_cases else "",
+            f"Performance: {mod_l1.performance_intent}" if mod_l1.performance_intent else "",
+        ]
+        demo_behavior = "\n".join(line for line in behavior_lines if line)
+
+        nodes[module] = {
             "rtl_file": rtl_file,
             "testbench_file": tb_file,
             "interface": {"signals": interface_signals},
-            "uses_library": l2.get("uses_library", []),
+            "uses_library": [],
             "clocking": clocking,
             "coverage_goals": coverage_goals,
-            "demo_behavior": l1.get("behavior", "passthrough"),
+            "demo_behavior": demo_behavior,
+            "verification": verification,
+            "acceptance": acceptance,
         }
-    }
 
     design_context = {
         "design_context_hash": None,
         "nodes": nodes,
-        "standard_library": l2.get("standard_library", {}),
+        "standard_library": {},
     }
     design_context["design_context_hash"] = _hash_dict(design_context["nodes"])
 
+    deps_map = _build_deps_map(module_nodes, l4)
     dag = {
         "nodes": [
             {
-                "id": module_name,
+                "id": module,
                 "type": "module",
-                "deps": l2.get("deps", []),
+                "deps": deps_map.get(module, []),
                 "state": "PENDING",
                 "artifacts": {},
                 "metrics": {},
-            },
+            }
+            for module in module_nodes
         ]
     }
 

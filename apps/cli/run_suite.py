@@ -7,15 +7,22 @@ from __future__ import annotations
 import argparse
 import shutil
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List
 
+import pika
+
 from apps.cli.cli import connection_params_from_env, start_workers, stop_workers
 from apps.cli import spec_flow
-from orchestrator import planner
 from orchestrator.orchestrator_service import DemoOrchestrator
 from core.observability.setup import configure_observability
 from core.observability.agentops_tracker import get_tracker
+from core.schemas.contracts import AgentType, EntityType, ResultMessage, TaskMessage, TaskStatus
+from agents.planner.worker import PlannerWorker
+
+TASK_EXCHANGE = "tasks_exchange"
+RESULTS_ROUTING_KEY = "RESULTS"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_GEN = REPO_ROOT / "artifacts" / "generated"
@@ -25,6 +32,39 @@ SPEC_DIR = REPO_ROOT / "artifacts" / "task_memory" / "specs"
 def clean_artifacts() -> None:
     shutil.rmtree(ARTIFACTS_GEN, ignore_errors=True)
     shutil.rmtree(SPEC_DIR, ignore_errors=True)
+
+
+def run_planner_task(params, timeout: float) -> None:
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.PLANNER,
+        context={
+            "spec_dir": str(SPEC_DIR),
+            "out_dir": str(ARTIFACTS_GEN),
+        },
+    )
+    with pika.BlockingConnection(params) as conn:
+        ch = conn.channel()
+        ch.queue_declare(queue="results", durable=True)
+        ch.queue_bind(queue="results", exchange=TASK_EXCHANGE, routing_key=RESULTS_ROUTING_KEY)
+        ch.basic_publish(
+            exchange=TASK_EXCHANGE,
+            routing_key=task.entity_type.value,
+            body=task.model_dump_json().encode(),
+            properties=pika.BasicProperties(content_type="application/json"),
+        )
+        start = time.time()
+        while time.time() - start < timeout:
+            method, props, body = ch.basic_get(queue="results", auto_ack=True)
+            if body is None:
+                continue
+            result = ResultMessage.model_validate_json(body)
+            if result.task_id != task.task_id:
+                continue
+            if result.status is not TaskStatus.SUCCESS:
+                raise RuntimeError(f"Planning failed: {result.log_output}")
+            return
+    raise RuntimeError("Planner timed out waiting for results.")
 
 
 SUITE: List[Dict[str, str]] = [
@@ -113,7 +153,6 @@ def run_case(case: Dict[str, str], timeout: float) -> Dict[str, str]:
     clean_artifacts()
     configure_observability(run_name=f"suite_{case['name']}", default_tags=["suite"])
     spec_flow.collect_specs_from_text(case["name"], case["spec"], interactive=False)
-    planner.generate_from_specs()
 
     design_context = ARTIFACTS_GEN / "design_context.json"
     dag_path = ARTIFACTS_GEN / "dag.json"
@@ -124,6 +163,14 @@ def run_case(case: Dict[str, str], timeout: float) -> Dict[str, str]:
     status = "SUCCESS"
     rtl_path = ""
     try:
+        planner_stop = threading.Event()
+        planner_worker = PlannerWorker(params, planner_stop)
+        planner_worker.start()
+        try:
+            run_planner_task(params, timeout=timeout)
+        finally:
+            planner_stop.set()
+            planner_worker.join(timeout=1.0)
         DemoOrchestrator(params, design_context, dag_path, ARTIFACTS_GEN, REPO_ROOT / "artifacts" / "task_memory").run(timeout_s=timeout)
         ctx = design_context.read_text()
         if ctx:

@@ -1,64 +1,210 @@
 Module: axi_lite_gpio
 Title: AXI-Lite GPIO block with direction and data registers
 
-L1 Functional intent
-- Provide memory-mapped GPIO control with AXI-Lite.
-- Two registers: DIR (1=output) and DATA (read/write).
-- Reads return current pin state; writes update output pins.
-Reset rules
-- Active-low async reset sets DIR=0, DATA=0.
-Edge cases
-- Byte enables control partial writes.
-- Writes to unknown addresses are ignored.
+L1
+Role summary: Memory-mapped GPIO controller with AXI-Lite interface and DIR/DATA registers.
+Key rules:
+- Register map: 0x0 DIR (1=output, 0=input), 0x4 DATA.
+- Writes update DATA and DIR; reads return current register values and gpio_in where applicable.
+- Byte strobes apply per-byte for partial writes.
+Performance intent: Single-cycle response when possible; otherwise complete within protocol limits.
+Reset semantics: Active-low async reset sets DIR=0 and DATA=0; outputs disabled.
+Corner cases:
+- Writes to unknown addresses are ignored and return OKAY response.
+- Read/write channels are independent per AXI-Lite.
+Open questions:
+- none
 
-L2 Interface
-- clk (INPUT, 1)
-- rst_n (INPUT, 1, async active-low)
-- s_axi_awaddr (INPUT, 32)
-- s_axi_awvalid (INPUT, 1)
-- s_axi_awready (OUTPUT, 1)
-- s_axi_wdata (INPUT, 32)
-- s_axi_wstrb (INPUT, 4)
-- s_axi_wvalid (INPUT, 1)
-- s_axi_wready (OUTPUT, 1)
-- s_axi_bresp (OUTPUT, 2)
-- s_axi_bvalid (OUTPUT, 1)
-- s_axi_bready (INPUT, 1)
-- s_axi_araddr (INPUT, 32)
-- s_axi_arvalid (INPUT, 1)
-- s_axi_arready (OUTPUT, 1)
-- s_axi_rdata (OUTPUT, 32)
-- s_axi_rresp (OUTPUT, 2)
-- s_axi_rvalid (OUTPUT, 1)
-- s_axi_rready (INPUT, 1)
-- gpio_in (INPUT, 8)
-- gpio_out (OUTPUT, 8)
-Handshake semantics
-- Standard AXI-Lite channels with independent read/write handshakes.
-Params/defaults
-- GPIO_WIDTH (default 8)
+L2
+Clocking:
+- clock_name: clk
+  clock_polarity: POSEDGE
+  reset_name: rst_n
+  reset_polarity: ACTIVE_LOW
+  reset_is_async: true
+  description: single AXI-Lite clock domain
+Signals:
+- name: clk
+  direction: INPUT
+  width_expr: 1
+  semantics: clock
+- name: rst_n
+  direction: INPUT
+  width_expr: 1
+  semantics: async active-low reset
+- name: s_axi_awaddr
+  direction: INPUT
+  width_expr: 32
+  semantics: write address
+- name: s_axi_awvalid
+  direction: INPUT
+  width_expr: 1
+  semantics: write address valid
+- name: s_axi_awready
+  direction: OUTPUT
+  width_expr: 1
+  semantics: write address ready
+- name: s_axi_wdata
+  direction: INPUT
+  width_expr: 32
+  semantics: write data
+- name: s_axi_wstrb
+  direction: INPUT
+  width_expr: 4
+  semantics: write byte enables
+- name: s_axi_wvalid
+  direction: INPUT
+  width_expr: 1
+  semantics: write data valid
+- name: s_axi_wready
+  direction: OUTPUT
+  width_expr: 1
+  semantics: write data ready
+- name: s_axi_bresp
+  direction: OUTPUT
+  width_expr: 2
+  semantics: write response
+- name: s_axi_bvalid
+  direction: OUTPUT
+  width_expr: 1
+  semantics: write response valid
+- name: s_axi_bready
+  direction: INPUT
+  width_expr: 1
+  semantics: write response ready
+- name: s_axi_araddr
+  direction: INPUT
+  width_expr: 32
+  semantics: read address
+- name: s_axi_arvalid
+  direction: INPUT
+  width_expr: 1
+  semantics: read address valid
+- name: s_axi_arready
+  direction: OUTPUT
+  width_expr: 1
+  semantics: read address ready
+- name: s_axi_rdata
+  direction: OUTPUT
+  width_expr: 32
+  semantics: read data
+- name: s_axi_rresp
+  direction: OUTPUT
+  width_expr: 2
+  semantics: read response
+- name: s_axi_rvalid
+  direction: OUTPUT
+  width_expr: 1
+  semantics: read valid
+- name: s_axi_rready
+  direction: INPUT
+  width_expr: 1
+  semantics: read ready
+- name: gpio_in
+  direction: INPUT
+  width_expr: 8
+  semantics: external GPIO inputs
+- name: gpio_out
+  direction: OUTPUT
+  width_expr: 8
+  semantics: GPIO outputs
+Handshake semantics:
+- name: axi_lite
+  rules: independent read/write channels; valid/ready handshake per AXI-Lite.
+Transaction unit: 32-bit word per AXI-Lite transfer.
+Configuration parameters:
+- name: GPIO_WIDTH
+  default_value: 8
+  description: width of GPIO port
 
-L3 Verification
-Test goals
-- Correct register read/write behavior with byte enables.
+L3
+Test goals:
+- Correct DIR/DATA read/write behavior with byte strobes.
 - Proper AXI-Lite handshakes and response codes.
-- Reset clears registers.
-Oracle plan
-- AXI-Lite BFMs check read/write and gpio_out updates.
-Stimulus strategy
-- Directed register accesses with random strobe patterns.
-Pass/fail criteria
-- Reads/writes match expected register semantics; valid/ready obey protocol.
-Coverage goals
-- branch: 0.9
-- toggle: 0.8
+- Reset clears registers and outputs.
+Oracle strategy: AXI-Lite BFM plus register model for DIR/DATA.
+Stimulus strategy: Directed register accesses with random strobe patterns and mixed read/write sequences.
+Pass/fail criteria:
+- Reads/writes match expected register semantics.
+- AXI-Lite valid/ready obey protocol without deadlock.
+Coverage targets:
+- coverage_id: branch
+  description: branch coverage of address decode and handshake logic
+  metric_type: branch
+  goal: 0.9
+  notes: none
+- coverage_id: toggle
+  description: toggle coverage of register bits and GPIO outputs
+  metric_type: toggle
+  goal: 0.8
+  notes: none
+Reset constraints:
+min_cycles_after_reset: 1
+ordering_notes: transactions begin one cycle after reset deasserts.
+Scenarios:
+- scenario_id: write_dir_data
+  description: write DIR and DATA then read back
+  stimulus: write 0x0 and 0x4 with full strobes
+  oracle: readback matches written values
+  pass_fail_criteria: data matches, responses OKAY
+  illegal: false
+- scenario_id: partial_write
+  description: byte strobe partial write
+  stimulus: write DATA with varied wstrb
+  oracle: only selected bytes update
+  pass_fail_criteria: readback matches masked write
+  illegal: false
 
-L4 Architecture
-- Simple register file with AXI-Lite interface FSMs.
-- Single clock domain; no CDC.
-- Latency: single-cycle response where possible.
+L4
+Block diagram:
+- node_id: axi_lite_gpio
+  description: AXI-Lite register file for DIR/DATA and GPIO logic
+  node_type: axi_lite_slave
+  interface_refs: [axi_lite_gpio_if]
+  uses_standard_component: false
+  notes: simple FSMs for read/write channels
+Clock domains:
+- name: clk
+  frequency_hz: 100000000
+  notes: single AXI-Lite domain
+Resource strategy: two 32-bit registers, address decode, AXI-Lite handshake FSMs.
+Latency budget: single-cycle response when possible; otherwise bounded by handshake.
+Assertion plan:
+sva:
+- arvalid && arready implies rvalid within 1 cycle
+- awvalid && wvalid && awready && wready implies bvalid within 1 cycle
+scoreboard_assertions:
+- read/write data matches register model
 
-L5 Acceptance
-- RTL + TB + lint/sim clean.
-- Coverage goals met.
-- Exclusions: no burst support, no AXI4 full features.
+L5
+Required artifacts:
+- name: rtl
+  description: synthesizable RTL for axi_lite_gpio
+  mandatory: true
+- name: testbench
+  description: self-checking testbench with AXI-Lite BFM
+  mandatory: true
+- name: lint_report
+  description: verilator lint log
+  mandatory: true
+- name: sim_log
+  description: simulation transcript
+  mandatory: true
+- name: coverage_report
+  description: branch/toggle coverage summary
+  mandatory: true
+Acceptance metrics:
+- metric_id: branch
+  description: branch coverage >= 0.9
+  operator: ">="
+  target_value: "0.9"
+  metric_source: coverage_report
+- metric_id: toggle
+  description: toggle coverage >= 0.8
+  operator: ">="
+  target_value: "0.8"
+  metric_source: coverage_report
+Exclusions:
+- no burst support
+- no AXI4 full features
+Synthesis target: fpga_generic

@@ -9,10 +9,10 @@ This server runs workers in background threads and spawns an orchestrator per ru
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List
 
@@ -25,7 +25,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from orchestrator import planner_stub
+from agents.planner.worker import PlannerWorker
+from core.schemas.contracts import AgentType, EntityType, ResultMessage, TaskMessage, TaskStatus
+
+TASK_EXCHANGE = "tasks_exchange"
+RESULTS_ROUTING_KEY = "RESULTS"
 from orchestrator.orchestrator_service import DemoOrchestrator
 from agents.implementation.worker import ImplementationWorker
 from agents.testbench.worker import TestbenchWorker
@@ -99,6 +103,7 @@ def start_workers(params: pika.ConnectionParameters) -> List[threading.Thread]:
         return []
     workers_started = True
     threads = [
+        PlannerWorker(params, stop_event),
         ImplementationWorker(params, stop_event),
         TestbenchWorker(params, stop_event),
         ReflectionWorker(params, stop_event),
@@ -113,6 +118,39 @@ def start_workers(params: pika.ConnectionParameters) -> List[threading.Thread]:
     return threads
 
 
+def run_planner_task(params: pika.ConnectionParameters, timeout: float = 30.0) -> None:
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.PLANNER,
+        context={
+            "spec_dir": str(REPO_ROOT / "artifacts" / "task_memory" / "specs"),
+            "out_dir": str(REPO_ROOT / "artifacts" / "generated"),
+        },
+    )
+    with pika.BlockingConnection(params) as conn:
+        ch = conn.channel()
+        ch.queue_declare(queue="results", durable=True)
+        ch.queue_bind(queue="results", exchange=TASK_EXCHANGE, routing_key=RESULTS_ROUTING_KEY)
+        ch.basic_publish(
+            exchange=TASK_EXCHANGE,
+            routing_key=task.entity_type.value,
+            body=task.model_dump_json().encode(),
+            properties=pika.BasicProperties(content_type="application/json"),
+        )
+        start = time.time()
+        while time.time() - start < timeout:
+            method, props, body = ch.basic_get(queue="results", auto_ack=True)
+            if body is None:
+                continue
+            result = ResultMessage.model_validate_json(body)
+            if result.task_id != task.task_id:
+                continue
+            if result.status is not TaskStatus.SUCCESS:
+                raise HTTPException(status_code=400, detail=f"Planning failed: {result.log_output}")
+            return
+    raise HTTPException(status_code=504, detail="Planner timed out waiting for results.")
+
+
 @app.post("/run")
 def run_demo():
     rabbit_url = os.getenv("RABBITMQ_URL", "amqp://user:password@localhost:5672/")
@@ -125,8 +163,8 @@ def run_demo():
 
     reset_state()
     init_spec_helper_gateway()
-    planner_stub.generate()
     threads = start_workers(params)
+    run_planner_task(params)
     orch = DemoOrchestrator(
         params,
         ARTIFACTS / "design_context.json",
@@ -196,57 +234,24 @@ def reset_chat():
 
 async def generate_spec_helper_reply(user_msg: str) -> str:
     """
-    LLM-backed spec helper; falls back to lightweight L1-L5 parsing when LLM disabled/unavailable.
+    LLM-backed spec helper for the UI chat.
     """
-    if os.getenv("USE_LLM") == "1" and spec_helper_gateway and Message and MessageRole and GenerationConfig:
-        try:
-            system = (
-                "You are the Specification Helper Agent for RTL designs. "
-                "You extract and refine L1-L5: intent, interface, verification goals/coverage, architecture/clocking, acceptance. "
-                "Return a short structured summary and 2-3 clarifying questions if needed. "
-                "Be concise; prefer bullet lists."
-            )
-            msgs: List[Message] = [Message(role=MessageRole.SYSTEM, content=system)]
-            for m in chat_history[-6:]:
-                role = m.get("role", "user")
-                if role == "agent":
-                    msgs.append(Message(role=MessageRole.ASSISTANT, content=m["content"]))
-                else:
-                    msgs.append(Message(role=MessageRole.USER, content=m["content"]))
-            msgs.append(Message(role=MessageRole.USER, content=user_msg))
-            cfg = GenerationConfig(temperature=0.2, max_tokens=500)
-            resp = await spec_helper_gateway.generate(messages=msgs, config=cfg)  # type: ignore
-            return resp.content
-        except Exception:
-            # fall through to mock parse
-            pass
-
-    # Fallback: lightly parse user text for L1-L5 hints and echo back.
-    sections = _parse_l1_l5(user_msg)
-    if sections:
-        lines = ["Spec Helper (mock): captured your spec summary:"]
-        for key in ["L1", "L2", "L3", "L4", "L5"]:
-            if key in sections:
-                lines.append(f"- {key}: {sections[key]}")
-        lines.append("If this looks right, kick off /run. For richer iteration, set USE_LLM=1 and provide OPENAI_API_KEY.")
-        return "\n".join(lines)
-    return (
-        "Spec Helper (mock): Thanks for the details. I couldn't parse L1–L5 sections.\n"
-        "Please include labeled bullets for L1 intent, L2 interface, L3 verification/coverage, L4 architecture/clocking, L5 acceptance criteria.\n"
-        "Or set USE_LLM=1 with an API key for full parsing."
+    if os.getenv("USE_LLM") != "1" or not spec_helper_gateway or not Message or not MessageRole or not GenerationConfig:
+        raise HTTPException(status_code=503, detail="LLM unavailable; enable USE_LLM=1 and configure provider credentials.")
+    system = (
+        "You are the Specification Helper Agent for RTL designs. "
+        "You extract and refine L1-L5: intent, interface, verification goals/coverage, architecture/clocking, acceptance. "
+        "Return a short structured summary and 2-3 clarifying questions if needed. "
+        "Be concise; prefer bullet lists."
     )
-
-
-def _parse_l1_l5(text: str) -> Dict[str, str]:
-    sections: Dict[str, str] = {}
-    for line in text.splitlines():
-        clean = line.strip().lstrip("-").strip()
-        lower = clean.lower()
-        for key in ["l1", "l2", "l3", "l4", "l5"]:
-            if lower.startswith(key):
-                parts = clean.split(":", 1)
-                val = parts[1].strip() if len(parts) > 1 else clean[len(key) :].strip()
-                label = key.upper()
-                if val:
-                    sections[label] = val
-    return sections
+    msgs: List[Message] = [Message(role=MessageRole.SYSTEM, content=system)]
+    for m in chat_history[-6:]:
+        role = m.get("role", "user")
+        if role == "agent":
+            msgs.append(Message(role=MessageRole.ASSISTANT, content=m["content"]))
+        else:
+            msgs.append(Message(role=MessageRole.USER, content=m["content"]))
+    msgs.append(Message(role=MessageRole.USER, content=user_msg))
+    cfg = GenerationConfig(temperature=0.2, max_tokens=500)
+    resp = await spec_helper_gateway.generate(messages=msgs, config=cfg)  # type: ignore
+    return resp.content

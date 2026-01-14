@@ -1,48 +1,145 @@
 Module: counter3
 Title: 3-bit up counter with enable
 
-L1 Functional intent
-- Count up on each rising clock edge when enable is high.
-- Wrap from 7 back to 0 on overflow.
-- Output count[2:0] and an optional rollover pulse.
-Reset rules
-- Active-low async reset drives count to 0 and rollover to 0.
-Edge cases
-- If enable is low, hold the current count.
-- Rollover asserted only for the cycle that wraps 7 -> 0.
+L1
+Role summary: 3-bit synchronous up counter with enable and rollover pulse.
+Key rules:
+- On each rising edge of clk, if en=1 increment count by 1.
+- Wrap from 7 to 0; assert rollover for one cycle on wrap.
+- If en=0, hold count and keep rollover low.
+Performance intent: One count update per clock cycle; throughput 1 per cycle.
+Reset semantics: Active-low async reset forces count=0 and rollover=0 immediately.
+Corner cases:
+- en toggles between edges; value sampled only on clock edge.
+- rollover asserted only on the 7->0 transition.
+Open questions:
+- none
 
-L2 Interface
-- clk (INPUT, 1)
-- rst_n (INPUT, 1, async active-low)
-- en (INPUT, 1)
-- count (OUTPUT, 3)
-- rollover (OUTPUT, 1)
-Handshake semantics
-- None (simple synchronous signals)
-Params/defaults
-- None
+L2
+Clocking:
+- clock_name: clk
+  clock_polarity: POSEDGE
+  reset_name: rst_n
+  reset_polarity: ACTIVE_LOW
+  reset_is_async: true
+  description: single clock domain
+Signals:
+- name: clk
+  direction: INPUT
+  width_expr: 1
+  semantics: clock
+- name: rst_n
+  direction: INPUT
+  width_expr: 1
+  semantics: async active-low reset
+- name: en
+  direction: INPUT
+  width_expr: 1
+  semantics: count enable
+- name: count
+  direction: OUTPUT
+  width_expr: 3
+  semantics: current count value
+- name: rollover
+  direction: OUTPUT
+  width_expr: 1
+  semantics: pulse on wrap 7->0
+Handshake semantics:
+- name: none
+  rules: none
+Transaction unit: one count update per rising clock edge.
+Configuration parameters:
+- name: none
+  default_value: none
+  description: none
 
-L3 Verification
-Test goals
-- Happy path count increments 0..7 and wraps.
-- Reset forces count to 0 immediately.
-- Enable gating holds count when en=0.
-Oracle plan
-- Reference model compares cycle-by-cycle count and rollover.
-Stimulus strategy
-- Directed sequences for reset, enable, and wrap.
-Pass/fail criteria
-- count matches reference and rollover only on wrap.
-Coverage goals
-- branch: 0.8
-- toggle: 0.7
+L3
+Test goals:
+- Count increments 0..7 then wraps with rollover pulse.
+- Reset clears count and rollover immediately.
+- Hold count steady when en=0.
+Oracle strategy: Cycle-accurate reference model for count and rollover.
+Stimulus strategy: Directed sequences covering reset, enable gating, and wrap.
+Pass/fail criteria:
+- count matches reference each cycle.
+- rollover asserted only on wrap when en=1.
+Coverage targets:
+- coverage_id: branch
+  description: branch coverage of counter control paths
+  metric_type: branch
+  goal: 0.8
+  notes: none
+- coverage_id: toggle
+  description: toggle coverage of count bits and rollover
+  metric_type: toggle
+  goal: 0.7
+  notes: none
+Reset constraints:
+min_cycles_after_reset: 0
+ordering_notes: async reset may assert/deassert at any time.
+Scenarios:
+- scenario_id: reset_async
+  description: async reset clears outputs
+  stimulus: assert rst_n low for 2 cycles at random phase
+  oracle: count=0 and rollover=0 while reset active
+  pass_fail_criteria: outputs hold zero until reset deasserts
+  illegal: false
+- scenario_id: wrap_pulse
+  description: rollover on wrap
+  stimulus: drive en=1 for 9 cycles
+  oracle: rollover asserted only when count wraps 7->0
+  pass_fail_criteria: rollover high for exactly one cycle on wrap
+  illegal: false
 
-L4 Architecture
-- Single 3-bit register and adder with wrap logic.
-- No CDC; single clock domain.
-- Latency: 1 cycle to observe increment.
+L4
+Block diagram:
+- node_id: counter3
+  description: up-counter with enable and rollover
+  node_type: sequential_counter
+  interface_refs: [counter3_if]
+  uses_standard_component: false
+  notes: 3-bit register + adder + wrap detect
+Clock domains:
+- name: clk
+  frequency_hz: 100000000
+  notes: single synchronous domain
+Resource strategy: one 3-bit register, 3-bit adder, wrap comparator.
+Latency budget: 1-cycle update, throughput 1 per cycle.
+Assertion plan:
+sva:
+- if !rst_n then count==0 and rollover==0
+- if en==0 then count holds value
+scoreboard_assertions:
+- rollover only on 7->0 transition
 
-L5 Acceptance
-- RTL + TB + lint/sim clean.
-- Coverage goals met.
-- Exclusions: none.
+L5
+Required artifacts:
+- name: rtl
+  description: synthesizable RTL for counter3
+  mandatory: true
+- name: testbench
+  description: self-checking testbench
+  mandatory: true
+- name: lint_report
+  description: verilator lint log
+  mandatory: true
+- name: sim_log
+  description: simulation transcript
+  mandatory: true
+- name: coverage_report
+  description: branch/toggle coverage summary
+  mandatory: true
+Acceptance metrics:
+- metric_id: branch
+  description: branch coverage >= 0.8
+  operator: ">="
+  target_value: "0.8"
+  metric_source: coverage_report
+- metric_id: toggle
+  description: toggle coverage >= 0.7
+  operator: ">="
+  target_value: "0.7"
+  metric_source: coverage_report
+Exclusions:
+- none
+Synthesis target: fpga_generic

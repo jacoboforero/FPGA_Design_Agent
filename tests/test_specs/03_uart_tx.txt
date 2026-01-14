@@ -1,50 +1,157 @@
 Module: uart_tx
 Title: UART transmitter with configurable baud
 
-L1 Functional intent
-- Transmit 8-bit data with start bit, optional parity, and stop bits.
-- Accept tx_start when idle; assert tx_busy during transmission.
-Reset rules
-- Active-low async reset returns idle state and tx high.
-Edge cases
+L1
+Role summary: UART transmitter for 8-bit data with configurable baud, parity, and stop bits.
+Key rules:
+- Accept tx_start only when idle; ignore while tx_busy=1.
+- Frame format: start bit=0, 8 data bits LSB-first, optional parity, stop bits=1.
+- tx_busy asserted from start bit through last stop bit.
+Performance intent: Support back-to-back frames at configured baud rate.
+Reset semantics: Active-low async reset returns idle state, tx=1, tx_busy=0.
+Corner cases:
+- tx_start asserted for multiple cycles; accept only once per idle window.
+- Parity modes: none, even, odd; stop bits: 1 or 2.
+Open questions:
+- none
+
+L2
+Clocking:
+- clock_name: clk
+  clock_polarity: POSEDGE
+  reset_name: rst_n
+  reset_polarity: ACTIVE_LOW
+  reset_is_async: true
+  description: single clock domain
+Signals:
+- name: clk
+  direction: INPUT
+  width_expr: 1
+  semantics: clock
+- name: rst_n
+  direction: INPUT
+  width_expr: 1
+  semantics: async active-low reset
+- name: tx_start
+  direction: INPUT
+  width_expr: 1
+  semantics: start transmit pulse
+- name: tx_data
+  direction: INPUT
+  width_expr: 8
+  semantics: byte to transmit
+- name: tx_busy
+  direction: OUTPUT
+  width_expr: 1
+  semantics: high while transmitting
+- name: tx
+  direction: OUTPUT
+  width_expr: 1
+  semantics: UART serial output
+Handshake semantics:
+- name: tx_start/tx_busy
+  rules: tx_start is sampled when tx_busy=0; tx_busy indicates backpressure.
+Transaction unit: one byte per tx_start request.
+Configuration parameters:
+- name: BAUD_DIV
+  default_value: 868
+  description: clock divider for baud tick
+- name: STOP_BITS
+  default_value: 1
+  description: number of stop bits (1 or 2)
+- name: PARITY
+  default_value: none
+  description: parity mode (none/even/odd)
+
+L3
+Test goals:
+- Correct framing: start, data bits LSB-first, optional parity, stop bits.
+- tx_busy asserted for full frame duration.
 - Ignore tx_start while busy.
-- If tx_start asserted for multiple cycles, accept only once.
-
-L2 Interface
-- clk (INPUT, 1)
-- rst_n (INPUT, 1, async active-low)
-- tx_start (INPUT, 1)
-- tx_data (INPUT, 8)
-- tx_busy (OUTPUT, 1)
-- tx (OUTPUT, 1)
-Handshake semantics
-- tx_start is a pulse; tx_busy indicates backpressure.
-Params/defaults
-- BAUD_DIV (default 868)
-- STOP_BITS (default 1)
-- PARITY (default none)
-
-L3 Verification
-Test goals
-- Correct framing: start, 8 data bits LSB-first, parity (if enabled), stop.
-- Busy asserted for full frame duration.
 - Reset returns tx to idle high.
-Oracle plan
-- Bit-level reference model from baud divider.
-Stimulus strategy
-- Directed vectors with parity on/off, different data patterns.
-Pass/fail criteria
-- tx waveform matches reference; tx_busy duration correct.
-Coverage goals
-- branch: 0.85
-- toggle: 0.8
+Oracle strategy: Bit-level reference model based on BAUD_DIV and parity settings.
+Stimulus strategy: Directed vectors with parity on/off, different data patterns, and stop bits 1/2.
+Pass/fail criteria:
+- tx waveform matches reference at each baud tick.
+- tx_busy duration matches frame length.
+Coverage targets:
+- coverage_id: branch
+  description: branch coverage of FSM states and parity modes
+  metric_type: branch
+  goal: 0.85
+  notes: none
+- coverage_id: toggle
+  description: toggle coverage of tx output and state bits
+  metric_type: toggle
+  goal: 0.8
+  notes: none
+Reset constraints:
+min_cycles_after_reset: 1
+ordering_notes: reset deasserted at least 1 cycle before tx_start.
+Scenarios:
+- scenario_id: parity_even
+  description: transmit with even parity
+  stimulus: set PARITY=even and transmit 0x55
+  oracle: parity bit yields even parity
+  pass_fail_criteria: waveform matches reference
+  illegal: false
+- scenario_id: stop_bits_2
+  description: transmit with 2 stop bits
+  stimulus: set STOP_BITS=2 and transmit 0xA5
+  oracle: two stop bits at end of frame
+  pass_fail_criteria: tx stays high for 2 bit periods after parity/data
+  illegal: false
 
-L4 Architecture
-- FSM: IDLE, START, DATA, PARITY, STOP.
-- Baud tick generator from BAUD_DIV.
-- Single clock domain.
+L4
+Block diagram:
+- node_id: uart_tx
+  description: UART TX FSM with shift register and baud tick
+  node_type: serial_transmitter
+  interface_refs: [uart_tx_if]
+  uses_standard_component: false
+  notes: FSM + baud divider + shifter
+Clock domains:
+- name: clk
+  frequency_hz: 50000000
+  notes: single synchronous domain
+Resource strategy: FSM, shift register, baud counter, parity generator.
+Latency budget: start bit emitted on first baud tick after tx_start; throughput limited by frame length.
+Assertion plan:
+sva:
+- tx_busy high from start bit through last stop bit
+- tx is high during idle
+scoreboard_assertions:
+- tx waveform matches bit-level reference model
 
-L5 Acceptance
-- RTL + TB + lint/sim clean.
-- Coverage goals met.
-- Exclusions: no multi-drop, no fractional baud support.
+L5
+Required artifacts:
+- name: rtl
+  description: synthesizable RTL for uart_tx
+  mandatory: true
+- name: testbench
+  description: self-checking testbench
+  mandatory: true
+- name: lint_report
+  description: verilator lint log
+  mandatory: true
+- name: sim_log
+  description: simulation transcript
+  mandatory: true
+- name: coverage_report
+  description: branch/toggle coverage summary
+  mandatory: true
+Acceptance metrics:
+- metric_id: branch
+  description: branch coverage >= 0.85
+  operator: ">="
+  target_value: "0.85"
+  metric_source: coverage_report
+- metric_id: toggle
+  description: toggle coverage >= 0.8
+  operator: ">="
+  target_value: "0.8"
+  metric_source: coverage_report
+Exclusions:
+- no multi-drop support
+- no fractional baud generation
+Synthesis target: fpga_generic

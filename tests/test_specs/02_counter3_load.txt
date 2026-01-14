@@ -1,53 +1,159 @@
 Module: counter3_load
 Title: 3-bit counter with load and saturate option
 
-L1 Functional intent
-- Count up when en=1 and load=0.
-- When load=1, load load_value[2:0] on next clock.
-- If saturate=1, hold at 7 instead of wrapping.
-Reset rules
-- Active-low async reset clears count to 0.
-Edge cases
-- load has priority over enable.
-- If load_value > 7, clamp to 7.
-- Saturate mode holds at 7 with rollover=0.
+L1
+Role summary: 3-bit counter with load input and optional saturate behavior.
+Key rules:
+- If load=1, load load_value on next rising clk (load has priority over en).
+- If load=0 and en=1, increment count by 1.
+- If saturate=1, hold at 7 instead of wrapping; rollover stays low.
+Performance intent: One count update per clock cycle; throughput 1 per cycle.
+Reset semantics: Active-low async reset forces count=0 and rollover=0 immediately.
+Corner cases:
+- load asserted while en=1; load wins.
+- load_value above 7 clamps to 7.
+- rollover only when wrapping with saturate=0.
+Open questions:
+- none
 
-L2 Interface
-- clk (INPUT, 1)
-- rst_n (INPUT, 1, async active-low)
-- en (INPUT, 1)
-- load (INPUT, 1)
-- load_value (INPUT, 3)
-- saturate (INPUT, 1)
-- count (OUTPUT, 3)
-- rollover (OUTPUT, 1)
-Handshake semantics
-- None
-Params/defaults
-- None
+L2
+Clocking:
+- clock_name: clk
+  clock_polarity: POSEDGE
+  reset_name: rst_n
+  reset_polarity: ACTIVE_LOW
+  reset_is_async: true
+  description: single clock domain
+Signals:
+- name: clk
+  direction: INPUT
+  width_expr: 1
+  semantics: clock
+- name: rst_n
+  direction: INPUT
+  width_expr: 1
+  semantics: async active-low reset
+- name: en
+  direction: INPUT
+  width_expr: 1
+  semantics: count enable
+- name: load
+  direction: INPUT
+  width_expr: 1
+  semantics: load request
+- name: load_value
+  direction: INPUT
+  width_expr: 3
+  semantics: value to load
+- name: saturate
+  direction: INPUT
+  width_expr: 1
+  semantics: hold at max when set
+- name: count
+  direction: OUTPUT
+  width_expr: 3
+  semantics: current count value
+- name: rollover
+  direction: OUTPUT
+  width_expr: 1
+  semantics: pulse on wrap 7->0 when saturate=0
+Handshake semantics:
+- name: none
+  rules: none
+Transaction unit: one counter update per rising clock edge.
+Configuration parameters:
+- name: none
+  default_value: none
+  description: none
 
-L3 Verification
-Test goals
-- Load priority over increment.
-- Wrap when saturate=0.
+L3
+Test goals:
+- Load has priority over increment.
+- Wrap occurs when saturate=0 and count reaches 7.
 - Saturate holds at 7 when saturate=1.
-- Reset clears count.
-Oracle plan
-- Reference model for count and rollover.
-Stimulus strategy
-- Directed tests for load, saturate, and wrap.
-Pass/fail criteria
-- Count matches reference; rollover only on wrap in non-saturate mode.
-Coverage goals
-- branch: 0.85
-- toggle: 0.75
+- Reset clears count and rollover immediately.
+Oracle strategy: Cycle-accurate reference model for count and rollover with load and saturate.
+Stimulus strategy: Directed tests for load, saturate, wrap, and reset sequencing.
+Pass/fail criteria:
+- count matches reference each cycle.
+- rollover only on wrap when saturate=0.
+Coverage targets:
+- coverage_id: branch
+  description: branch coverage of load/saturate control paths
+  metric_type: branch
+  goal: 0.85
+  notes: none
+- coverage_id: toggle
+  description: toggle coverage of count bits and rollover
+  metric_type: toggle
+  goal: 0.75
+  notes: none
+Reset constraints:
+min_cycles_after_reset: 0
+ordering_notes: async reset may assert/deassert at any time.
+Scenarios:
+- scenario_id: load_priority
+  description: load overrides increment when en=1
+  stimulus: en=1 and load=1 with varied load_value
+  oracle: count loads load_value on next edge
+  pass_fail_criteria: count equals clamped load_value
+  illegal: false
+- scenario_id: saturate_wrap
+  description: saturate vs wrap behavior
+  stimulus: run with saturate=1 then saturate=0
+  oracle: hold at 7 with saturate=1, wrap with saturate=0
+  pass_fail_criteria: rollover only when wrapping with saturate=0
+  illegal: false
 
-L4 Architecture
-- Priority mux for load vs increment.
-- Saturate compare against 7.
-- Single clock domain.
+L4
+Block diagram:
+- node_id: counter3_load
+  description: counter with load mux and saturate compare
+  node_type: sequential_counter
+  interface_refs: [counter3_load_if]
+  uses_standard_component: false
+  notes: load mux + saturate compare + register
+Clock domains:
+- name: clk
+  frequency_hz: 100000000
+  notes: single synchronous domain
+Resource strategy: 3-bit register, mux for load vs inc, compare for saturate.
+Latency budget: 1-cycle update, throughput 1 per cycle.
+Assertion plan:
+sva:
+- if load then count_next == load_value (clamped)
+- if saturate and count==7 then count_next==7
+scoreboard_assertions:
+- rollover only when saturate=0 and wrap occurs
 
-L5 Acceptance
-- RTL + TB + lint/sim clean.
-- Coverage goals met.
-- Exclusions: none.
+L5
+Required artifacts:
+- name: rtl
+  description: synthesizable RTL for counter3_load
+  mandatory: true
+- name: testbench
+  description: self-checking testbench
+  mandatory: true
+- name: lint_report
+  description: verilator lint log
+  mandatory: true
+- name: sim_log
+  description: simulation transcript
+  mandatory: true
+- name: coverage_report
+  description: branch/toggle coverage summary
+  mandatory: true
+Acceptance metrics:
+- metric_id: branch
+  description: branch coverage >= 0.85
+  operator: ">="
+  target_value: "0.85"
+  metric_source: coverage_report
+- metric_id: toggle
+  description: toggle coverage >= 0.75
+  operator: ">="
+  target_value: "0.75"
+  metric_source: coverage_report
+Exclusions:
+- none
+Synthesis target: fpga_generic

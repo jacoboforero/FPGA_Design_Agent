@@ -34,7 +34,7 @@ class SpecHelperWorker(AgentWorkerBase):
             return ResultMessage(
                 task_id=task.task_id,
                 correlation_id=task.correlation_id,
-                status=TaskStatus.FAILED,
+                status=TaskStatus.FAILURE,
                 artifacts_path=None,
                 log_output="LLM is required for spec helper (set USE_LLM=1 and provider keys).",
                 reflections=json.dumps({"status": "failed", "reason": "llm_unavailable"}),

@@ -1,10 +1,11 @@
 """
-Testbench agent runtime. Generates SystemVerilog TBs (LLM-backed when enabled,
-fallback stub otherwise).
+Testbench agent runtime. Generates SystemVerilog TBs via LLM.
+Fails hard if the LLM is unavailable or generation fails.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 from typing import List, Tuple
@@ -14,6 +15,7 @@ from core.observability.emitter import emit_runtime_event
 from agents.common.base import AgentWorkerBase
 from agents.common.llm_gateway import init_llm_gateway, Message, MessageRole, GenerationConfig
 from core.observability.agentops_tracker import get_tracker
+from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
 
 
 class TestbenchWorker(AgentWorkerBase):
@@ -26,21 +28,48 @@ class TestbenchWorker(AgentWorkerBase):
 
     def handle_task(self, task: TaskMessage) -> ResultMessage:
         ctx = task.context
+        if "node_id" not in ctx:
+            raise TaskInputError("Missing node_id in task context.")
+        if "rtl_path" not in ctx:
+            raise TaskInputError("Missing rtl_path in task context.")
+        if not isinstance(ctx.get("interface"), dict) or "signals" not in ctx["interface"]:
+            raise TaskInputError("Missing interface signals in task context.")
         node_id = ctx["node_id"]
+        iface_signals = ctx["interface"]["signals"]
+        if not isinstance(iface_signals, list) or not iface_signals:
+            raise TaskInputError("Empty interface signals in task context.")
         tb_path = Path(ctx.get("tb_path", "")) if ctx.get("tb_path") else Path(ctx["rtl_path"]).with_name(f"{node_id}_tb.sv")
         tb_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if self.gateway and Message:
+        if not self.gateway or not Message or not GenerationConfig:
+            return ResultMessage(
+                task_id=task.task_id,
+                correlation_id=task.correlation_id,
+                status=TaskStatus.FAILURE,
+                artifacts_path=None,
+                log_output="LLM gateway unavailable; set USE_LLM=1 and configure provider credentials.",
+            )
+        try:
             tb_source, log_output = asyncio.run(self._llm_generate_tb(ctx, node_id))
-            tb_source = tb_source.replace("logic", "reg")
-            use_raw = os.getenv("TB_USE_LLM_RAW", "0") == "1"
-            if not use_raw:
-                # Prefer deterministic stub for tool compatibility; keep note of LLM call.
-                fallback_src, _ = self._fallback_generate_tb(ctx, node_id)
-                tb_source = fallback_src
-                log_output = f"{log_output} (LLM output discarded for sim compatibility; set TB_USE_LLM_RAW=1 to keep)"
-        else:
-            tb_source, log_output = self._fallback_generate_tb(ctx, node_id)
+        except Exception as exc:  # noqa: BLE001
+            if is_transient_error(exc):
+                raise RetryableError(f"LLM testbench transient error: {exc}")
+            return ResultMessage(
+                task_id=task.task_id,
+                correlation_id=task.correlation_id,
+                status=TaskStatus.FAILURE,
+                artifacts_path=None,
+                log_output=f"LLM testbench generation failed: {exc}",
+            )
+        if not tb_source or not tb_source.strip():
+            return ResultMessage(
+                task_id=task.task_id,
+                correlation_id=task.correlation_id,
+                status=TaskStatus.FAILURE,
+                artifacts_path=None,
+                log_output="LLM returned empty testbench source.",
+            )
+        tb_source = tb_source.replace("logic", "reg")
 
         # Strip unsupported directives that occasionally show up in LLM output.
         tb_source = "\n".join(
@@ -50,7 +79,16 @@ class TestbenchWorker(AgentWorkerBase):
             tb_source = "`timescale 1ns/1ps\n\n" + tb_source
         if "endmodule" not in tb_source:
             tb_source = tb_source.rstrip() + "\nendmodule\n"
-        tb_path.write_text(tb_source)
+        try:
+            tb_path.write_text(tb_source)
+        except Exception as exc:  # noqa: BLE001
+            return ResultMessage(
+                task_id=task.task_id,
+                correlation_id=task.correlation_id,
+                status=TaskStatus.FAILURE,
+                artifacts_path=None,
+                log_output=f"Failed to write testbench to {tb_path}: {exc}",
+            )
         emit_runtime_event(
             runtime=self.runtime_name,
             event_type="task_completed",
@@ -104,15 +142,21 @@ class TestbenchWorker(AgentWorkerBase):
             else:
                 width_decl = ""
             ports.append(f"{dir_kw} {base_type} {width_decl}{name}")
+        verification = ctx.get("verification", {})
+        behavior = ctx.get("demo_behavior", "")
+        clocking = ctx.get("clocking", {})
         system = (
             "You are a Verification Agent. Generate a simple self-checking Verilog-2001 testbench.\n"
             "No code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no logic/always_ff/always_comb/interfaces). "
-            "Use regs for driven signals, wires for DUT outputs. Keep it concise."
+            "Use regs for driven signals, wires for DUT outputs. Keep it concise and target the stated test goals."
         )
         user = (
             f"Unit Under Test: {node_id}\n"
             f"Ports:\n" + "\n".join(f"- {p}" for p in ports) + "\n"
-            "Test basic stimulus to toggle inputs and observe outputs."
+            f"Behavior summary:\n{behavior}\n"
+            f"Clocking:\n{json.dumps(clocking, indent=2)}\n"
+            f"Verification plan:\n{json.dumps(verification, indent=2)}\n"
+            "Create a testbench that exercises the listed goals and checks outputs."
         )
         msgs: List[Message] = [
             Message(role=MessageRole.SYSTEM, content=system),
@@ -138,56 +182,3 @@ class TestbenchWorker(AgentWorkerBase):
         except Exception:
             pass
         return resp.content, f"LLM TB generation via {getattr(resp, 'provider', 'llm')}/{getattr(resp, 'model_name', 'unknown')}"
-
-    def _fallback_generate_tb(self, ctx, node_id: str) -> Tuple[str, str]:
-        iface = ctx["interface"]["signals"]
-        inputs = [s for s in iface if s["direction"].lower() == "input"]
-        outputs = [s for s in iface if s["direction"].lower() == "output"]
-
-        def port_decl(sig):
-            width_expr = self._width_expr(sig)
-            width_int = self._width_int(sig)
-            decl_type = "wire" if sig["direction"].lower() == "output" else "reg"
-            if width_int and width_int > 1:
-                return f"{decl_type} [{width_int-1}:0] {sig['name']}"
-            if width_expr not in ("1", ""):
-                return f"{decl_type} [({width_expr})-1:0] {sig['name']}"
-            return f"{decl_type} {sig['name']}"
-
-        port_lines = "\n  ".join(port_decl(s) + ";" for s in iface)
-
-        init_block = "\n    ".join(f"{inp['name']} = '0;" for inp in inputs) if inputs else "// no inputs to drive"
-        observe = "\n    ".join(f'$display("Observed {out["name"]}=%h", {out["name"]});' for out in outputs) if outputs else "// no outputs to observe"
-
-        drive_block = "// no stimulus"
-        if inputs and all((self._width_int(inp) or 0) == 1 for inp in inputs) and len(inputs) <= 4:
-            drive_block = "repeat (16) begin\n      {"
-            drive_block += ", ".join(inp["name"] for inp in inputs)
-            drive_block += "} = $random;\n      #5;\n    end"
-        elif inputs:
-            first = inputs[0]
-            width_expr = self._width_expr(first)
-            val = "1'b1" if width_expr in ("1", "") else f"{width_expr}'hA"
-            drive_block = f"{first['name']} = {val};"
-        tb = f"""`timescale 1ns/1ps
-
-module {node_id}_tb;
-  {port_lines}
-
-  {node_id} dut (
-    {", ".join(f".{s['name']}({s['name']})" for s in iface)}
-  );
-
-  initial begin
-    $display("Running stub TB for {node_id}");
-    {init_block}
-    #5;
-    {drive_block}
-    #5;
-    {observe}
-    #5;
-    $finish;
-  end
-endmodule
-"""
-        return tb, "Fallback TB generation (reg/wire smoke test)."

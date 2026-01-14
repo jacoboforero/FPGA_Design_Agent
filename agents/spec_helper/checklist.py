@@ -1,5 +1,6 @@
 """
 L1-L5 checklist schema and helpers for the spec helper workflow.
+Matches core/schemas/specifications.py fields.
 """
 from __future__ import annotations
 
@@ -13,99 +14,147 @@ CHECKLIST_SCHEMA: Dict[str, Any] = {
         "description": "Short module name (snake_case).",
     },
     "L1": {
-        "functional_intent": {
+        "role_summary": {
             "type": "text",
-            "description": "Plain-language behavior and purpose.",
+            "description": "One paragraph summary of the hardware block's responsibility.",
         },
-        "reset_rules": {
-            "type": "text",
-            "description": "Reset behavior and safe state after reset.",
-        },
-        "edge_cases": {
+        "key_rules": {
             "type": "list",
-            "description": "Key edge/illegal cases that must be handled.",
+            "description": "Ordering, losslessness, flag, or error rules.",
+        },
+        "performance_intent": {
+            "type": "text",
+            "description": "Qualitative throughput/latency expectations.",
+        },
+        "reset_semantics": {
+            "type": "text",
+            "description": "Definition of what safe after reset means.",
+        },
+        "corner_cases": {
+            "type": "list",
+            "description": "Corner or illegal scenarios that must be handled.",
+        },
+        "open_questions": {
+            "type": "list",
+            "description": "Outstanding questions before freezing.",
+            "optional": True,
         },
     },
     "L2": {
-        "clock": {
-            "type": "text",
-            "description": "Clock signal name or 'none' if combinational.",
-        },
-        "reset": {
-            "type": "text",
-            "description": "Reset signal name or 'none' if no reset.",
+        "clocking": {
+            "type": "list_of_objects",
+            "item_keys": ["clock_name"],
+            "description": "Clock/reset domains and polarity details.",
         },
         "signals": {
             "type": "list_of_objects",
-            "item_keys": ["name", "direction", "width"],
-            "description": "I/O table entries: name, direction (INPUT/OUTPUT/INOUT), width, notes (optional).",
+            "item_keys": ["name", "direction", "width_expr"],
+            "description": "I/O table entries (direction INPUT/OUTPUT/INOUT, width expression).",
         },
         "handshake_semantics": {
-            "type": "text",
-            "description": "Protocol/backpressure/ready-valid semantics.",
-        },
-        "params_defaults": {
             "type": "list_of_objects",
-            "item_keys": ["name", "default", "description"],
+            "item_keys": ["name", "rules"],
+            "description": "Protocol/backpressure semantics.",
+            "optional": True,
+        },
+        "transaction_unit": {
+            "type": "text",
+            "description": "Beat/packet/word and ordering guarantees.",
+        },
+        "configuration_parameters": {
+            "type": "list_of_objects",
+            "item_keys": ["name"],
             "description": "Config params with defaults and notes.",
+            "optional": True,
         },
     },
     "L3": {
         "test_goals": {
             "type": "list",
-            "description": "Test goals (happy/boundary/illegal).",
+            "description": "Happy-path, boundary, and illegal goals.",
         },
-        "oracle_plan": {
+        "oracle_strategy": {
             "type": "text",
-            "description": "Scoreboard/reference model plan.",
+            "description": "Scoreboard or reference model plan.",
         },
         "stimulus_strategy": {
             "type": "text",
-            "description": "Directed/random stimulus strategy.",
+            "description": "Directed scenarios plus randomization ranges.",
         },
         "pass_fail_criteria": {
-            "type": "text",
-            "description": "Global pass/fail criteria.",
+            "type": "list",
+            "description": "Global pass/fail rules.",
         },
-        "coverage_goals": {
-            "type": "map",
-            "description": "Coverage targets (e.g., {'branch': 0.8, 'toggle': 0.7} or named goals).",
+        "coverage_targets": {
+            "type": "list_of_objects",
+            "item_keys": ["coverage_id", "description", "metric_type"],
+            "description": "Coverage targets and thresholds.",
+            "optional": True,
+        },
+        "reset_constraints": {
+            "type": "object",
+            "item_keys": ["min_cycles_after_reset"],
+            "description": "Reset sequencing constraints.",
+        },
+        "scenarios": {
+            "type": "list_of_objects",
+            "item_keys": ["scenario_id", "description", "stimulus", "oracle", "pass_fail_criteria"],
+            "description": "Detailed verification scenarios.",
+            "optional": True,
         },
     },
     "L4": {
-        "architecture": {
-            "type": "text",
-            "description": "Block/FSM sketch or microarchitecture summary.",
+        "block_diagram": {
+            "type": "list_of_objects",
+            "item_keys": ["node_id", "description", "node_type"],
+            "description": "Block diagram nodes for the design.",
         },
-        "clocking_cdc": {
-            "type": "text",
-            "description": "Clocking/CDC notes and assumptions.",
+        "dependencies": {
+            "type": "list_of_objects",
+            "item_keys": ["parent_id", "child_id", "dependency_type"],
+            "description": "Dependency edges between blocks.",
+            "optional": True,
         },
-        "resource_choices": {
-            "type": "text",
-            "description": "Resource choices (buffers, RAMs, FIFOs).",
+        "clock_domains": {
+            "type": "list_of_objects",
+            "item_keys": ["name"],
+            "description": "Clock domains and rates.",
+            "optional": True,
         },
-        "latency_throughput": {
+        "resource_strategy": {
             "type": "text",
-            "description": "Latency/throughput goals.",
+            "description": "Resource allocations (FIFO/RAM sizes, etc.).",
+        },
+        "latency_budget": {
+            "type": "text",
+            "description": "Latency/throughput plan tied back to L3.",
+        },
+        "assertion_plan": {
+            "type": "object",
+            "item_keys": ["sva", "scoreboard_assertions"],
+            "description": "Assertions and scoreboard checks.",
         },
     },
     "L5": {
-        "acceptance": {
-            "type": "text",
-            "description": "Definition of done.",
-        },
         "required_artifacts": {
-            "type": "list",
-            "description": "Required artifacts (RTL, TB, reports).",
+            "type": "list_of_objects",
+            "item_keys": ["name", "description"],
+            "description": "Artifacts required for sign-off.",
         },
-        "coverage_thresholds": {
-            "type": "map",
-            "description": "Coverage thresholds for sign-off.",
+        "acceptance_metrics": {
+            "type": "list_of_objects",
+            "item_keys": ["metric_id", "description", "operator", "target_value"],
+            "description": "Acceptance criteria for sign-off.",
         },
-        "exclusions_assumptions": {
+        "exclusions": {
             "type": "list",
-            "description": "Explicit exclusions and assumptions.",
+            "description": "Explicit limitations or exclusions.",
+            "optional": True,
+        },
+        "synthesis_target": {
+            "type": "text",
+            "description": "Target technology/tool (FPGA, ASIC, etc.).",
+            "optional": True,
         },
     },
 }
@@ -117,12 +166,13 @@ class FieldInfo:
     field_type: str
     description: str
     item_keys: List[str] | None = None
+    optional: bool = False
 
 
 def _empty_value(field_type: str) -> Any:
     if field_type in ("list", "list_of_objects"):
         return []
-    if field_type == "map":
+    if field_type in ("map", "object"):
         return {}
     return ""
 
@@ -157,6 +207,7 @@ def list_field_info() -> List[FieldInfo]:
                 field_type=field["type"],
                 description=field.get("description", ""),
                 item_keys=field.get("item_keys"),
+                optional=field.get("optional", False),
             )
         )
     return fields
@@ -190,7 +241,7 @@ def _normalize_value(field: Dict[str, Any], value: Any) -> Any:
             return [str(item).strip() for item in value if str(item).strip()]
         text = str(value).strip()
         return [text] if text else []
-    if field_type == "map":
+    if field_type in ("map", "object"):
         if isinstance(value, dict):
             return {k: v for k, v in value.items() if k}
         text = str(value).strip() if value is not None else ""
@@ -216,14 +267,50 @@ def merge_checklists(current: Dict[str, Any], update: Dict[str, Any]) -> Dict[st
     return merged
 
 
+def _is_none_token(value: str) -> bool:
+    return value.strip().lower() in ("none", "n/a", "na", "not applicable")
+
+
+def _list_has_only_none(values: List[Any]) -> bool:
+    if not values:
+        return True
+    for item in values:
+        text = str(item).strip()
+        if text and not _is_none_token(text):
+            return False
+    return True
+
+
 def is_missing(value: Any, field: Dict[str, Any]) -> bool:
     field_type = field["type"]
     if field_type == "text":
-        return not str(value or "").strip()
+        text = str(value or "").strip()
+        return not text or _is_none_token(text)
     if field_type == "list":
-        return not isinstance(value, list) or len(value) == 0
+        if not isinstance(value, list) or len(value) == 0:
+            return True
+        return _list_has_only_none(value)
     if field_type == "map":
-        return not isinstance(value, dict) or len(value) == 0
+        if not isinstance(value, dict) or len(value) == 0:
+            return True
+        return all(isinstance(v, str) and _is_none_token(v) for v in value.values())
+    if field_type == "object":
+        if not isinstance(value, dict) or len(value) == 0:
+            return True
+        required = field.get("item_keys") or []
+        for key in required:
+            val = value.get(key)
+            if val is None:
+                return True
+            if isinstance(val, str) and not val.strip():
+                return True
+            if isinstance(val, str) and _is_none_token(val):
+                return True
+            if isinstance(val, list):
+                if _list_has_only_none(val):
+                    return True
+                continue
+        return False
     if field_type == "list_of_objects":
         if not isinstance(value, list) or len(value) == 0:
             return True
@@ -231,7 +318,22 @@ def is_missing(value: Any, field: Dict[str, Any]) -> bool:
         for item in value:
             if not isinstance(item, dict):
                 continue
-            if all(str(item.get(k, "")).strip() for k in required):
+            ok = True
+            for key in required:
+                val = item.get(key)
+                if val is None:
+                    ok = False
+                    break
+                if isinstance(val, list):
+                    if _list_has_only_none(val):
+                        ok = False
+                        break
+                    continue
+                text = str(val).strip()
+                if not text or _is_none_token(text):
+                    ok = False
+                    break
+            if ok:
                 return False
         return True
     return value is None
@@ -241,13 +343,14 @@ def list_missing_fields(checklist: Dict[str, Any]) -> List[FieldInfo]:
     missing: List[FieldInfo] = []
     for path, field in _iter_fields(CHECKLIST_SCHEMA):
         value = get_field(checklist, path)
-        if is_missing(value, field):
+        if is_missing(value, field) and not field.get("optional", False):
             missing.append(
                 FieldInfo(
                     path=path,
                     field_type=field["type"],
                     description=field.get("description", ""),
                     item_keys=field.get("item_keys"),
+                    optional=field.get("optional", False),
                 )
             )
     return missing

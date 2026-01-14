@@ -5,7 +5,7 @@ Entrypoint: `apps/cli/cli.py`. Run with `PYTHONPATH=.` from repo root.
 ## Prereqs
 - RabbitMQ running: `cd infrastructure && docker-compose up -d`
 - Python deps: `poetry install`
-- Optional tools: `verilator`, `iverilog`, `vvp` on PATH (or set `VERILATOR_PATH`, `IVERILOG_PATH`, `VVP_PATH`)
+- Required tools: `verilator`, `iverilog`, `vvp` on PATH (or set `VERILATOR_PATH`, `IVERILOG_PATH`, `VVP_PATH`)
 - LLM required: set `USE_LLM=1` and provider keys (`OPENAI_API_KEY`/`GROQ_API_KEY`)
 
 ## Command

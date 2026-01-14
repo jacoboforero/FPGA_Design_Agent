@@ -17,7 +17,7 @@ Cover contracts first, then the orchestration flow. Keep fast tests default; gat
 - Distill: sample sim log/waveform → distilled JSON path.
 
 ## Agents
-- LLM off: fallbacks write minimal artifacts/logs and match interfaces.
+- LLM off: tasks should fail with explicit errors (no fallback artifacts).
 - LLM on (optional job): small prompts per agent; non-empty outputs and interface adherence.
 
 ## DLQ / retry
@@ -26,5 +26,5 @@ Cover contracts first, then the orchestration flow. Keep fast tests default; gat
 - Interface mismatch → DLQ and no further tasks for that node.
 
 ## CI knobs
-- Default CI: schema + integration with mocked tools/LLMs.
+- Default CI: schema + lightweight integration checks.
 - Optional jobs: real Verilator/sim and LLM provider tests when secrets/tooling are available.

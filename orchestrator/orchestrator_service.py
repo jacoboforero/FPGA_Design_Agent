@@ -33,7 +33,7 @@ class DemoOrchestrator:
     """
     Drives a richer state machine:
         PENDING -> IMPLEMENTING -> LINTING -> TESTBENCHING -> SIMULATING -> DISTILLING -> REFLECTING -> DONE
-    Adds coverage gating (mocked) and persists logs/artifact paths to Task Memory. Testbench stage builds TB before simulation.
+    Persists logs/artifact paths to Task Memory. Testbench stage builds TB before simulation.
     """
 
     def __init__(
@@ -52,6 +52,9 @@ class DemoOrchestrator:
         self.context_builder = DemoContextBuilder(design_context_path, rtl_root)
         self.dag = json.loads(dag_path.read_text())
         self.nodes: Dict[str, Node] = {n["id"]: Node(n["id"]) for n in self.dag["nodes"]}
+        self.deps_map: Dict[str, set[str]] = {
+            n["id"]: set(n.get("deps", []) or []) for n in self.dag["nodes"]
+        }
         self.task_memory = TaskMemory(task_memory_root)
         self.state_callback = state_callback
 
@@ -86,14 +89,35 @@ class DemoOrchestrator:
             ch.queue_bind(queue="results", exchange=TASK_EXCHANGE, routing_key=RESULTS_ROUTING_KEY)
 
             node_ids = list(self.nodes.keys())
-            tasks: Dict[str, Dict[str, TaskMessage]] = {}
-            for node_id in node_ids:
+            tasks: Dict[str, Dict[str, TaskMessage | None]] = {}
+            pending_nodes = set(node_ids)
+            active_nodes = set()
+            done_nodes = set()
+
+            def start_node(node_id: str) -> None:
                 self._advance(node_id, NodeState.IMPLEMENTING)
                 impl_task = self._publish_task(ch, EntityType.REASONING, AgentType.IMPLEMENTATION, node_id)
                 tasks[node_id] = {"impl": impl_task, "lint": None, "tb": None, "sim": None, "distill": None, "reflect": None}
+                pending_nodes.discard(node_id)
+                active_nodes.add(node_id)
+
+            def start_ready_nodes() -> None:
+                ready = [n for n in pending_nodes if self.deps_map.get(n, set()) <= done_nodes]
+                for node_id in ready:
+                    start_node(node_id)
+
+            def fail_dependents(failed_node: str) -> None:
+                blocked = [n for n in list(pending_nodes) if failed_node in self.deps_map.get(n, set())]
+                for node_id in blocked:
+                    self._advance(node_id, NodeState.FAILED)
+                    pending_nodes.discard(node_id)
+                    done_nodes.add(node_id)
+
+            start_ready_nodes()
+            if not active_nodes and pending_nodes:
+                raise RuntimeError("No DAG roots available to start. Check dependency graph for cycles or missing nodes.")
 
             start = time.time()
-            done_nodes = set()
 
             while time.time() - start < timeout_s and len(done_nodes) < len(node_ids):
                 method, props, body = ch.basic_get(queue="results", auto_ack=True)
@@ -121,7 +145,10 @@ class DemoOrchestrator:
                 print(f"Result for {target_node} stage {stage}: {result.status.value}")
                 if result.status is not TaskStatus.SUCCESS:
                     self._advance(target_node, NodeState.FAILED)
+                    active_nodes.discard(target_node)
                     done_nodes.add(target_node)
+                    fail_dependents(target_node)
+                    start_ready_nodes()
                     continue
 
                 if stage == "impl":
@@ -147,7 +174,9 @@ class DemoOrchestrator:
                     tasks[target_node]["reflect"] = reflect
                 elif stage == "reflect":
                     self._advance(target_node, NodeState.DONE)
+                    active_nodes.discard(target_node)
                     done_nodes.add(target_node)
+                    start_ready_nodes()
 
             if len(done_nodes) < len(node_ids):
                 print("Demo timed out before all nodes completed.")

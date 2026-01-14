@@ -24,3 +24,9 @@ Freeze what will be built before any HDL is generated. L1–L5 lives under `arti
 Contracts:
 - Paths in the design context are targets; orchestrator reads them, agents/workers write to them.
 - Interface in L2 must match what the planner emits; changes require re-planning.
+
+## Multi-module DAGs
+To generate multi-node DAGs, include `block_diagram` nodes and `dependencies` in `L4_architecture.json`.
+For each module referenced in the block diagram, provide per-module specs named:
+`L1_functional_<module>.json`, `L2_interface_<module>.json`, `L3_verification_<module>.json`, `L5_acceptance_<module>.json`.
+The planner fails if any referenced module spec is missing.

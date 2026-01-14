@@ -1,16 +1,16 @@
 """
-Fuller demo runner:
-- Generates design context + DAG via planner_stub
+Full demo runner:
+- Uses locked specs to generate design context + DAG
 - Launches agent runtimes (implementation/testbench/reflection/debug/spec helper) and deterministic workers (lint/sim/distill)
 - Runs orchestrator to drive Implementation -> Lint -> Testbench -> Simulation -> Distill -> Reflection
-Requires RabbitMQ running (docker-compose up -d in infrastructure).
-EDA steps are mocked so demo runs without tools.
+Requires RabbitMQ running (docker-compose up -d in infrastructure) and toolchains installed.
 """
 from __future__ import annotations
 
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pika
@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from agents.implementation.worker import ImplementationWorker
+from agents.planner.worker import PlannerWorker
 from agents.testbench.worker import TestbenchWorker
 from agents.reflection.worker import ReflectionWorker
 from agents.debug.worker import DebugWorker
@@ -28,11 +29,46 @@ from workers.lint.worker import LintWorker
 from workers.sim.worker import SimulationWorker
 from workers.distill.worker import DistillWorker
 from orchestrator.orchestrator_service import DemoOrchestrator
-from orchestrator import planner_stub
+from core.schemas.contracts import AgentType, EntityType, ResultMessage, TaskMessage, TaskStatus
+
+TASK_EXCHANGE = "tasks_exchange"
+RESULTS_ROUTING_KEY = "RESULTS"
+
+
+def _run_planner_task(params, timeout: float = 30.0) -> None:
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.PLANNER,
+        context={
+            "spec_dir": str(REPO_ROOT / "artifacts" / "task_memory" / "specs"),
+            "out_dir": str(REPO_ROOT / "artifacts" / "generated"),
+        },
+    )
+    with pika.BlockingConnection(params) as conn:
+        ch = conn.channel()
+        ch.queue_declare(queue="results", durable=True)
+        ch.queue_bind(queue="results", exchange=TASK_EXCHANGE, routing_key=RESULTS_ROUTING_KEY)
+        ch.basic_publish(
+            exchange=TASK_EXCHANGE,
+            routing_key=task.entity_type.value,
+            body=task.model_dump_json().encode(),
+            properties=pika.BasicProperties(content_type="application/json"),
+        )
+        start = time.time()
+        while time.time() - start < timeout:
+            method, props, body = ch.basic_get(queue="results", auto_ack=True)
+            if body is None:
+                continue
+            result = ResultMessage.model_validate_json(body)
+            if result.task_id != task.task_id:
+                continue
+            if result.status is not TaskStatus.SUCCESS:
+                raise RuntimeError(result.log_output)
+            return
+    raise RuntimeError("Planner timed out waiting for results.")
 
 
 def main() -> None:
-    planner_stub.generate()
 
     rabbit_url = os.getenv("RABBITMQ_URL", "amqp://user:password@localhost:5672/")
     try:
@@ -50,6 +86,7 @@ def main() -> None:
 
     stop_event = threading.Event()
     workers = [
+        PlannerWorker(params, stop_event),
         ImplementationWorker(params, stop_event),
         TestbenchWorker(params, stop_event),
         ReflectionWorker(params, stop_event),
@@ -63,6 +100,7 @@ def main() -> None:
         w.start()
 
     try:
+        _run_planner_task(params, timeout=30.0)
         DemoOrchestrator(params, design_context, dag_path, rtl_root, task_memory_root).run()
     finally:
         stop_event.set()

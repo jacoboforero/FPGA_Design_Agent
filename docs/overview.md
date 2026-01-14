@@ -8,7 +8,7 @@ This project turns a frozen hardware spec into RTL, testbenches, lint/sim runs, 
 - **Decide** — Coverage/results are reviewed; on failures the loop can repeat (distill → reflect → debug → sim).
 
 ## What’s in scope now
-- Local runs via CLI (stubbed path works without tools/LLM; LLM/tools optional).
+- Local runs via CLI (LLM + toolchain required for end-to-end execution).
 - Agents for implementation/testbench/reflection/debug/spec-helper; workers for lint/sim/distill.
 - RabbitMQ queues with task memory persisted to disk.
 

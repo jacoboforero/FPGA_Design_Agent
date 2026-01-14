@@ -20,6 +20,7 @@ from agents.testbench.worker import TestbenchWorker
 from agents.reflection.worker import ReflectionWorker
 from agents.debug.worker import DebugWorker
 from agents.spec_helper.worker import SpecHelperWorker
+from agents.planner.worker import PlannerWorker
 
 # Workers
 from workers.lint.worker import LintWorker
@@ -28,12 +29,15 @@ from workers.distill.worker import DistillWorker
 
 # Orchestrator
 from orchestrator.orchestrator_service import DemoOrchestrator
-from orchestrator import planner
 from apps.cli import spec_flow
 
 # Schema models
 from core.observability.setup import configure_observability
 from core.observability.agentops_tracker import get_tracker
+from core.schemas.contracts import AgentType, EntityType, ResultMessage, TaskMessage, TaskStatus
+
+TASK_EXCHANGE = "tasks_exchange"
+RESULTS_ROUTING_KEY = "RESULTS"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -64,6 +68,39 @@ def stop_workers(workers: Iterable[threading.Thread], stop_event: threading.Even
     for w in workers:
         w.join(timeout=1.0)
 
+
+def _run_planner_task(params: pika.ConnectionParameters, timeout: float = 30.0) -> None:
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.PLANNER,
+        context={
+            "spec_dir": str(REPO_ROOT / "artifacts" / "task_memory" / "specs"),
+            "out_dir": str(REPO_ROOT / "artifacts" / "generated"),
+        },
+    )
+    with pika.BlockingConnection(params) as conn:
+        ch = conn.channel()
+        ch.queue_declare(queue="results", durable=True)
+        ch.queue_bind(queue="results", exchange=TASK_EXCHANGE, routing_key=RESULTS_ROUTING_KEY)
+        ch.basic_publish(
+            exchange=TASK_EXCHANGE,
+            routing_key=task.entity_type.value,
+            body=task.model_dump_json().encode(),
+            properties=pika.BasicProperties(content_type="application/json"),
+        )
+        start = datetime.now(timezone.utc)
+        while (datetime.now(timezone.utc) - start).total_seconds() < timeout:
+            method, props, body = ch.basic_get(queue="results", auto_ack=True)
+            if body is None:
+                continue
+            result = ResultMessage.model_validate_json(body)
+            if result.task_id != task.task_id:
+                continue
+            if result.status is not TaskStatus.SUCCESS:
+                raise RuntimeError(f"Planning failed: {result.log_output}")
+            return
+    raise RuntimeError("Planner timed out waiting for results.")
+
 def _confirm(prompt: str, default: bool = True) -> bool:
     suffix = " [Y/n]" if default else " [y/N]"
     val = input(f"{prompt}{suffix} ").strip().lower()
@@ -78,6 +115,11 @@ def _default_run_name(prefix: str) -> str:
     return f"{prefix}_{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
 
+def _print_section(title: str) -> None:
+    bar = "=" * len(title)
+    print(f"\n{title}\n{bar}")
+
+
 def run_full(args: argparse.Namespace) -> None:
     run_name = args.run_name or _default_run_name("cli_full")
     configure_observability(run_name=run_name, default_tags=["cli", "full"])
@@ -85,7 +127,16 @@ def run_full(args: argparse.Namespace) -> None:
     spec_flow.collect_specs()
 
     # 2) Plan
-    planner.generate_from_specs()
+    _print_section("Planning")
+    params = connection_params_from_env()
+    planner_stop = threading.Event()
+    planner_worker = PlannerWorker(params, planner_stop)
+    planner_worker.start()
+    try:
+        _run_planner_task(params, timeout=args.timeout)
+    finally:
+        planner_stop.set()
+        planner_worker.join(timeout=1.0)
     design_context = REPO_ROOT / "artifacts" / "generated" / "design_context.json"
     dag_path = REPO_ROOT / "artifacts" / "generated" / "dag.json"
     dag = json.loads(dag_path.read_text())
@@ -97,7 +148,7 @@ def run_full(args: argparse.Namespace) -> None:
         return
 
     # 3) Execute
-    params = connection_params_from_env()
+    _print_section("Execution")
     stop_event = threading.Event()
     workers = start_workers(params, stop_event)
     try:
@@ -131,12 +182,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
+    if argv and argv[0] in ("run", "full"):
+        argv = argv[1:]
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
         run_full(args)
     except KeyboardInterrupt:
         print("\nAborted.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"\nError: {exc}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

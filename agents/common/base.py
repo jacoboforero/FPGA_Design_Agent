@@ -9,8 +9,9 @@ import threading
 from typing import Iterable, Set
 
 import pika
-from core.schemas.contracts import AgentType, ResultMessage, TaskMessage
+from core.schemas.contracts import AgentType, ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
+from core.runtime.retry import RetryableError, TaskInputError, get_retry_count, next_retry_headers, MAX_RETRIES
 
 TASK_EXCHANGE = "tasks_exchange"
 RESULTS_ROUTING_KEY = "RESULTS"
@@ -53,7 +54,11 @@ class AgentWorkerBase(threading.Thread):
                     break
                 if body is None:
                     continue
-                task = TaskMessage.model_validate_json(body)
+                try:
+                    task = TaskMessage.model_validate_json(body)
+                except Exception:
+                    ch.basic_nack(method.delivery_tag, requeue=False)
+                    continue
                 if not self.should_handle(task):
                     ch.basic_nack(method.delivery_tag, requeue=True)
                     continue
@@ -62,6 +67,31 @@ class AgentWorkerBase(threading.Thread):
                     event_type="task_received",
                     payload={"task_id": str(task.task_id), "agent": task.task_type.value},
                 )
-                result = self.handle_task(task)
+                try:
+                    result = self.handle_task(task)
+                except TaskInputError:
+                    ch.basic_nack(method.delivery_tag, requeue=False)
+                    continue
+                except RetryableError as exc:
+                    retry_count = get_retry_count(props)
+                    if retry_count < MAX_RETRIES:
+                        headers = next_retry_headers(props)
+                        ch.basic_publish(
+                            exchange=TASK_EXCHANGE,
+                            routing_key=task.entity_type.value,
+                            body=body,
+                            properties=pika.BasicProperties(content_type="application/json", headers=headers),
+                        )
+                        ch.basic_ack(method.delivery_tag)
+                    else:
+                        ch.basic_nack(method.delivery_tag, requeue=False)
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    result = ResultMessage(
+                        task_id=task.task_id,
+                        correlation_id=task.correlation_id,
+                        status=TaskStatus.FAILURE,
+                        log_output=f"Unhandled agent error: {exc}",
+                    )
                 self._publish_result(ch, result)
                 ch.basic_ack(method.delivery_tag)
