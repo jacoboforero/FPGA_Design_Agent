@@ -10,9 +10,9 @@ Short map of the moving pieces. For the story, start with [overview.md](./overvi
 - **Storage** — `artifacts/generated/` (design context + RTL/TB) and `artifacts/task_memory/` (logs, artifact paths, insights).
 
 ## Execution path (per node)
-`PENDING → IMPLEMENTING → LINTING → TESTBENCHING → SIMULATING → DISTILLING → REFLECTING → DONE` (or `FAILED`).
+`PENDING → IMPLEMENTING → LINTING → TESTBENCHING → SIMULATING → DONE` (on pass), or `SIMULATING → DISTILLING → REFLECTING → DEBUGGING → FAILED` on sim failure.
 
-The orchestrator enqueues the next task only when the prior stage returns `SUCCESS`. Debug can be injected after sim failures if desired.
+The orchestrator enqueues the next task only when the prior stage returns `SUCCESS`. Distill/reflect/debug run only after sim failures.
 
 ## Queue routing (defaults)
 - `REASONING` → `agent_tasks`

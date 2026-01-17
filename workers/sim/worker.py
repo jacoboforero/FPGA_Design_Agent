@@ -118,7 +118,13 @@ class SimulationWorker(threading.Thread):
                 log_output=run.stdout or "Simulation passed.",
             )
         except subprocess.TimeoutExpired as exc:
-            raise RetryableError(f"Simulation timeout: {exc}") from exc
+            return ResultMessage(
+                task_id=task.task_id,
+                correlation_id=task.correlation_id,
+                status=TaskStatus.FAILURE,
+                artifacts_path=None,
+                log_output=f"Simulation timeout: {exc}",
+            )
         except Exception as exc:  # noqa: BLE001
             return ResultMessage(
                 task_id=task.task_id,

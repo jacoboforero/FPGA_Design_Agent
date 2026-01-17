@@ -4,8 +4,8 @@ This project turns a frozen hardware spec into RTL, testbenches, lint/sim runs, 
 
 ## How it flows
 - **Plan** — Human + spec helper collect L1–L5, lock them, and the planner emits `design_context.json` + `dag.json`.
-- **Execute** — The orchestrator walks the DAG: Implementation → Lint → Testbench → Simulation → Distill → Reflect (Debug can be injected if needed). Each stage writes logs/artifact paths to task memory.
-- **Decide** — Coverage/results are reviewed; on failures the loop can repeat (distill → reflect → debug → sim).
+- **Execute** — The orchestrator walks the DAG: Implementation → Lint → Testbench → Simulation. On pass, the node is DONE. On sim failure, it runs Distill → Reflect → Debug and marks FAILED. Each stage writes logs/artifact paths to task memory.
+- **Decide** — Coverage/results are reviewed; on failures you can use distill/reflect/debug outputs to iterate and re-run sim.
 
 ## What’s in scope now
 - Local runs via CLI (LLM + toolchain required for end-to-end execution).

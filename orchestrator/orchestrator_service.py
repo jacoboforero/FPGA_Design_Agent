@@ -1,7 +1,8 @@
 """
 Minimal orchestrator for the demo. Loads DAG and Design Context, publishes
 tasks to RabbitMQ queues, consumes results, and advances a simple state machine:
-Implementation -> Lint -> Simulation -> Done
+Implementation -> Lint -> Testbench -> Simulation -> Done (on pass).
+On simulation failure, it runs Distill -> Reflect -> Debug and marks FAILED.
 """
 from __future__ import annotations
 
@@ -32,7 +33,8 @@ RESULTS_ROUTING_KEY = "RESULTS"
 class DemoOrchestrator:
     """
     Drives a richer state machine:
-        PENDING -> IMPLEMENTING -> LINTING -> TESTBENCHING -> SIMULATING -> DISTILLING -> REFLECTING -> DONE
+        PENDING -> IMPLEMENTING -> LINTING -> TESTBENCHING -> SIMULATING -> DONE (on pass)
+        SIMULATING (fail) -> DISTILLING -> REFLECTING -> DEBUGGING -> FAILED
     Persists logs/artifact paths to Task Memory. Testbench stage builds TB before simulation.
     """
 
@@ -93,11 +95,35 @@ class DemoOrchestrator:
             pending_nodes = set(node_ids)
             active_nodes = set()
             done_nodes = set()
+            sim_failed_nodes = set()
+
+            def _dump_model(payload: Any) -> Any:
+                if payload is None:
+                    return None
+                if hasattr(payload, "model_dump"):
+                    return payload.model_dump()
+                if hasattr(payload, "dict"):
+                    return payload.dict()
+                return payload
+
+            def _maybe_json(text: str) -> Any:
+                try:
+                    return json.loads(text)
+                except Exception:
+                    return text
 
             def start_node(node_id: str) -> None:
                 self._advance(node_id, NodeState.IMPLEMENTING)
                 impl_task = self._publish_task(ch, EntityType.REASONING, AgentType.IMPLEMENTATION, node_id)
-                tasks[node_id] = {"impl": impl_task, "lint": None, "tb": None, "sim": None, "distill": None, "reflect": None}
+                tasks[node_id] = {
+                    "impl": impl_task,
+                    "lint": None,
+                    "tb": None,
+                    "sim": None,
+                    "distill": None,
+                    "reflect": None,
+                    "debug": None,
+                }
                 pending_nodes.discard(node_id)
                 active_nodes.add(node_id)
 
@@ -141,9 +167,24 @@ class DemoOrchestrator:
                 self.task_memory.record_log(target_node, stage, result.log_output)
                 if result.artifacts_path:
                     self.task_memory.record_artifact_path(target_node, stage, result.artifacts_path)
+                if result.reflection_insights:
+                    self.task_memory.record_json(
+                        target_node,
+                        stage,
+                        "reflection_insights.json",
+                        _dump_model(result.reflection_insights),
+                    )
+                if result.reflections:
+                    self.task_memory.record_json(target_node, stage, "reflections.json", _maybe_json(result.reflections))
 
                 print(f"Result for {target_node} stage {stage}: {result.status.value}")
                 if result.status is not TaskStatus.SUCCESS:
+                    if stage == "sim":
+                        sim_failed_nodes.add(target_node)
+                        self._advance(target_node, NodeState.DISTILLING)
+                        distill = self._publish_task(ch, EntityType.LIGHT_DETERMINISTIC, WorkerType.DISTILLATION, target_node)
+                        tasks[target_node]["distill"] = distill
+                        continue
                     self._advance(target_node, NodeState.FAILED)
                     active_nodes.discard(target_node)
                     done_nodes.add(target_node)
@@ -164,18 +205,29 @@ class DemoOrchestrator:
                     sim_task = self._publish_task(ch, EntityType.HEAVY_DETERMINISTIC, WorkerType.SIMULATOR, target_node)
                     tasks[target_node]["sim"] = sim_task
                 elif stage == "sim":
-                    # Coverage gating could be added here when metrics are available.
-                    self._advance(target_node, NodeState.DISTILLING)
-                    distill = self._publish_task(ch, EntityType.LIGHT_DETERMINISTIC, WorkerType.DISTILLATION, target_node)
-                    tasks[target_node]["distill"] = distill
+                    self._advance(target_node, NodeState.DONE)
+                    active_nodes.discard(target_node)
+                    done_nodes.add(target_node)
+                    start_ready_nodes()
                 elif stage == "distill":
                     self._advance(target_node, NodeState.REFLECTING)
                     reflect = self._publish_task(ch, EntityType.REASONING, AgentType.REFLECTION, target_node)
                     tasks[target_node]["reflect"] = reflect
                 elif stage == "reflect":
-                    self._advance(target_node, NodeState.DONE)
+                    if target_node in sim_failed_nodes:
+                        self._advance(target_node, NodeState.DEBUGGING)
+                        debug = self._publish_task(ch, EntityType.REASONING, AgentType.DEBUG, target_node)
+                        tasks[target_node]["debug"] = debug
+                    else:
+                        self._advance(target_node, NodeState.DONE)
+                        active_nodes.discard(target_node)
+                        done_nodes.add(target_node)
+                        start_ready_nodes()
+                elif stage == "debug":
+                    self._advance(target_node, NodeState.FAILED)
                     active_nodes.discard(target_node)
                     done_nodes.add(target_node)
+                    fail_dependents(target_node)
                     start_ready_nodes()
 
             if len(done_nodes) < len(node_ids):

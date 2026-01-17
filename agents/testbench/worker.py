@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 from typing import List, Tuple
 
@@ -75,6 +76,7 @@ class TestbenchWorker(AgentWorkerBase):
         tb_source = "\n".join(
             line for line in tb_source.splitlines() if not line.strip().startswith(("`systemverilog", "```"))
         )
+        tb_source = re.sub(r"\$stop\s*(\([^;]*\))?\s*;", "$finish;", tb_source)
         if not tb_source.strip().startswith("`timescale"):
             tb_source = "`timescale 1ns/1ps\n\n" + tb_source
         if "endmodule" not in tb_source:
@@ -148,7 +150,8 @@ class TestbenchWorker(AgentWorkerBase):
         system = (
             "You are a Verification Agent. Generate a simple self-checking Verilog-2001 testbench.\n"
             "No code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no logic/always_ff/always_comb/interfaces). "
-            "Use regs for driven signals, wires for DUT outputs. Keep it concise and target the stated test goals."
+            "Use regs for driven signals, wires for DUT outputs. Keep it concise and target the stated test goals. "
+            "Never use $stop; always terminate with $finish on pass/fail."
         )
         user = (
             f"Unit Under Test: {node_id}\n"
@@ -162,7 +165,7 @@ class TestbenchWorker(AgentWorkerBase):
             Message(role=MessageRole.SYSTEM, content=system),
             Message(role=MessageRole.USER, content=user),
         ]
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS", 600))
+        max_tokens = int(os.getenv("LLM_MAX_TOKENS", 10000))
         temperature = float(os.getenv("LLM_TEMPERATURE", 0.2))
         cfg = GenerationConfig(temperature=temperature, max_tokens=max_tokens)
         resp = await self.gateway.generate(messages=msgs, config=cfg)  # type: ignore[arg-type]

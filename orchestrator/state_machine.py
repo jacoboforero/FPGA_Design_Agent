@@ -17,6 +17,7 @@ class NodeState(str, Enum):
     SIMULATING = "SIMULATING"
     DISTILLING = "DISTILLING"
     REFLECTING = "REFLECTING"
+    DEBUGGING = "DEBUGGING"
     DONE = "DONE"
     FAILED = "FAILED"
 
@@ -26,9 +27,10 @@ ALLOWED_TRANSITIONS = {
     NodeState.IMPLEMENTING: {NodeState.LINTING, NodeState.FAILED},
     NodeState.LINTING: {NodeState.TESTBENCHING, NodeState.FAILED},
     NodeState.TESTBENCHING: {NodeState.SIMULATING, NodeState.FAILED},
-    NodeState.SIMULATING: {NodeState.DISTILLING, NodeState.FAILED},
+    NodeState.SIMULATING: {NodeState.DISTILLING, NodeState.DONE, NodeState.FAILED},
     NodeState.DISTILLING: {NodeState.REFLECTING, NodeState.FAILED},
-    NodeState.REFLECTING: {NodeState.DONE, NodeState.FAILED},
+    NodeState.REFLECTING: {NodeState.DEBUGGING, NodeState.FAILED},
+    NodeState.DEBUGGING: {NodeState.FAILED},
 }
 
 

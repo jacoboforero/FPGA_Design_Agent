@@ -169,7 +169,7 @@ class ImplementationWorker(AgentWorkerBase):
             Message(role=MessageRole.SYSTEM, content=system),
             Message(role=MessageRole.USER, content=user),
         ]
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS", 600))
+        max_tokens = int(os.getenv("LLM_MAX_TOKENS", 10000))
         temperature = float(os.getenv("LLM_TEMPERATURE", 0.2))
         cfg = GenerationConfig(temperature=temperature, max_tokens=max_tokens)
         resp = await self.gateway.generate(messages=msgs, config=cfg)  # type: ignore[arg-type]

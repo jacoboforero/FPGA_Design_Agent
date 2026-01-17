@@ -15,6 +15,7 @@ const DEMO_NODES: NodeState[] = [
   { id: "demo_module.sim", state: "SIMULATING" },
   { id: "demo_module.distill", state: "DISTILLING" },
   { id: "demo_module.reflect", state: "REFLECTING" },
+  { id: "demo_module.debug", state: "DEBUGGING" },
 ];
 
 export class NodeItem extends vscode.TreeItem {
@@ -45,6 +46,7 @@ function getColor(state: string): string {
     case "TESTBENCHING":
     case "DISTILLING":
     case "REFLECTING":
+    case "DEBUGGING":
       return "charts.blue";
     default:
       return "foreground";

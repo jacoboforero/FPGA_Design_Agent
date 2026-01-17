@@ -6,9 +6,10 @@ Cover contracts first, then the orchestration flow. Keep fast tests default; gat
 - `tests/core/schemas`: enums, Task/Result validation, any agent-specific payloads.
 
 ## Integration (broker + workers)
-- Happy path: implementation → lint → testbench → simulation → distill → reflect; assert states and artifacts/logs exist.
+- Happy path: implementation → lint → testbench → simulation → DONE; assert states and artifacts/logs exist.
 - Failure: missing file → DLQ, schema mismatch → DLQ, transient tool error → one retry then DLQ.
-- Timeout: long sim triggers timeout → failure and no downstream tasks.
+- Sim failure: distill → reflect → debug → FAILED; assert logs/insights are persisted.
+- Timeout: long sim triggers timeout → distill → reflect → debug → FAILED.
 - Ordering: verify orchestrator issues tasks in the defined sequence and marks DONE/FAILED correctly.
 
 ## Workers

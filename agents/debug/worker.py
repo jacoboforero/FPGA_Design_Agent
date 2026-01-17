@@ -134,7 +134,17 @@ def _collect_task_logs(node_id: str) -> str:
         return ""
     logs = []
     for stage in sorted(base.iterdir()):
+        if not stage.is_dir():
+            continue
         log_path = stage / "log.txt"
         if log_path.exists():
             logs.append(f"[{stage.name}]\n{log_path.read_text().strip()}")
+        for label, filename in (
+            ("distilled_dataset", "distilled_dataset.json"),
+            ("reflection_insights", "reflection_insights.json"),
+            ("reflections", "reflections.json"),
+        ):
+            extra_path = stage / filename
+            if extra_path.exists():
+                logs.append(f"[{stage.name}.{label}]\n{extra_path.read_text().strip()}")
     return "\n\n".join(logs)
