@@ -6,7 +6,7 @@ This document describes the RabbitMQ infrastructure setup for the Multi-Agent Ha
 
 ## Files
 
-- `docker-compose.yml` - RabbitMQ service configuration with Docker Compose
+- `docker-compose.yml` - RabbitMQ service configuration with Docker Compose (also includes optional app toolchain service)
 - `rabbitmq-definitions.json` - Queue, exchange, and binding definitions
 - `rabbitmq.conf` - RabbitMQ configuration file that enables automatic definitions loading
 
@@ -117,7 +117,7 @@ pytest tests/infrastructure/test_dlq_functionality.py -v
 
 ```bash
 cd infrastructure/
-docker-compose up -d
+docker-compose up -d rabbitmq
 ```
 
 ### Stop RabbitMQ

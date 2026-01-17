@@ -1,10 +1,10 @@
 # RabbitMQ Infrastructure
 
-This directory contains the RabbitMQ infrastructure setup for the Multi-Agent Hardware Design System. The infrastructure provides a message broker that enables asynchronous task distribution and error handling.
+This directory contains the RabbitMQ infrastructure setup for the Multi-Agent Hardware Design System. The infrastructure provides a message broker that enables asynchronous task distribution and error handling. The Docker Compose file also includes an optional `app` service for the pinned toolchain container.
 
 ## Files
 
-- `docker-compose.yml` - RabbitMQ service configuration with Docker Compose
+- `docker-compose.yml` - RabbitMQ service and app toolchain configuration with Docker Compose
 - `rabbitmq-definitions.json` - Queue, exchange, and binding definitions
 - `rabbitmq.conf` - RabbitMQ configuration file (enables automatic definitions loading)
 - `SETUP_NOTES.md` - Detailed setup and configuration documentation
@@ -12,9 +12,12 @@ This directory contains the RabbitMQ infrastructure setup for the Multi-Agent Ha
 ## Quick Start
 
 ```bash
-# Start RabbitMQ
+# Start RabbitMQ only
 cd infrastructure/
-docker-compose up -d
+docker-compose up -d rabbitmq
+
+# Start RabbitMQ + app toolchain
+docker-compose up -d rabbitmq app
 
 # Check status
 docker-compose ps
@@ -22,7 +25,7 @@ docker-compose ps
 # View logs
 docker-compose logs
 
-# Stop service
+# Stop services
 docker-compose down
 ```
 

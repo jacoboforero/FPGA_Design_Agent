@@ -1,6 +1,7 @@
 # Overview
 
-This project turns a frozen hardware spec into RTL, testbenches, lint/sim runs, and follow-on analysis with a mix of LLM agents and deterministic workers. Planning is a gate; execution is mechanical.
+This Project augments computer hardware engineer's workflow by using LLM-Based agents to assist in spec refinement and RTL Code generation, including testbenches. 
+
 
 ## How it flows
 - **Plan** — Human + spec helper collect L1–L5, lock them, and the planner emits `design_context.json` + `dag.json`.

@@ -10,9 +10,10 @@ The tests simulate the **message queuing infrastructure** that would handle task
 
 ### 1. Docker Setup Tests (`test_docker_setup.py`) - 5 tests ✅
 
-**What they test**: Basic RabbitMQ service startup and configuration
+**What they test**: Basic RabbitMQ service startup and Docker Compose configuration
 
 - Docker Compose file validation
+- App service configuration (pinned Verilator toolchain)
 - Service startup and health checks
 - Management UI accessibility (http://localhost:15672)
 - AMQP connection testing
@@ -106,6 +107,7 @@ pytest tests/infrastructure/ --cov=infrastructure --cov-report=term-missing
 ### `rabbitmq_service`
 
 - Starts RabbitMQ service using docker-compose
+- Only brings up the `rabbitmq` service (app container is not started)
 - Waits for service to be ready (up to 60 seconds)
 - Automatically creates required user (user/password)
 - Automatically stops service after tests
@@ -182,7 +184,7 @@ docker-compose logs rabbitmq
 ```bash
 # Start infrastructure manually
 cd infrastructure/
-docker-compose up -d
+docker-compose up -d rabbitmq
 
 # Check Management UI
 open http://localhost:15672

@@ -26,12 +26,39 @@ class TestDockerSetup:
         # Verify required services
         assert 'services' in compose_config
         assert 'rabbitmq' in compose_config['services']
+        assert 'app' in compose_config['services']
         
         # Verify RabbitMQ service configuration
         rabbitmq_service = compose_config['services']['rabbitmq']
         assert rabbitmq_service['image'] == 'rabbitmq:3.11-management-alpine'
         assert '5672:5672' in rabbitmq_service['ports']
         assert '15672:15672' in rabbitmq_service['ports']
+
+        # Verify app service configuration (pinned toolchain)
+        app_service = compose_config['services']['app']
+        assert 'build' in app_service
+        build_config = app_service['build']
+        assert build_config['context'] == '..'
+        assert build_config['dockerfile'] == 'Dockerfile'
+        build_args = build_config.get('args', {})
+        assert str(build_args.get('VERILATOR_VERSION')) == '5.044'
+        assert app_service.get('command') == ['sleep', 'infinity']
+
+        app_volumes = app_service.get('volumes', [])
+        assert '..:/workspace' in app_volumes
+        assert 'poetry-cache:/root/.cache/pypoetry' in app_volumes
+        assert 'pip-cache:/root/.cache/pip' in app_volumes
+
+        compose_volumes = compose_config.get('volumes', {})
+        assert 'poetry-cache' in compose_volumes
+        assert 'pip-cache' in compose_volumes
+
+        # Verify Dockerfile exists and pins Verilator version
+        dockerfile = project_root / "Dockerfile"
+        assert dockerfile.exists(), "Dockerfile not found"
+        dockerfile_text = dockerfile.read_text()
+        assert "ARG VERILATOR_VERSION=5.044" in dockerfile_text
+        assert "iverilog" in dockerfile_text
     
     def test_rabbitmq_definitions_file_exists(self):
         """Test that rabbitmq-definitions.json exists and is valid."""

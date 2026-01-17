@@ -1,0 +1,23 @@
+{
+  "name": "FPGA Design Agent",
+  "dockerComposeFile": [
+    "../infrastructure/docker-compose.yml"
+  ],
+  "service": "app",
+  "workspaceFolder": "/workspace",
+  "runServices": [
+    "rabbitmq",
+    "app"
+  ],
+  "shutdownAction": "stopCompose",
+  "overrideCommand": false,
+  "postCreateCommand": "poetry install",
+  "remoteUser": "root",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.shell.linux": "/bin/bash"
+      }
+    }
+  }
+}

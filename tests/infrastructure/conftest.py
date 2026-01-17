@@ -43,7 +43,7 @@ def rabbitmq_service():
         # Start the service
         print("Starting RabbitMQ service...")
         result = subprocess.run(
-            [compose_path, "up", "-d"], 
+            [compose_path, "up", "-d", "rabbitmq"],
             capture_output=True, 
             text=True, 
             check=True

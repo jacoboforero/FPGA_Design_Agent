@@ -7,20 +7,46 @@ LLM-backed agents plus deterministic workers that turn a frozen hardware spec in
 - Agents for implementation, testbench, reflection, debug, spec-helper; workers for lint, simulation, distillation.
 - RabbitMQ-based orchestration with task memory persisted under `artifacts/task_memory/`.
 
-## Quick start (local)
+## Quick start (containerized, recommended)
+Use the pinned Verilator toolchain (5.044) inside Docker for consistent results across machines. The container also includes Icarus (`iverilog`/`vvp`) for simulation.
+
 1) **Prereqs**
-   - Python 3.12+, `poetry install`
-   - RabbitMQ: `cd infrastructure && docker-compose up -d`
-   - Optional tools: Verilator (`verilator`), Icarus (`iverilog`, `vvp`)
-   - Optional LLM: set `USE_LLM=1` and `OPENAI_API_KEY` (or Groq vars)
-2) **Run the interactive CLI** (LLM required)
+   - Docker + Docker Compose
+   - Optional LLM: set `USE_LLM=1` and `OPENAI_API_KEY` (or Groq vars) in `.env`
+2) **Build and start services**
    ```bash
-   PYTHONPATH=. USE_LLM=1 python apps/cli/cli.py --timeout 120
+   make build
+   make up
+   ```
+3) **Install deps and run the CLI**
+   ```bash
+   make deps
+   make cli
    ```
    Artifacts land in `artifacts/generated/rtl/`; logs live in `artifacts/task_memory/<node>/<stage>/`.
+   `make deps` installs the OpenAI client extra required for LLM-backed agents.
+   The container sets `EDITOR=nano`; override by setting `EDITOR` in `.env` if you prefer another editor.
+   Inside Docker, `RABBITMQ_URL` must use the service host (`amqp://user:password@rabbitmq:5672/`).
+
+## Host-only (not recommended)
+You can still run on the host, but tool versions may drift across machines.
+
+```bash
+PYTHONPATH=. USE_LLM=1 python apps/cli/cli.py --timeout 120
+```
 
 ## CLI usage
-- `python apps/cli/cli.py` — opens your `$EDITOR`, gathers the initial spec, and runs the full pipeline
+- `make cli` — runs the pipeline inside the pinned toolchain container (sources `.env` if present; CLI also loads it)
+- `python apps/cli/cli.py` — host-only fallback (not recommended)
+
+## Dev workflow helpers
+- `make shell` — open a shell in the running app container (sources `.env` if present)
+- `make test` — run pytest inside the container
+- `make logs` — tail RabbitMQ logs
+- `make down` — stop containers
+
+## Devcontainer (VS Code)
+Open the repo in a Dev Container to use the same pinned toolchain automatically. The config uses the `app` service in `infrastructure/docker-compose.yml`.
 
 ## Repo map (you’ll touch these)
 - `apps/cli/` — main entrypoint

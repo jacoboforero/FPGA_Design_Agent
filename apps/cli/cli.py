@@ -42,6 +42,29 @@ RESULTS_ROUTING_KEY = "RESULTS"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if value and value[0] in ("'", '"') and value[-1:] == value[:1]:
+            value = value[1:-1]
+        else:
+            value = value.split("#", 1)[0].rstrip()
+        os.environ.setdefault(key, value)
+
+
 def connection_params_from_env() -> pika.ConnectionParameters:
     rabbit_url = os.getenv("RABBITMQ_URL", "amqp://user:password@localhost:5672/")
     return pika.URLParameters(rabbit_url)
@@ -181,6 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    _load_env_file(REPO_ROOT / ".env")
     argv = argv if argv is not None else sys.argv[1:]
     if argv and argv[0] in ("run", "full"):
         argv = argv[1:]
