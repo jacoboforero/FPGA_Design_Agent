@@ -96,7 +96,7 @@ def run_verilator(input_file, flags, verbose= False):
             command,
             capture_output=True,
             text=True,
-            timeout=300  # 5 minute timeout
+            timeout=300
         )
         
         end_time = datetime.now()
@@ -266,9 +266,9 @@ def main():
     if args.verbose:
         print("\n" + "=" * 80, file=sys.stderr)
         if results['returncode'] == 0:
-            print("✓ SUCCESS: Linting completed without errors", file=sys.stderr)
+            print("SUCCESS: Linting completed without errors", file=sys.stderr)
         else:
-            print("✗ FAILURE: Linting found errors or warnings", file=sys.stderr)
+            print("FAILURE: Linting found errors or warnings", file=sys.stderr)
         print(f"Execution time: {results.get('execution_time', 0):.3f}s", file=sys.stderr)
         print("=" * 80, file=sys.stderr)
     

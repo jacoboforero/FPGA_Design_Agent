@@ -21,7 +21,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Build Verilator from source
-ARG VERILATOR_VERSION=v5.024
+ARG VERILATOR_VERSION=v5.040
 RUN git clone https://github.com/verilator/verilator.git /tmp/verilator && \
     cd /tmp/verilator && \
     git checkout ${VERILATOR_VERSION} && \
