@@ -36,6 +36,14 @@ env/
 ENV/
 env.bak/
 venv.bak/
+.env
+
+# Project artifacts
+artifacts/task_memory/
+
+# VS Code extension build output
+apps/vscode-extension/node_modules/
+apps/vscode-extension/out/
 
 # IDE
 .vscode/

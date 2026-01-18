@@ -3,7 +3,7 @@ Test RabbitMQ queue configuration and setup.
 """
 import pytest
 import pika
-from schemas.contracts import EntityType, TaskPriority
+from core.schemas.contracts import EntityType, TaskPriority
 
 
 class TestQueueConfiguration:
