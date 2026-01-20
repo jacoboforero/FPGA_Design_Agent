@@ -38,7 +38,12 @@ def _run_stage(worker, task: TaskMessage, task_memory: TaskMemory, node_id: str,
     if result.artifacts_path:
         task_memory.record_artifact_path(node_id, stage, result.artifacts_path)
     if result.reflection_insights:
-        task_memory.record_json(node_id, stage, "reflection_insights.json", result.reflection_insights.model_dump())
+        task_memory.record_json(
+            node_id,
+            stage,
+            "reflection_insights.json",
+            result.reflection_insights.model_dump(mode="json"),
+        )
     if result.reflections:
         task_memory.record_json(node_id, stage, "reflections.json", json.loads(result.reflections))
     return result

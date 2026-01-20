@@ -106,6 +106,7 @@ class ImplementationWorker(AgentWorkerBase):
         rtl_source = rtl_source.replace("always_ff", "always")
         rtl_source = rtl_source.replace("always_comb", "always @*")
         if "always" in rtl_source:
+            rtl_source = rtl_source.replace("output logic", "output reg")
             rtl_source = rtl_source.replace("output wire", "output reg")
         rtl_source = rtl_source.replace("logic", "wire")
 

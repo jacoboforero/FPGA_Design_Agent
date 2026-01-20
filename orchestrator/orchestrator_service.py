@@ -107,7 +107,7 @@ class DemoOrchestrator:
                 if payload is None:
                     return None
                 if hasattr(payload, "model_dump"):
-                    return payload.model_dump()
+                    return payload.model_dump(mode="json")
                 if hasattr(payload, "dict"):
                     return payload.dict()
                 return payload
