@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from workers.sim.worker import SimulationWorker
-from core.schemas.contracts import TaskMessage, EntityType, WorkerType, TaskPriority
+from core.schemas.contracts import TaskMessage, EntityType, WorkerType, TaskPriority, TaskStatus
 
 
 def make_task(rtl_path: Path, tb_path: Path | None = None) -> TaskMessage:
@@ -18,7 +18,7 @@ def make_task(rtl_path: Path, tb_path: Path | None = None) -> TaskMessage:
     )
 
 
-def test_sim_worker_mock_without_tools(tmp_path, monkeypatch):
+def test_sim_worker_missing_tools(tmp_path, monkeypatch):
     rtl = tmp_path / "demo.sv"
     rtl.write_text("module demo(input logic clk, output logic [7:0] out); assign out = 8'h0; endmodule")
 
@@ -27,5 +27,5 @@ def test_sim_worker_mock_without_tools(tmp_path, monkeypatch):
 
     result = worker.handle_task(make_task(rtl))
 
-    assert result.status.value == "SUCCESS"
-    assert "Mock simulation passed" in result.log_output
+    assert result.status is TaskStatus.FAILURE
+    assert "Simulation tools missing" in result.log_output

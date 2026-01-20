@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 
 from workers.lint.worker import LintWorker
-from core.schemas.contracts import TaskMessage, EntityType, WorkerType, TaskPriority
+from core.runtime.retry import TaskInputError
+from core.schemas.contracts import TaskMessage, EntityType, WorkerType, TaskPriority, TaskStatus
 
 
 def make_task(rtl_path: Path) -> TaskMessage:
@@ -15,7 +16,7 @@ def make_task(rtl_path: Path) -> TaskMessage:
     )
 
 
-def test_lint_worker_fallback_without_verilator(tmp_path, monkeypatch):
+def test_lint_worker_missing_verilator(tmp_path, monkeypatch):
     rtl = tmp_path / "demo.sv"
     rtl.write_text(
         """module demo(input logic clk, input logic rst_n, input logic [7:0] in_data, output logic [7:0] out_data);
@@ -29,13 +30,12 @@ endmodule
 
     result = worker.handle_task(make_task(rtl))
 
-    assert result.status.value == "SUCCESS"
-    assert "Mock lint passed" in result.log_output
+    assert result.status is TaskStatus.FAILURE
+    assert "Verilator not found" in result.log_output
 
 
 def test_lint_worker_missing_file(tmp_path):
     rtl = tmp_path / "missing.sv"
     worker = LintWorker(connection_params=None, stop_event=None)
-    result = worker.handle_task(make_task(rtl))
-    assert result.status.value == "FAILURE"
-    assert "RTL missing" in result.log_output
+    with pytest.raises(TaskInputError):
+        worker.handle_task(make_task(rtl))

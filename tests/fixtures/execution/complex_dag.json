@@ -1,0 +1,31 @@
+{
+  "nodes": [
+    {
+      "id": "axi_lite_regs",
+      "type": "module",
+      "deps": [],
+      "state": "PENDING",
+      "artifacts": {},
+      "metrics": {}
+    },
+    {
+      "id": "event_fifo",
+      "type": "module",
+      "deps": [],
+      "state": "PENDING",
+      "artifacts": {},
+      "metrics": {}
+    },
+    {
+      "id": "event_logger_top",
+      "type": "module",
+      "deps": [
+        "axi_lite_regs",
+        "event_fifo"
+      ],
+      "state": "PENDING",
+      "artifacts": {},
+      "metrics": {}
+    }
+  ]
+}
