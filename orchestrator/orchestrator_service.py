@@ -52,6 +52,12 @@ class DemoOrchestrator:
         self.dag_path = dag_path
         self.rtl_root = rtl_root
         self.context_builder = DemoContextBuilder(design_context_path, rtl_root)
+        self._design_context = json.loads(design_context_path.read_text())
+        self._node_scopes = {
+            node_id: node.get("verification_scope", "full")
+            for node_id, node in self._design_context.get("nodes", {}).items()
+        }
+        self._top_module = self._design_context.get("top_module")
         self.dag = json.loads(dag_path.read_text())
         self.nodes: Dict[str, Node] = {n["id"]: Node(n["id"]) for n in self.dag["nodes"]}
         self.deps_map: Dict[str, set[str]] = {
@@ -197,6 +203,13 @@ class DemoOrchestrator:
                     lint_task = self._publish_task(ch, EntityType.LIGHT_DETERMINISTIC, WorkerType.LINTER, target_node)
                     tasks[target_node]["lint"] = lint_task
                 elif stage == "lint":
+                    if self._node_scopes.get(target_node, "full") != "full":
+                        print(f"Skipping TB/SIM for {target_node} (non-top module).")
+                        self._advance(target_node, NodeState.DONE)
+                        active_nodes.discard(target_node)
+                        done_nodes.add(target_node)
+                        start_ready_nodes()
+                        continue
                     self._advance(target_node, NodeState.TESTBENCHING)
                     tb_task = self._publish_task(ch, EntityType.REASONING, AgentType.TESTBENCH, target_node)
                     tasks[target_node]["tb"] = tb_task

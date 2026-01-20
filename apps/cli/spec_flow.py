@@ -13,7 +13,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from agents.common.llm_gateway import init_llm_gateway
 from agents.spec_helper.checklist import (
@@ -149,6 +149,7 @@ def _format_value_for_notes(value: Any) -> str:
 
 
 _MODULE_LINE_RE = re.compile(r"^\s*Module:\s*(\S+)\s*$", re.MULTILINE)
+_TOP_LINE_RE = re.compile(r"^\s*Top(?:\s+module)?:\s*(\S+)\s*$", re.MULTILINE | re.IGNORECASE)
 
 
 def _extract_module_name(spec_text: str) -> str | None:
@@ -156,6 +157,52 @@ def _extract_module_name(spec_text: str) -> str | None:
     if not match:
         return None
     return match.group(1).strip()
+
+
+def _extract_top_module(spec_text: str) -> str | None:
+    match = _TOP_LINE_RE.search(spec_text)
+    if not match:
+        return None
+    return _sanitize_name(match.group(1).strip())
+
+
+def _strip_top_line(text: str) -> str:
+    return _TOP_LINE_RE.sub("", text).strip()
+
+
+def _split_spec_modules(spec_text: str) -> tuple[str, list[tuple[str, str]]]:
+    lines = spec_text.splitlines()
+    module_indexes = [idx for idx, line in enumerate(lines) if _MODULE_LINE_RE.match(line)]
+    if not module_indexes:
+        return spec_text.strip(), []
+
+    defaults = "\n".join(lines[: module_indexes[0]]).strip()
+    modules: list[tuple[str, str]] = []
+    for i, start in enumerate(module_indexes):
+        end = module_indexes[i + 1] if i + 1 < len(module_indexes) else len(lines)
+        block = "\n".join(lines[start:end]).strip()
+        module_name = _extract_module_name(block)
+        if not module_name:
+            continue
+        modules.append((_sanitize_name(module_name), block))
+    return defaults, modules
+
+
+def _build_module_spec_text(defaults_text: str, module_text: str) -> str:
+    if not defaults_text.strip():
+        return module_text.strip()
+    stripped_defaults = _strip_top_line(defaults_text)
+    if not stripped_defaults:
+        return module_text.strip()
+    return (
+        "Defaults (apply unless overridden by the module section):\n"
+        f"{stripped_defaults.strip()}\n\n{module_text.strip()}"
+    )
+
+
+def _module_spec_path(base_path: Path, module_name: str) -> Path:
+    stem = base_path.stem
+    return base_path.with_name(f"{stem}_{_sanitize_name(module_name)}.txt")
 
 
 def _set_module_name_in_text(spec_text: str, module_name: str) -> str:
@@ -479,10 +526,19 @@ def _signal_direction(value: Any) -> SignalDirection:
     raise ValueError(f"Invalid signal direction: {value}")
 
 
-def _write_artifacts(spec_text: str, checklist: Dict[str, Any], spec_path: Path) -> None:
+def _write_artifacts(
+    spec_text: str,
+    checklist: Dict[str, Any],
+    spec_path: Path,
+    *,
+    module_name: str | None = None,
+    spec_id: UUID | None = None,
+    filename_suffix: str = "",
+) -> UUID:
     SPEC_DIR.mkdir(parents=True, exist_ok=True)
-    module_name = _sanitize_name(str(checklist.get("module_name", "demo_module")))
+    module_name = _sanitize_name(module_name or str(checklist.get("module_name", "demo_module")))
     checklist["module_name"] = module_name
+    suffix = filename_suffix
     l1 = checklist.get("L1", {})
     l2 = checklist.get("L2", {})
     l3 = checklist.get("L3", {})
@@ -490,10 +546,10 @@ def _write_artifacts(spec_text: str, checklist: Dict[str, Any], spec_path: Path)
     l5 = checklist.get("L5", {})
 
     spec_path.write_text(spec_text.strip() + "\n")
-    (SPEC_DIR / "spec_checklist.json").write_text(json.dumps(checklist, indent=2))
+    (SPEC_DIR / f"spec_checklist{suffix}.json").write_text(json.dumps(checklist, indent=2))
 
     created_by = _current_user()
-    spec_id = uuid4()
+    spec_id = spec_id or uuid4()
     state = SpecificationState.FROZEN
     approved_by = created_by
 
@@ -714,16 +770,21 @@ def _write_artifacts(spec_text: str, checklist: Dict[str, Any], spec_path: Path)
         frozen_by=created_by,
     )
 
-    (SPEC_DIR / "L1_functional.json").write_text(json.dumps(l1_spec.model_dump(mode="json"), indent=2))
-    (SPEC_DIR / "L2_interface.json").write_text(json.dumps(l2_spec.model_dump(mode="json"), indent=2))
-    (SPEC_DIR / "L3_verification.json").write_text(json.dumps(l3_spec.model_dump(mode="json"), indent=2))
-    (SPEC_DIR / "L4_architecture.json").write_text(json.dumps(l4_spec.model_dump(mode="json"), indent=2))
-    (SPEC_DIR / "L5_acceptance.json").write_text(json.dumps(l5_spec.model_dump(mode="json"), indent=2))
-    (SPEC_DIR / "frozen_spec.json").write_text(json.dumps(frozen.model_dump(mode="json"), indent=2))
+    (SPEC_DIR / f"L1_functional{suffix}.json").write_text(json.dumps(l1_spec.model_dump(mode="json"), indent=2))
+    (SPEC_DIR / f"L2_interface{suffix}.json").write_text(json.dumps(l2_spec.model_dump(mode="json"), indent=2))
+    (SPEC_DIR / f"L3_verification{suffix}.json").write_text(json.dumps(l3_spec.model_dump(mode="json"), indent=2))
+    (SPEC_DIR / f"L4_architecture{suffix}.json").write_text(json.dumps(l4_spec.model_dump(mode="json"), indent=2))
+    (SPEC_DIR / f"L5_acceptance{suffix}.json").write_text(json.dumps(l5_spec.model_dump(mode="json"), indent=2))
+    (SPEC_DIR / f"frozen_spec{suffix}.json").write_text(json.dumps(frozen.model_dump(mode="json"), indent=2))
+    return spec_id
 
+
+def _write_lock(module_names: List[str], top_module: str, spec_id: UUID) -> None:
     lock = {
         "locked_at": datetime.now(timezone.utc).isoformat(),
-        "module_name": module_name,
+        "module_name": top_module,
+        "top_module": top_module,
+        "modules": module_names,
         "spec_id": str(spec_id),
     }
     (SPEC_DIR / "lock.json").write_text(json.dumps(lock, indent=2))
@@ -910,15 +971,72 @@ def _complete_checklist(
     return checklist, spec_text
 
 
+def _collect_multi_specs(
+    gateway: object,
+    spec_text: str,
+    spec_path: Path,
+    interactive: bool,
+) -> Dict[str, Any]:
+    defaults_text, modules = _split_spec_modules(spec_text)
+    if not modules:
+        raise RuntimeError("Multi-spec collection called without module sections.")
+
+    top_module = _extract_top_module(spec_text) or modules[0][0]
+    module_names = [name for name, _ in modules]
+    if top_module not in module_names:
+        raise RuntimeError(f"Top module '{top_module}' not found in spec modules: {module_names}")
+    if len(set(module_names)) != len(module_names):
+        raise RuntimeError(f"Duplicate module names in spec: {module_names}")
+
+    spec_id = uuid4()
+    last_checklist: Dict[str, Any] = {}
+    for module_name, module_text in modules:
+        if interactive:
+            print(f"\nProcessing module '{module_name}'...", flush=True)
+        module_spec_text = _build_module_spec_text(defaults_text, module_text)
+        module_spec_path = _module_spec_path(spec_path, module_name)
+        module_spec_path.write_text(module_spec_text.strip() + "\n")
+
+        checklist = build_empty_checklist()
+        checklist["module_name"] = module_name
+        checklist, module_spec_text = _complete_checklist(
+            gateway,
+            module_spec_text,
+            checklist,
+            interactive=interactive,
+            spec_path=module_spec_path,
+        )
+        suffix = "" if module_name == top_module else f"_{module_name}"
+        _write_artifacts(
+            module_spec_text,
+            checklist,
+            module_spec_path,
+            module_name=module_name,
+            spec_id=spec_id,
+            filename_suffix=suffix,
+        )
+        last_checklist = checklist
+
+    _write_lock(module_names, top_module, spec_id)
+    return last_checklist
+
+
 def collect_specs_from_text(module_name: str, spec_text: str, interactive: bool = True) -> Dict[str, Any]:
     SPEC_DIR.mkdir(parents=True, exist_ok=True)
     gateway = _require_gateway()
     spec_text = spec_text.strip()
-    if module_name:
-        spec_text = f"Module: {module_name}\n{spec_text}".strip()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     spec_path = SPEC_DIR / f"spec_input_{stamp}.txt"
     spec_path.write_text(spec_text.strip() + "\n")
+
+    if not module_name:
+        defaults_text, modules = _split_spec_modules(spec_text)
+        if modules:
+            return _collect_multi_specs(gateway, spec_text, spec_path, interactive)
+
+    if module_name:
+        spec_text = f"Module: {module_name}\n{spec_text}".strip()
+        spec_path.write_text(spec_text.strip() + "\n")
 
     checklist = build_empty_checklist()
     if module_name:
@@ -931,7 +1049,9 @@ def collect_specs_from_text(module_name: str, spec_text: str, interactive: bool 
         interactive=interactive,
         spec_path=spec_path,
     )
-    _write_artifacts(spec_text, checklist, spec_path)
+    spec_id = _write_artifacts(spec_text, checklist, spec_path, module_name=checklist.get("module_name"))
+    module_value = checklist.get("module_name", "demo_module")
+    _write_lock([_sanitize_name(str(module_value))], _sanitize_name(str(module_value)), spec_id)
     return checklist
 
 
@@ -942,6 +1062,20 @@ def collect_specs() -> None:
     if not spec_text:
         print("No spec text provided; aborting.")
         return
+    defaults_text, modules = _split_spec_modules(spec_text)
+    if modules:
+        try:
+            _collect_multi_specs(gateway, spec_text, spec_path, interactive=True)
+        except KeyboardInterrupt:
+            print("\nAborted.")
+            return
+        top_module = _extract_top_module(spec_text) or modules[0][0]
+        print(
+            f"\nSpecs locked for modules {', '.join(name for name, _ in modules)} "
+            f"(top: {top_module}) under {SPEC_DIR}/"
+        )
+        return
+
     checklist = build_empty_checklist()
     try:
         checklist, spec_text = _complete_checklist(
@@ -954,8 +1088,9 @@ def collect_specs() -> None:
     except KeyboardInterrupt:
         print("\nAborted.")
         return
-    _write_artifacts(spec_text, checklist, spec_path)
+    spec_id = _write_artifacts(spec_text, checklist, spec_path, module_name=checklist.get("module_name"))
     module_name = checklist.get("module_name", "demo_module")
+    _write_lock([_sanitize_name(str(module_name))], _sanitize_name(str(module_name)), spec_id)
     print(f"\nSpecs locked for module '{module_name}' under {SPEC_DIR}/")
 
 

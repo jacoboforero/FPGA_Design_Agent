@@ -5,7 +5,7 @@ This Project augments computer hardware engineer's workflow by using LLM-Based a
 
 ## How it flows
 - **Plan** — Human + spec helper collect L1–L5, lock them, and the planner emits `design_context.json` + `dag.json`.
-- **Execute** — The orchestrator walks the DAG: Implementation → Lint → Testbench → Simulation. On pass, the node is DONE. On sim failure, it runs Distill → Reflect → Debug and marks FAILED. Each stage writes logs/artifact paths to task memory.
+- **Execute** — The orchestrator walks the DAG: Implementation → Lint → Testbench → Simulation. On pass, the node is DONE. On sim failure, it runs Distill → Reflect → Debug and marks FAILED. In multi-module designs, only the top module runs TB/SIM; submodules stop after lint. Each stage writes logs/artifact paths to task memory.
 - **Decide** — Coverage/results are reviewed; on failures you can use distill/reflect/debug outputs to iterate and re-run sim.
 
 ## What’s in scope now

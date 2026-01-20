@@ -151,7 +151,13 @@ class TestbenchWorker(AgentWorkerBase):
             "You are a Verification Agent. Generate a simple self-checking Verilog-2001 testbench.\n"
             "No code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no logic/always_ff/always_comb/interfaces). "
             "Use regs for driven signals, wires for DUT outputs. Keep it concise and target the stated test goals. "
-            "Never use $stop; always terminate with $finish on pass/fail."
+            "Name the testbench module tb_<node_id>. "
+            "Include an integer cycle counter incremented on the main clock edge. On any failure, print a single-line "
+            "message that includes cycle=<cycle> and time=<time> plus key signals. "
+            "Include optional VCD dump controls: if +DUMP is present, set $dumpfile from +DUMP_FILE=<path> (default dump.vcd), "
+            "call $dumpvars(0, tb_<node_id>), and use $dumpoff/$dumpon to restrict to +DUMP_START=<cycle> and +DUMP_END=<cycle> "
+            "if provided (use $value$plusargs; avoid SystemVerilog strings). "
+            "Never use $stop; always terminate with $finish on pass/fail (use $finish(1) on failure, $finish(0) on pass if supported)."
         )
         user = (
             f"Unit Under Test: {node_id}\n"

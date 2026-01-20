@@ -7,12 +7,12 @@ Short map of the moving pieces. For the story, start with [overview.md](./overvi
 - **RabbitMQ** — queues for agents (`agent_tasks`), deterministic work (`process_tasks`), simulations (`simulation_tasks`), results (`results`), and DLQ.
 - **Agents (LLM-backed)** — spec-helper, planner, implementation, testbench, reflection, debug.
 - **Workers (deterministic)** — lint, simulation, distillation.
-- **Storage** — `artifacts/generated/` (design context + RTL/TB) and `artifacts/task_memory/` (logs, artifact paths, insights).
+- **Storage** — `artifacts/generated/` (design context + RTL/TB), `artifacts/task_memory/` (logs, artifact paths, insights; CLI auto-purges per run), and `artifacts/observability/` (per-run event logs and cost summaries).
 
 ## Execution path (per node)
 `PENDING → IMPLEMENTING → LINTING → TESTBENCHING → SIMULATING → DONE` (on pass), or `SIMULATING → DISTILLING → REFLECTING → DEBUGGING → FAILED` on sim failure.
 
-The orchestrator enqueues the next task only when the prior stage returns `SUCCESS`. Distill/reflect/debug run only after sim failures.
+For multi-module runs, only the top module executes TB/SIM; submodules stop after lint and are marked DONE. The orchestrator enqueues the next task only when the prior stage returns `SUCCESS`. Distill/reflect/debug run only after sim failures.
 
 ## Queue routing (defaults)
 - `REASONING` → `agent_tasks`

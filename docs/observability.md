@@ -5,7 +5,7 @@ This repo now emits lightweight observability and cost data via AgentOps plus lo
 ## How it works
 - `core/observability/agentops_tracker.py` starts an AgentOps trace per run (if configured) and records every LLM call (model, provider, tokens, estimated cost) into `artifacts/observability/costs.jsonl`, with a rolling summary in `cost_summary.json`.
 - LLM calls from spec-helper, implementation, and testbench agents are logged. Deterministic paths stay untouched.
-- The global EventEmitter includes an AgentOps sink; stage transitions are tagged into the trace metadata (best-effort).
+- The global EventEmitter includes an AgentOps sink plus a local JSONL sink; events are written to a per-run file in `artifacts/observability/`.
 - AgentOps auto-instruments OpenAI/Groq calls when enabled; all logging is best-effort and will no-op if AgentOps is not configured.
 
 ## Configure
@@ -30,6 +30,7 @@ OPENAI_MODEL=... / GROQ_MODEL=...  # optional tag helper
 ## Outputs (local)
 - `artifacts/observability/costs.jsonl`: one line per LLM call, fields: `run_id`, `run_name`, `agent`, `node_id`, `model`, `provider`, token counts, estimated cost, metadata.
 - `artifacts/observability/cost_summary.json`: rolling totals per run.
+- `artifacts/observability/<run_name>_events.jsonl`: one line per runtime event (state transitions, task completions), including `run_id`, `run_name`, `runtime`, `event_type`, and payload.
 
 ## Swap/compare models
 1) Set `LLM_PROVIDER`/`OPENAI_MODEL` or switch to Groq vars.

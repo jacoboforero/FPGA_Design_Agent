@@ -33,7 +33,7 @@ RUN curl -fsSL "https://github.com/verilator/verilator/archive/refs/tags/v${VERI
     && make install \
     && rm -rf "/tmp/verilator-${VERILATOR_VERSION}"
 
-ENV VERILATOR_ROOT=/opt/verilator
+ENV VERILATOR_ROOT=/opt/verilator/share/verilator
 ENV PATH="/opt/verilator/bin:/root/.local/bin:${PATH}"
 
 RUN pipx install poetry==1.8.3

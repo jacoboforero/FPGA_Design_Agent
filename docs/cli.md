@@ -37,6 +37,11 @@ Open the repo in a Dev Container to use the same pinned toolchain automatically.
 PYTHONPATH=. python apps/cli/cli.py --timeout 120 [--run-name my_run]
 ```
 
+## Multi-module specs
+You can define multiple modules in one spec by repeating `Module: <name>` blocks. Optionally add `Top: <module>` to mark the top-level; otherwise the first module is used. Text before the first `Module:` line is treated as shared defaults and is prepended to each module section.
+
+Only the top module runs TB/SIM; submodules stop after lint.
+
 ## Typical flows
 - **With LLM + tools (host-only fallback):**
   ```bash
@@ -49,6 +54,6 @@ PYTHONPATH=. python apps/cli/cli.py --timeout 120 [--run-name my_run]
   # Each case auto-sets run names suite_<case> for observability/cost logs.
   ```
 
-Artifacts end up in `artifacts/generated/` (design context + RTL/TB) and `artifacts/task_memory/<node>/<stage>/` (logs, artifact paths). Increase `--timeout` for slower sims or LLM calls.
+Artifacts end up in `artifacts/generated/` (design context + RTL/TB) and `artifacts/task_memory/<node>/<stage>/` (logs, artifact paths). The CLI auto-purges `artifacts/task_memory/` at the start of each run. Per-run event logs are written to `artifacts/observability/<run_name>_events.jsonl`. Increase `--timeout` for slower sims or LLM calls.
 
 Observability/cost tracking with AgentOps is documented in `docs/observability.md`.

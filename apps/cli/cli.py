@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import threading
 from datetime import datetime, timezone
@@ -143,8 +144,16 @@ def _print_section(title: str) -> None:
     print(f"\n{title}\n{bar}")
 
 
+def _purge_task_memory(root: Path) -> None:
+    if not root.exists():
+        return
+    shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+
+
 def run_full(args: argparse.Namespace) -> None:
     run_name = args.run_name or _default_run_name("cli_full")
+    _purge_task_memory(REPO_ROOT / "artifacts" / "task_memory")
     configure_observability(run_name=run_name, default_tags=["cli", "full"])
     # 1) Collect specs interactively
     spec_flow.collect_specs()

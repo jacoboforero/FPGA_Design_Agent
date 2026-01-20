@@ -15,4 +15,6 @@ Common paths:
 - Locked specs: `artifacts/task_memory/specs/`
 - Planner outputs: `artifacts/generated/{design_context.json, dag.json}`
 - Generated RTL/TB: `artifacts/generated/rtl/`
-- Logs/artifact pointers: `artifacts/task_memory/<node>/<stage>/`
+- Logs/artifact pointers: `artifacts/task_memory/<node>/<stage>/` (cleared at each CLI run)
+- Observability events: `artifacts/observability/<run_name>_events.jsonl`
+- Multi-module specs: see `docs/spec-and-planning.md` (single input with multiple `Module:` sections)

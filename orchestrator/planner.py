@@ -82,6 +82,8 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
 
     lock = _load_json(lock_path)
     module_name = lock.get("module_name") or "demo_module"
+    top_module = lock.get("top_module") or module_name
+    lock_modules = lock.get("modules")
 
     l1 = L1Specification.model_validate_json((spec_dir / "L1_functional.json").read_text())
     l2 = L2Specification.model_validate_json((spec_dir / "L2_interface.json").read_text())
@@ -89,7 +91,14 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
     l4 = L4Specification.model_validate_json((spec_dir / "L4_architecture.json").read_text())
     l5 = L5Specification.model_validate_json((spec_dir / "L5_acceptance.json").read_text())
 
-    module_nodes = _extract_module_nodes(l4, module_name)
+    module_nodes = _extract_module_nodes(l4, top_module)
+    if lock_modules:
+        missing = [node for node in module_nodes if node not in lock_modules]
+        extra = [node for node in lock_modules if node not in module_nodes]
+        if missing:
+            raise RuntimeError(f"Lock modules missing from block diagram: {missing}")
+        if extra:
+            raise RuntimeError(f"Lock modules not present in block diagram: {extra}")
     if len(set(module_nodes)) != len(module_nodes):
         raise RuntimeError(f"Duplicate module ids in block diagram: {module_nodes}")
 
@@ -99,7 +108,7 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
     l5_by_module: Dict[str, L5Specification] = {}
 
     for module in module_nodes:
-        if module == module_name:
+        if module == top_module:
             l1_by_module[module] = l1
             l2_by_module[module] = l2
             l3_by_module[module] = l3
@@ -183,12 +192,15 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
             "demo_behavior": demo_behavior,
             "verification": verification,
             "acceptance": acceptance,
+            "verification_scope": "full" if module == top_module else "lite",
         }
 
     design_context = {
         "design_context_hash": None,
         "nodes": nodes,
         "standard_library": {},
+        "top_module": top_module,
+        "modules": module_nodes,
     }
     design_context["design_context_hash"] = _hash_dict(design_context["nodes"])
 

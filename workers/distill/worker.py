@@ -5,6 +5,8 @@ Fails hard if upstream logs are missing.
 from __future__ import annotations
 
 import json
+import os
+import re
 import threading
 from pathlib import Path
 
@@ -80,22 +82,38 @@ class DistillWorker(threading.Thread):
 
         sim_text = sim_log.read_text()
         original_size = len(sim_text.encode())
+        cycle, time_val = _extract_failure_info(sim_text)
+        window = None
+        if cycle is not None:
+            before = int(os.getenv("SIM_FAIL_WINDOW_BEFORE", "20"))
+            after = int(os.getenv("SIM_FAIL_WINDOW_AFTER", "5"))
+            window = {"start_cycle": max(0, cycle - before), "end_cycle": cycle + after}
+        waveform_path = Path("artifacts/task_memory") / node_id / "sim" / "waveform.vcd"
+        waveform_present = waveform_path.exists()
+        waveform_str = str(waveform_path) if waveform_present else None
         distilled_path = Path("artifacts/task_memory") / node_id / "distill" / "distilled_dataset.json"
         distilled_path.parent.mkdir(parents=True, exist_ok=True)
         distilled_payload = {
             "node_id": node_id,
+            "failure_cycle": cycle,
+            "failure_time": time_val,
+            "failure_window": window,
             "log_excerpt": "\n".join(sim_text.splitlines()[:40]),
             "log_length": original_size,
+            "waveform_path": waveform_str,
         }
         distilled_path.write_text(json.dumps(distilled_payload, indent=2))
         distilled_size = len(distilled_path.read_bytes())
         compression_ratio = original_size / distilled_size if distilled_size else 0.0
 
+        failure_focus = ["sim_log"]
+        if waveform_present:
+            failure_focus.append("waveform")
         dataset = DistilledDataset(
             original_data_size=original_size,
             distilled_data_size=distilled_size,
             compression_ratio=compression_ratio,
-            failure_focus_areas=["sim_log"],
+            failure_focus_areas=failure_focus,
             data_path=str(distilled_path),
         )
         emit_runtime_event(
@@ -107,7 +125,7 @@ class DistillWorker(threading.Thread):
             task_id=task.task_id,
             correlation_id=task.correlation_id,
             status=TaskStatus.SUCCESS,
-            log_output="Distillation complete.",
+            log_output=_distill_log(cycle, time_val, window, waveform_str),
             distilled_dataset=dataset,
         )
 
@@ -118,3 +136,50 @@ class DistillWorker(threading.Thread):
             body=result.model_dump_json().encode(),
             properties=pika.BasicProperties(content_type="application/json"),
         )
+
+
+_FAIL_CYCLE_RE = re.compile(r"\bcycle\b\s*=?\s*(\d+)", re.IGNORECASE)
+_FAIL_TIME_RE = re.compile(r"\btime\b\s*=?\s*(\d+)", re.IGNORECASE)
+
+
+def _extract_failure_info(text: str | None) -> tuple[int | None, int | None]:
+    if not text:
+        return None, None
+    lines = text.splitlines()
+    candidates = [line for line in lines if "FAIL" in line or "ERROR" in line]
+    if not candidates:
+        candidates = lines
+    cycle = None
+    time_val = None
+    for line in candidates:
+        if cycle is None:
+            match = _FAIL_CYCLE_RE.search(line)
+            if match:
+                cycle = int(match.group(1))
+        if time_val is None:
+            match = _FAIL_TIME_RE.search(line)
+            if match:
+                time_val = int(match.group(1))
+        if cycle is not None or time_val is not None:
+            break
+    return cycle, time_val
+
+
+def _distill_log(
+    cycle: int | None,
+    time_val: int | None,
+    window: dict | None,
+    waveform_path: str | None,
+) -> str:
+    parts = ["Distillation complete."]
+    if cycle is not None or time_val is not None:
+        cycle_msg = str(cycle) if cycle is not None else "unknown"
+        time_msg = str(time_val) if time_val is not None else "unknown"
+        parts.append(f"failure_cycle={cycle_msg} failure_time={time_msg}")
+    if window:
+        parts.append(f"window_cycles={window.get('start_cycle')}..{window.get('end_cycle')}")
+    if waveform_path:
+        parts.append(f"waveform_path={waveform_path}")
+    else:
+        parts.append("waveform_present=no")
+    return " ".join(parts)
