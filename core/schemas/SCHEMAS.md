@@ -73,6 +73,7 @@ Specifies which deterministic worker should execute the task.
 | Value                                 | Description                                    |
 | ------------------------------------- | ---------------------------------------------- |
 | `LINTER = "LinterWorker"`             | Code linting and style checking                |
+| `TESTBENCH_LINTER = "TestbenchLinterWorker"` | Testbench compile/lint checks              |
 | `SIMULATOR = "SimulatorWorker"`       | Hardware simulation and verification           |
 | `SYNTHESIZER = "SynthesizerWorker"`   | Logic synthesis and optimization               |
 | `DISTILLATION = "DistillationWorker"` | Waveform/log data distillation and compression |

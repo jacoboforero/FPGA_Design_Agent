@@ -126,6 +126,7 @@ class TestWorkerType:
         """Test that WorkerType has correct string values."""
         expected_values = {
             "LINTER": "LinterWorker",
+            "TESTBENCH_LINTER": "TestbenchLinterWorker",
             "SIMULATOR": "SimulatorWorker",
             "SYNTHESIZER": "SynthesizerWorker",
             "DISTILLATION": "DistillationWorker"
@@ -137,13 +138,14 @@ class TestWorkerType:
     
     def test_enum_members(self):
         """Test that all expected members exist."""
-        expected_members = {"LINTER", "SIMULATOR", "SYNTHESIZER", "DISTILLATION"}
+        expected_members = {"LINTER", "TESTBENCH_LINTER", "SIMULATOR", "SYNTHESIZER", "DISTILLATION"}
         actual_members = {member.name for member in WorkerType}
         assert actual_members == expected_members
     
     def test_worker_type_names(self):
         """Test that worker type names are descriptive."""
         assert "Worker" in WorkerType.LINTER.value
+        assert "Worker" in WorkerType.TESTBENCH_LINTER.value
         assert "Worker" in WorkerType.SIMULATOR.value
         assert "Worker" in WorkerType.SYNTHESIZER.value
         assert "Worker" in WorkerType.DISTILLATION.value

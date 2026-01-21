@@ -1035,7 +1035,13 @@ def collect_specs_from_text(module_name: str, spec_text: str, interactive: bool 
             return _collect_multi_specs(gateway, spec_text, spec_path, interactive)
 
     if module_name:
-        spec_text = f"Module: {module_name}\n{spec_text}".strip()
+        spec_module = _extract_module_name(spec_text)
+        if spec_module:
+            spec_name = _sanitize_name(spec_module)
+            arg_name = _sanitize_name(module_name)
+            if spec_name != arg_name:
+                module_name = spec_name
+        spec_text = _set_module_name_in_text(spec_text, module_name)
         spec_path.write_text(spec_text.strip() + "\n")
 
     checklist = build_empty_checklist()

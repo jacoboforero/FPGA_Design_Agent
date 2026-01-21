@@ -14,7 +14,7 @@ make deps
 make cli
 ```
 The CLI prompts you to press Enter to open `$EDITOR` so you can paste the initial specification.
-The container includes Verilator 5.044 and Icarus (`iverilog`/`vvp`) for lint and simulation.
+The container includes Verilator 5.044 and Icarus (`iverilog`/`vvp`) for RTL lint, testbench lint, and simulation.
 `make cli` and `make shell` will source `.env` if it exists, and the CLI also loads `.env` at startup.
 `make deps` installs the OpenAI client extra required for LLM-backed agents.
 The container sets `EDITOR=nano`; override by setting `EDITOR` in `.env` if you prefer another editor.
@@ -40,7 +40,7 @@ PYTHONPATH=. python apps/cli/cli.py --timeout 120 [--run-name my_run]
 ## Multi-module specs
 You can define multiple modules in one spec by repeating `Module: <name>` blocks. Optionally add `Top: <module>` to mark the top-level; otherwise the first module is used. Text before the first `Module:` line is treated as shared defaults and is prepended to each module section.
 
-Only the top module runs TB/SIM; submodules stop after lint.
+Only the top module runs TB/TB lint/SIM; submodules stop after lint.
 
 ## Typical flows
 - **With LLM + tools (host-only fallback):**

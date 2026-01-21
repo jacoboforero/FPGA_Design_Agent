@@ -6,11 +6,13 @@ Short map of the moving pieces. For the story, start with [overview.md](./overvi
 - **Orchestrator** — reads `design_context.json` + `dag.json`, walks the DAG, publishes tasks, consumes results, advances state, and writes task memory.
 - **RabbitMQ** — queues for agents (`agent_tasks`), deterministic work (`process_tasks`), simulations (`simulation_tasks`), results (`results`), and DLQ.
 - **Agents (LLM-backed)** — spec-helper, planner, implementation, testbench, reflection, debug.
-- **Workers (deterministic)** — lint, simulation, distillation.
+- **Workers (deterministic)** — RTL lint, testbench lint, simulation, distillation.
 - **Storage** — `artifacts/generated/` (design context + RTL/TB), `artifacts/task_memory/` (logs, artifact paths, insights; CLI auto-purges per run), and `artifacts/observability/` (per-run event logs and cost summaries).
 
 ## Execution path (per node)
-`PENDING → IMPLEMENTING → LINTING → TESTBENCHING → SIMULATING → DONE` (on pass), or `SIMULATING → DISTILLING → REFLECTING → DEBUGGING → FAILED` on sim failure.
+`PENDING → IMPLEMENTING → LINTING → TESTBENCHING → TB_LINTING → SIMULATING → DONE` (on pass), or `SIMULATING → DISTILLING → REFLECTING → DEBUGGING → FAILED` on sim failure.
+
+If testbench lint fails, the orchestrator skips sim and runs `DEBUGGING → FAILED`.
 
 For multi-module runs, only the top module executes TB/SIM; submodules stop after lint and are marked DONE. The orchestrator enqueues the next task only when the prior stage returns `SUCCESS`. Distill/reflect/debug run only after sim failures.
 

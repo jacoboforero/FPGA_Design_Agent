@@ -1,7 +1,7 @@
 """
 Minimal orchestrator for the demo. Loads DAG and Design Context, publishes
 tasks to RabbitMQ queues, consumes results, and advances a simple state machine:
-Implementation -> Lint -> Testbench -> Simulation -> Done (on pass).
+Implementation -> Lint -> Testbench -> TB Lint -> Simulation -> Done (on pass).
 On simulation failure, it runs Distill -> Reflect -> Debug and marks FAILED.
 """
 from __future__ import annotations
@@ -33,9 +33,10 @@ RESULTS_ROUTING_KEY = "RESULTS"
 class DemoOrchestrator:
     """
     Drives a richer state machine:
-        PENDING -> IMPLEMENTING -> LINTING -> TESTBENCHING -> SIMULATING -> DONE (on pass)
+        PENDING -> IMPLEMENTING -> LINTING -> TESTBENCHING -> TB_LINTING -> SIMULATING -> DONE (on pass)
         SIMULATING (fail) -> DISTILLING -> REFLECTING -> DEBUGGING -> FAILED
-    Persists logs/artifact paths to Task Memory. Testbench stage builds TB before simulation.
+        TB_LINTING (fail) -> DEBUGGING -> FAILED
+    Persists logs/artifact paths to Task Memory. Testbench stage builds TB before TB lint and simulation.
     """
 
     def __init__(
@@ -125,6 +126,7 @@ class DemoOrchestrator:
                     "impl": impl_task,
                     "lint": None,
                     "tb": None,
+                    "tb_lint": None,
                     "sim": None,
                     "distill": None,
                     "reflect": None,
@@ -191,6 +193,11 @@ class DemoOrchestrator:
                         distill = self._publish_task(ch, EntityType.LIGHT_DETERMINISTIC, WorkerType.DISTILLATION, target_node)
                         tasks[target_node]["distill"] = distill
                         continue
+                    if stage == "tb_lint":
+                        self._advance(target_node, NodeState.DEBUGGING)
+                        debug = self._publish_task(ch, EntityType.REASONING, AgentType.DEBUG, target_node)
+                        tasks[target_node]["debug"] = debug
+                        continue
                     self._advance(target_node, NodeState.FAILED)
                     active_nodes.discard(target_node)
                     done_nodes.add(target_node)
@@ -214,6 +221,15 @@ class DemoOrchestrator:
                     tb_task = self._publish_task(ch, EntityType.REASONING, AgentType.TESTBENCH, target_node)
                     tasks[target_node]["tb"] = tb_task
                 elif stage == "tb":
+                    self._advance(target_node, NodeState.TB_LINTING)
+                    tb_lint_task = self._publish_task(
+                        ch,
+                        EntityType.LIGHT_DETERMINISTIC,
+                        WorkerType.TESTBENCH_LINTER,
+                        target_node,
+                    )
+                    tasks[target_node]["tb_lint"] = tb_lint_task
+                elif stage == "tb_lint":
                     self._advance(target_node, NodeState.SIMULATING)
                     sim_task = self._publish_task(ch, EntityType.HEAVY_DETERMINISTIC, WorkerType.SIMULATOR, target_node)
                     tasks[target_node]["sim"] = sim_task

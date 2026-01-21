@@ -55,6 +55,7 @@ class AgentType(Enum):
 class WorkerType(Enum):
     """Specifies which deterministic worker should execute the task."""
     LINTER = "LinterWorker"
+    TESTBENCH_LINTER = "TestbenchLinterWorker"
     SIMULATOR = "SimulatorWorker"
     SYNTHESIZER = "SynthesizerWorker"
     DISTILLATION = "DistillationWorker"

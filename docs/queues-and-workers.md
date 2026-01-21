@@ -4,7 +4,7 @@ RabbitMQ is the glue between the orchestrator and every runtime. Keep the routin
 
 ## Queues
 - `agent_tasks` — LLM agents (spec-helper, planner, implementation, testbench, reflection, debug)
-- `process_tasks` — deterministic/light work (lint, distill, misc tooling)
+- `process_tasks` — deterministic/light work (RTL lint, testbench lint, distill, misc tooling)
 - `simulation_tasks` — heavier runs (sim)
 - `results` — all completions land here
 - `dead_letter_queue` — DLX target for rejected messages
@@ -22,7 +22,7 @@ RabbitMQ is the glue between the orchestrator and every runtime. Keep the routin
 
 ## Worker pools (default routing keys)
 - `REASONING` → agents
-- `LIGHT_DETERMINISTIC` → lint/distill
+- `LIGHT_DETERMINISTIC` → RTL lint/testbench lint/distill
 - `HEAVY_DETERMINISTIC` → simulation
 
 See [schemas.md](./schemas.md) for the controlled vocabularies (`AgentType`, `WorkerType`, `EntityType`, `TaskStatus`, etc.).

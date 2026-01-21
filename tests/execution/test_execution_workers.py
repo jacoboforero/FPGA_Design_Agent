@@ -16,6 +16,7 @@ from tests.execution.helpers import FakeGateway, FakeResponse
 from workers.distill.worker import DistillWorker
 from workers.lint.worker import LintWorker
 from workers.sim.worker import SimulationWorker
+from workers.tb_lint.worker import TestbenchLintWorker
 
 
 def _iface_signals() -> list[dict]:
@@ -216,6 +217,55 @@ def test_lint_worker_success(tmp_path, monkeypatch):
         entity_type=EntityType.LIGHT_DETERMINISTIC,
         task_type=WorkerType.LINTER,
         context={"rtl_path": str(rtl_path)},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+
+
+def test_tb_lint_worker_missing_tool(tmp_path):
+    worker = TestbenchLintWorker(connection_params=None, stop_event=None)
+    worker.iverilog = None
+    rtl_path = tmp_path / "demo.sv"
+    tb_path = tmp_path / "demo_tb.sv"
+    rtl_path.write_text("module demo; endmodule\n")
+    tb_path.write_text("module demo_tb; endmodule\n")
+    task = TaskMessage(
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.TESTBENCH_LINTER,
+        context={"rtl_path": str(rtl_path), "tb_path": str(tb_path)},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "Icarus not found" in result.log_output
+
+
+def test_tb_lint_worker_missing_file(tmp_path):
+    worker = TestbenchLintWorker(connection_params=None, stop_event=None)
+    task = TaskMessage(
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.TESTBENCH_LINTER,
+        context={"rtl_path": "missing.sv", "tb_path": "missing_tb.sv"},
+    )
+    with pytest.raises(TaskInputError):
+        worker.handle_task(task)
+
+
+def test_tb_lint_worker_success(tmp_path, monkeypatch):
+    worker = TestbenchLintWorker(connection_params=None, stop_event=None)
+    worker.iverilog = "iverilog"
+    rtl_path = tmp_path / "demo.sv"
+    tb_path = tmp_path / "demo_tb.sv"
+    rtl_path.write_text("module demo; endmodule\n")
+    tb_path.write_text("module demo_tb; endmodule\n")
+
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("workers.tb_lint.worker.subprocess.run", fake_run)
+    task = TaskMessage(
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.TESTBENCH_LINTER,
+        context={"rtl_path": str(rtl_path), "tb_path": str(tb_path)},
     )
     result = worker.handle_task(task)
     assert result.status is TaskStatus.SUCCESS

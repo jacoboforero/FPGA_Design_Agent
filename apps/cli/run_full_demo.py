@@ -1,8 +1,8 @@
 """
 Full demo runner:
 - Uses locked specs to generate design context + DAG
-- Launches agent runtimes (implementation/testbench/reflection/debug/spec helper) and deterministic workers (lint/sim/distill)
-- Runs orchestrator to drive Implementation -> Lint -> Testbench -> Simulation -> Distill -> Reflection
+- Launches agent runtimes (implementation/testbench/reflection/debug/spec helper) and deterministic workers (lint/tb-lint/sim/distill)
+- Runs orchestrator to drive Implementation -> Lint -> Testbench -> TB Lint -> Simulation -> Distill -> Reflection
 Requires RabbitMQ running (docker-compose up -d in infrastructure) and toolchains installed.
 """
 from __future__ import annotations
@@ -26,6 +26,7 @@ from agents.reflection.worker import ReflectionWorker
 from agents.debug.worker import DebugWorker
 from agents.spec_helper.worker import SpecHelperWorker
 from workers.lint.worker import LintWorker
+from workers.tb_lint.worker import TestbenchLintWorker
 from workers.sim.worker import SimulationWorker
 from workers.distill.worker import DistillWorker
 from orchestrator.orchestrator_service import DemoOrchestrator
@@ -93,6 +94,7 @@ def main() -> None:
         DebugWorker(params, stop_event),
         SpecHelperWorker(params, stop_event),
         LintWorker(params, stop_event),
+        TestbenchLintWorker(params, stop_event),
         DistillWorker(params, stop_event),
         SimulationWorker(params, stop_event),
     ]
