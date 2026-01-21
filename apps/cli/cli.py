@@ -25,6 +25,7 @@ from agents.planner.worker import PlannerWorker
 
 # Workers
 from workers.lint.worker import LintWorker
+from workers.acceptance.worker import AcceptanceWorker
 from workers.tb_lint.worker import TestbenchLintWorker
 from workers.sim.worker import SimulationWorker
 from workers.distill.worker import DistillWorker
@@ -81,6 +82,7 @@ def start_workers(params: pika.ConnectionParameters, stop_event: threading.Event
         SpecHelperWorker(params, stop_event),
         LintWorker(params, stop_event),
         TestbenchLintWorker(params, stop_event),
+        AcceptanceWorker(params, stop_event),
         DistillWorker(params, stop_event),
         SimulationWorker(params, stop_event),
     ]

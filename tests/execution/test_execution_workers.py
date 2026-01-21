@@ -13,6 +13,7 @@ from agents.testbench.worker import TestbenchWorker
 from core.runtime.retry import TaskInputError
 from core.schemas.contracts import AgentType, EntityType, TaskMessage, TaskStatus, WorkerType
 from tests.execution.helpers import FakeGateway, FakeResponse
+from workers.acceptance.worker import AcceptanceWorker
 from workers.distill.worker import DistillWorker
 from workers.lint.worker import LintWorker
 from workers.sim.worker import SimulationWorker
@@ -271,6 +272,59 @@ def test_tb_lint_worker_success(tmp_path, monkeypatch):
     assert result.status is TaskStatus.SUCCESS
 
 
+def test_acceptance_worker_no_requirements(sandbox):
+    worker = AcceptanceWorker(connection_params=None, stop_event=None)
+    task = TaskMessage(
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.ACCEPTANCE,
+        context={"node_id": "demo", "acceptance": {}},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert "No acceptance criteria" in result.log_output
+
+
+def test_acceptance_worker_missing_artifact(sandbox):
+    worker = AcceptanceWorker(connection_params=None, stop_event=None)
+    task = TaskMessage(
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.ACCEPTANCE,
+        context={
+            "node_id": "demo",
+            "acceptance": {"required_artifacts": [{"name": "lint_report", "mandatory": True}]},
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "Missing required artifact" in result.log_output
+
+
+def test_acceptance_worker_metric_passes(sandbox):
+    worker = AcceptanceWorker(connection_params=None, stop_event=None)
+    report = Path("artifacts/task_memory/demo/sim/coverage_report.json")
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({"metrics": {"branch": 0.9}}))
+    task = TaskMessage(
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.ACCEPTANCE,
+        context={
+            "node_id": "demo",
+            "acceptance": {
+                "acceptance_metrics": [
+                    {
+                        "metric_id": "branch",
+                        "operator": ">=",
+                        "target_value": "0.8",
+                        "metric_source": "coverage_report",
+                    }
+                ]
+            },
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+
+
 def test_sim_worker_missing_tools(tmp_path, monkeypatch):
     worker = SimulationWorker(connection_params=None, stop_event=None)
     monkeypatch.setattr("workers.sim.worker.shutil.which", lambda name: None)
@@ -509,6 +563,48 @@ def test_debug_worker_invalid_json(sandbox):
     result = worker.handle_task(task)
     assert result.status is TaskStatus.FAILURE
     assert "valid JSON" in result.log_output
+
+
+def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
+    class SequenceGateway:
+        def __init__(self, responses):
+            self.responses = responses
+            self.calls = 0
+
+        async def generate(self, messages, config):
+            resp = self.responses[self.calls]
+            self.calls += 1
+            return resp
+
+    worker = DebugWorker(connection_params=None, stop_event=None)
+    monkeypatch.setenv("DEBUG_MAX_ATTEMPTS", "3")
+    worker.gateway = SequenceGateway(
+        [
+            FakeResponse(content="not json"),
+            FakeResponse(content="still not json"),
+            FakeResponse(
+                content=json.dumps(
+                    {
+                        "summary": "ok",
+                        "suggested_changes": ["change"],
+                        "risks": [],
+                        "next_steps": ["step"],
+                    }
+                )
+            ),
+        ]
+    )
+    log = Path("artifacts/task_memory/demo/sim/log.txt")
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("FAIL")
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.DEBUG,
+        context={"node_id": "demo"},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert worker.gateway.calls == 3
 
 
 def test_debug_worker_success(sandbox):

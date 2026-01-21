@@ -56,6 +56,7 @@ class WorkerType(Enum):
     """Specifies which deterministic worker should execute the task."""
     LINTER = "LinterWorker"
     TESTBENCH_LINTER = "TestbenchLinterWorker"
+    ACCEPTANCE = "AcceptanceWorker"
     SIMULATOR = "SimulatorWorker"
     SYNTHESIZER = "SynthesizerWorker"
     DISTILLATION = "DistillationWorker"

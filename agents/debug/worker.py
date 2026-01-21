@@ -14,7 +14,7 @@ from core.observability.emitter import emit_runtime_event
 from agents.common.base import AgentWorkerBase
 from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, init_llm_gateway
 from core.observability.agentops_tracker import get_tracker
-from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
+from core.runtime.retry import TaskInputError
 
 
 class DebugWorker(AgentWorkerBase):
@@ -61,55 +61,68 @@ class DebugWorker(AgentWorkerBase):
         temperature = float(os.getenv("LLM_TEMPERATURE_DEBUG", "0.2"))
         cfg = GenerationConfig(temperature=temperature, max_tokens=max_tokens)
 
-        try:
-            resp = asyncio.run(self.gateway.generate(messages=msgs, config=cfg))  # type: ignore[arg-type]
-        except Exception as exc:  # noqa: BLE001
-            if is_transient_error(exc):
-                raise RetryableError(f"Debug LLM transient error: {exc}")
+        max_attempts = int(os.getenv("DEBUG_MAX_ATTEMPTS", "3"))
+        last_error: str | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = asyncio.run(self.gateway.generate(messages=msgs, config=cfg))  # type: ignore[arg-type]
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"Debug LLM call failed: {exc}"
+                if attempt < max_attempts:
+                    continue
+                return ResultMessage(
+                    task_id=task.task_id,
+                    correlation_id=task.correlation_id,
+                    status=TaskStatus.FAILURE,
+                    log_output=last_error,
+                )
+
+            tracker = get_tracker()
+            try:
+                tracker.log_llm_call(
+                    agent=self.runtime_name,
+                    node_id=node_id,
+                    model=getattr(resp, "model_name", "unknown"),
+                    provider=getattr(resp, "provider", "unknown"),
+                    prompt_tokens=getattr(resp, "input_tokens", 0),
+                    completion_tokens=getattr(resp, "output_tokens", 0),
+                    total_tokens=getattr(resp, "total_tokens", 0),
+                    estimated_cost_usd=getattr(resp, "estimated_cost_usd", None),
+                    metadata={"stage": "debug", "attempt": attempt},
+                )
+            except Exception:
+                pass
+
+            parsed = _safe_json(resp.content)
+            if parsed:
+                emit_runtime_event(
+                    runtime=self.runtime_name,
+                    event_type="task_completed",
+                    payload={"task_id": str(task.task_id)},
+                )
+                return ResultMessage(
+                    task_id=task.task_id,
+                    correlation_id=task.correlation_id,
+                    status=TaskStatus.SUCCESS,
+                    artifacts_path=None,
+                    log_output=resp.content,
+                    reflections=json.dumps(parsed, indent=2),
+                )
+            last_error = "Debug LLM response was not valid JSON."
+            if attempt < max_attempts:
+                continue
             return ResultMessage(
                 task_id=task.task_id,
                 correlation_id=task.correlation_id,
                 status=TaskStatus.FAILURE,
-                log_output=f"Debug LLM call failed: {exc}",
+                log_output=last_error,
             )
 
-        tracker = get_tracker()
-        try:
-            tracker.log_llm_call(
-                agent=self.runtime_name,
-                node_id=node_id,
-                model=getattr(resp, "model_name", "unknown"),
-                provider=getattr(resp, "provider", "unknown"),
-                prompt_tokens=getattr(resp, "input_tokens", 0),
-                completion_tokens=getattr(resp, "output_tokens", 0),
-                total_tokens=getattr(resp, "total_tokens", 0),
-                estimated_cost_usd=getattr(resp, "estimated_cost_usd", None),
-                metadata={"stage": "debug"},
-            )
-        except Exception:
-            pass
-
-        parsed = _safe_json(resp.content)
-        if not parsed:
-            return ResultMessage(
-                task_id=task.task_id,
-                correlation_id=task.correlation_id,
-                status=TaskStatus.FAILURE,
-                log_output="Debug LLM response was not valid JSON.",
-            )
-
-        emit_runtime_event(
-            runtime=self.runtime_name,
-            event_type="task_completed",
-            payload={"task_id": str(task.task_id)},
-        )
         return ResultMessage(
             task_id=task.task_id,
             correlation_id=task.correlation_id,
-            status=TaskStatus.SUCCESS,
-            artifacts_path=None,
-            log_output=resp.content,
-            reflections=json.dumps(parsed, indent=2),
+            status=TaskStatus.FAILURE,
+            log_output=last_error or "Debug LLM response was not valid JSON.",
         )
 
 

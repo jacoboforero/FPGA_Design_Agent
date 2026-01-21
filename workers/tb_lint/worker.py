@@ -20,6 +20,8 @@ RESULTS_ROUTING_KEY = "RESULTS"
 
 
 class TestbenchLintWorker(threading.Thread):
+    __test__ = False
+
     def __init__(self, connection_params: pika.ConnectionParameters, stop_event: threading.Event):
         super().__init__(daemon=True)
         self.connection_params = connection_params

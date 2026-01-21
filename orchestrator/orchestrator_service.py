@@ -1,7 +1,7 @@
 """
 Minimal orchestrator for the demo. Loads DAG and Design Context, publishes
 tasks to RabbitMQ queues, consumes results, and advances a simple state machine:
-Implementation -> Lint -> Testbench -> TB Lint -> Simulation -> Done (on pass).
+Implementation -> Lint -> Testbench -> TB Lint -> Simulation -> Acceptance -> Done (on pass).
 On simulation failure, it runs Distill -> Reflect -> Debug and marks FAILED.
 """
 from __future__ import annotations
@@ -33,9 +33,10 @@ RESULTS_ROUTING_KEY = "RESULTS"
 class DemoOrchestrator:
     """
     Drives a richer state machine:
-        PENDING -> IMPLEMENTING -> LINTING -> TESTBENCHING -> TB_LINTING -> SIMULATING -> DONE (on pass)
+        PENDING -> IMPLEMENTING -> LINTING -> TESTBENCHING -> TB_LINTING -> SIMULATING -> ACCEPTING -> DONE (on pass)
         SIMULATING (fail) -> DISTILLING -> REFLECTING -> DEBUGGING -> FAILED
         TB_LINTING (fail) -> DEBUGGING -> FAILED
+        ACCEPTING (fail) -> FAILED
     Persists logs/artifact paths to Task Memory. Testbench stage builds TB before TB lint and simulation.
     """
 
@@ -128,6 +129,7 @@ class DemoOrchestrator:
                     "tb": None,
                     "tb_lint": None,
                     "sim": None,
+                    "acceptance": None,
                     "distill": None,
                     "reflect": None,
                     "debug": None,
@@ -234,6 +236,15 @@ class DemoOrchestrator:
                     sim_task = self._publish_task(ch, EntityType.HEAVY_DETERMINISTIC, WorkerType.SIMULATOR, target_node)
                     tasks[target_node]["sim"] = sim_task
                 elif stage == "sim":
+                    self._advance(target_node, NodeState.ACCEPTING)
+                    accept_task = self._publish_task(
+                        ch,
+                        EntityType.LIGHT_DETERMINISTIC,
+                        WorkerType.ACCEPTANCE,
+                        target_node,
+                    )
+                    tasks[target_node]["acceptance"] = accept_task
+                elif stage == "acceptance":
                     self._advance(target_node, NodeState.DONE)
                     active_nodes.discard(target_node)
                     done_nodes.add(target_node)

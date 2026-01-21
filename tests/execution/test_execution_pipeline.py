@@ -14,6 +14,7 @@ from core.schemas.contracts import AgentType, EntityType, TaskMessage, TaskStatu
 from orchestrator.context_builder import DemoContextBuilder
 from orchestrator.task_memory import TaskMemory
 from tests.execution.helpers import FakeGateway, FakeResponse
+from workers.acceptance.worker import AcceptanceWorker
 from workers.distill.worker import DistillWorker
 from workers.lint.worker import LintWorker
 from workers.sim.worker import SimulationWorker
@@ -155,7 +156,18 @@ def _run_execution(
             )
             results[node_id]["sim"] = result
             if result.status is TaskStatus.SUCCESS:
-                print(f"[exec] node={node_id} sim passed")
+                result = _run_stage(
+                    workers["acceptance"],
+                    _make_task(EntityType.LIGHT_DETERMINISTIC, WorkerType.ACCEPTANCE, ctx),
+                    task_memory,
+                    node_id,
+                    "acceptance",
+                )
+                results[node_id]["acceptance"] = result
+                if result.status is TaskStatus.SUCCESS:
+                    print(f"[exec] node={node_id} acceptance passed")
+                else:
+                    print(f"[exec] node={node_id} acceptance failed")
                 pending.remove(node_id)
                 done.add(node_id)
                 continue
@@ -204,7 +216,7 @@ def _run_execution(
     return results
 
 
-def _stub_lint_and_sim(monkeypatch, sim_fail: bool):
+def _stub_lint_and_sim(monkeypatch, sim_fail: bool, tb_lint_fail: bool = False):
     monkeypatch.setattr("workers.lint.worker.shutil.which", lambda name: f"/bin/{name}")
     monkeypatch.setattr("workers.sim.worker.shutil.which", lambda name: f"/bin/{name}")
     monkeypatch.setattr("workers.tb_lint.worker.shutil.which", lambda name: f"/bin/{name}")
@@ -213,6 +225,8 @@ def _stub_lint_and_sim(monkeypatch, sim_fail: bool):
         if cmd[0].endswith("verilator"):
             return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
         if cmd[0].endswith("iverilog"):
+            if "-tnull" in cmd and tb_lint_fail:
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="tb lint error")
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         if cmd[0].endswith("vvp"):
             if any(arg.startswith("+DUMP_FILE=") for arg in cmd):
@@ -272,6 +286,7 @@ def _build_workers():
     tb_lint = TestbenchLintWorker(connection_params=None, stop_event=None)
     tb_lint.iverilog = "iverilog"
     sim = SimulationWorker(connection_params=None, stop_event=None)
+    acceptance = AcceptanceWorker(connection_params=None, stop_event=None)
     distill = DistillWorker(connection_params=None, stop_event=None)
     return {
         "impl": impl,
@@ -279,6 +294,7 @@ def _build_workers():
         "tb": tb,
         "tb_lint": tb_lint,
         "sim": sim,
+        "acceptance": acceptance,
         "distill": distill,
         "reflect": refl,
         "debug": dbg,
@@ -307,7 +323,9 @@ def test_execution_pipeline_success(tmp_path, monkeypatch):
     results = _run_execution(ctx_builder, dag, workers, task_memory)
 
     assert results["event_logger_top"]["sim"].status is TaskStatus.SUCCESS
+    assert results["event_logger_top"]["acceptance"].status is TaskStatus.SUCCESS
     assert (task_memory_root / "event_logger_top" / "sim" / "log.txt").exists()
+    assert (task_memory_root / "event_logger_top" / "acceptance" / "log.txt").exists()
 
     for node_id in ("axi_lite_regs", "event_fifo"):
         assert (task_memory_root / node_id / "impl" / "log.txt").exists()
@@ -339,7 +357,39 @@ def test_execution_pipeline_failure_triggers_distill(tmp_path, monkeypatch):
     results = _run_execution(ctx_builder, dag, workers, task_memory)
 
     assert results["event_logger_top"]["sim"].status is TaskStatus.FAILURE
+    assert "acceptance" not in results["event_logger_top"]
     assert (task_memory_root / "event_logger_top" / "tb_lint" / "log.txt").exists()
     assert (task_memory_root / "event_logger_top" / "distill" / "distilled_dataset.json").exists()
     assert (task_memory_root / "event_logger_top" / "reflect" / "reflection_insights.json").exists()
     assert (task_memory_root / "event_logger_top" / "debug" / "reflections.json").exists()
+
+
+def test_execution_pipeline_tb_lint_failure_triggers_debug(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    fixtures_dir = Path(__file__).resolve().parents[1] / "fixtures" / "execution"
+    design_context = _load_fixture(fixtures_dir / "complex_design_context.json")
+    dag = _load_fixture(fixtures_dir / "complex_dag.json")
+
+    design_context_path = tmp_path / "artifacts/generated/design_context.json"
+    dag_path = tmp_path / "artifacts/generated/dag.json"
+    _write_fixture(design_context_path, design_context)
+    _write_fixture(dag_path, dag)
+
+    task_memory_root = tmp_path / "artifacts/task_memory"
+    rtl_root = tmp_path / "artifacts/generated"
+
+    workers = _build_workers()
+    _stub_lint_and_sim(monkeypatch, sim_fail=False, tb_lint_fail=True)
+
+    ctx_builder = DemoContextBuilder(design_context_path, rtl_root)
+    task_memory = TaskMemory(task_memory_root)
+    results = _run_execution(ctx_builder, dag, workers, task_memory)
+
+    assert results["event_logger_top"]["tb_lint"].status is TaskStatus.FAILURE
+    assert "sim" not in results["event_logger_top"]
+    assert "acceptance" not in results["event_logger_top"]
+    assert "distill" not in results["event_logger_top"]
+    assert "reflect" not in results["event_logger_top"]
+    assert results["event_logger_top"]["debug"].status is TaskStatus.SUCCESS
+    assert (task_memory_root / "event_logger_top" / "tb_lint" / "log.txt").exists()
+    assert (task_memory_root / "event_logger_top" / "debug" / "log.txt").exists()

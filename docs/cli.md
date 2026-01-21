@@ -40,7 +40,7 @@ PYTHONPATH=. python apps/cli/cli.py --timeout 120 [--run-name my_run]
 ## Multi-module specs
 You can define multiple modules in one spec by repeating `Module: <name>` blocks. Optionally add `Top: <module>` to mark the top-level; otherwise the first module is used. Text before the first `Module:` line is treated as shared defaults and is prepended to each module section.
 
-Only the top module runs TB/TB lint/SIM; submodules stop after lint.
+Only the top module runs TB/TB lint/SIM/acceptance; submodules stop after lint.
 
 ## Typical flows
 - **With LLM + tools (host-only fallback):**

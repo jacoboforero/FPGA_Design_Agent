@@ -6,14 +6,18 @@ Cover contracts first, then the orchestration flow. Keep fast tests default; gat
 - `tests/core/schemas`: enums, Task/Result validation, any agent-specific payloads.
 
 ## Integration (broker + workers)
-- Happy path: implementation → lint → testbench → simulation → DONE; assert states and artifacts/logs exist.
+- Happy path: implementation → lint → testbench → TB lint → simulation → acceptance → DONE; assert states and artifacts/logs exist.
 - Failure: missing file → DLQ, schema mismatch → DLQ, transient tool error → one retry then DLQ.
 - Sim failure: distill → reflect → debug → FAILED; assert logs/insights are persisted.
+- TB lint failure: debug → FAILED; assert TB lint log + debug output exist.
+- Acceptance failure: mark FAILED; assert acceptance log includes missing artifacts/metrics.
 - Timeout: long sim triggers timeout → distill → reflect → debug → FAILED.
 - Ordering: verify orchestrator issues tasks in the defined sequence and marks DONE/FAILED correctly.
 
 ## Workers
-- Lint: Verilator on good/bad fixtures; expect exit code + logs.
+- RTL lint: Verilator on good/bad fixtures; expect exit code + logs.
+- Testbench lint: iverilog -tnull on good/bad TBs; expect exit code + logs.
+- Acceptance: required artifacts + metrics checks (coverage report/log parsing).
 - Simulation: iverilog/vvp on simple RTL/TB; expect exit code + stdout/stderr captured.
 - Distill: sample sim log/waveform → distilled JSON path.
 

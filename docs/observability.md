@@ -4,7 +4,7 @@ This repo now emits lightweight observability and cost data via AgentOps plus lo
 
 ## How it works
 - `core/observability/agentops_tracker.py` starts an AgentOps trace per run (if configured) and records every LLM call (model, provider, tokens, estimated cost) into `artifacts/observability/costs.jsonl`, with a rolling summary in `cost_summary.json`.
-- LLM calls from spec-helper, implementation, and testbench agents are logged. Deterministic paths stay untouched.
+- LLM calls from spec-helper, implementation, testbench, reflection, and debug agents are logged. Deterministic paths stay untouched.
 - The global EventEmitter includes an AgentOps sink plus a local JSONL sink; events are written to a per-run file in `artifacts/observability/`.
 - AgentOps auto-instruments OpenAI/Groq calls when enabled; all logging is best-effort and will no-op if AgentOps is not configured.
 

@@ -1,15 +1,15 @@
 # Multi-Agent Hardware Design System
 
-LLM-backed agents plus deterministic workers that turn a frozen hardware spec into RTL, testbenches, lint/sim results, and analysis artifacts. Planning is frozen first; execution then runs mechanically through queues and a small state machine.
+LLM-backed agents plus deterministic workers that turn a frozen hardware spec into RTL, testbenches, lint (RTL/TB), sim results, and analysis artifacts. Planning is frozen first; execution then runs mechanically through queues and a small state machine.
 
 ## What works today
 - End-to-end pipeline via CLI (stubbed EDA path works without keys; LLM/tooling paths optional).
-- Agents for implementation, testbench, reflection, debug, spec-helper; workers for lint, simulation, distillation.
+- Agents for implementation, testbench, reflection, debug, spec-helper; workers for RTL lint, testbench lint, acceptance gating, simulation, distillation.
 - RabbitMQ-based orchestration with task memory under `artifacts/task_memory/` (CLI auto-purges per run).
 - Multi-module specs supported in a single input; full TB/sim runs for the top module only.
 
 ## Quick start (containerized, recommended)
-Use the pinned Verilator toolchain (5.044) inside Docker for consistent results across machines. The container also includes Icarus (`iverilog`/`vvp`) for simulation.
+Use the pinned Verilator toolchain (5.044) inside Docker for consistent results across machines. The container also includes Icarus (`iverilog`/`vvp`) for testbench lint and simulation.
 
 1) **Prereqs**
    - Docker + Docker Compose
@@ -53,7 +53,7 @@ Open the repo in a Dev Container to use the same pinned toolchain automatically.
 - `apps/cli/` — main entrypoint
 - `orchestrator/` — state machine, planner, task memory, context builder
 - `agents/` — LLM-backed roles
-- `workers/` — deterministic lint/sim/distill
+- `workers/` — deterministic RTL lint / testbench lint / acceptance gating / sim / distill
 - `core/schemas/` — contracts and enums
 - `adapters/llm/` — gateway to OpenAI/Groq
 - `infrastructure/` — RabbitMQ compose files

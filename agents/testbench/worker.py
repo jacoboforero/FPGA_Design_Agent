@@ -22,6 +22,7 @@ from core.runtime.retry import RetryableError, TaskInputError, is_transient_erro
 class TestbenchWorker(AgentWorkerBase):
     handled_types = {AgentType.TESTBENCH}
     runtime_name = "agent_testbench"
+    __test__ = False
 
     def __init__(self, connection_params, stop_event):
         super().__init__(connection_params, stop_event)
