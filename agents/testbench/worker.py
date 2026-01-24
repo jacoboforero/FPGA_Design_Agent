@@ -15,6 +15,7 @@ from core.schemas.contracts import AgentType, ResultMessage, TaskMessage, TaskSt
 from core.observability.emitter import emit_runtime_event
 from agents.common.base import AgentWorkerBase
 from agents.common.llm_gateway import init_llm_gateway, Message, MessageRole, GenerationConfig
+from agents.common.tb_sanitizer import sanitize_testbench
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
 
@@ -77,11 +78,19 @@ class TestbenchWorker(AgentWorkerBase):
         tb_source = "\n".join(
             line for line in tb_source.splitlines() if not line.strip().startswith(("`systemverilog", "```"))
         )
+        # Fix common LLM mistake: $value$plusargs("DUMP") is invalid (it requires a second variable argument).
+        # Use $test$plusargs for presence checks, and reserve $value$plusargs for value extraction with a format string.
+        tb_source = re.sub(
+            r"\$value\$plusargs\s*\(\s*(['\"])DUMP\1\s*\)",
+            r"$test$plusargs(\1DUMP\1)",
+            tb_source,
+        )
         tb_source = re.sub(r"\$stop\s*(\([^;]*\))?\s*;", "$finish;", tb_source)
         if not tb_source.strip().startswith("`timescale"):
             tb_source = "`timescale 1ns/1ps\n\n" + tb_source
         if "endmodule" not in tb_source:
             tb_source = tb_source.rstrip() + "\nendmodule\n"
+        tb_source = sanitize_testbench(tb_source)
         try:
             tb_path.write_text(tb_source)
         except Exception as exc:  # noqa: BLE001
@@ -152,12 +161,20 @@ class TestbenchWorker(AgentWorkerBase):
             "You are a Verification Agent. Generate a simple self-checking Verilog-2001 testbench.\n"
             "No code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no logic/always_ff/always_comb/interfaces). "
             "Use regs for driven signals, wires for DUT outputs. Keep it concise and target the stated test goals. "
+            "Strict Verilog-2001 compatibility: declare all regs/wires/integers at module scope (no declarations inside initial/always/for/while blocks) "
+            "and avoid declaration-time initialization inside procedural blocks. "
             "Name the testbench module tb_<node_id>. "
             "Include an integer cycle counter incremented on the main clock edge. On any failure, print a single-line "
             "message that includes cycle=<cycle> and time=<time> plus key signals. "
-            "Include optional VCD dump controls: if +DUMP is present, set $dumpfile from +DUMP_FILE=<path> (default dump.vcd), "
-            "call $dumpvars(0, tb_<node_id>), and use $dumpoff/$dumpon to restrict to +DUMP_START=<cycle> and +DUMP_END=<cycle> "
-            "if provided (use $value$plusargs; avoid SystemVerilog strings). "
+            "Avoid race conditions: drive DUT inputs on the opposite clock edge (e.g. drive on negedge if DUT samples on posedge), "
+            "or after a small #1 delay, and never change stimulus in the same timestep as the sampling clock edge. "
+            "When using a reference model updated on the sampling edge with nonblocking assignments, perform checks after updates "
+            "(e.g. in an always @(posedge clk) begin #1; ... end) so DUT/ref values are stable. "
+            "Include optional VCD dump controls: if +DUMP is present (use $test$plusargs), set $dumpfile from "
+            "+DUMP_FILE=<path> (default dump.vcd) (use $value$plusargs with %s), call $dumpvars(0, tb_<node_id>), "
+            "and use $dumpoff/$dumpon to restrict to +DUMP_START=<cycle> and +DUMP_END=<cycle> if provided "
+            "(use $value$plusargs with %d; avoid SystemVerilog strings). Do NOT treat DUMP_START=0 as \"disabled\"; "
+            "if a dump window is provided and start==0, keep dumping enabled from time 0 (do not $dumpoff permanently). "
             "Never use $stop; always terminate with $finish on pass/fail (use $finish(1) on failure, $finish(0) on pass if supported)."
         )
         user = (

@@ -74,6 +74,7 @@ class SimulationWorker(threading.Thread):
         rtl_path = task.context.get("rtl_path")
         tb_path = task.context.get("tb_path")
         node_id = task.context.get("node_id")
+        attempt = _parse_attempt(task.context.get("attempt"))
         if not iverilog or not vvp:
             return ResultMessage(
                 task_id=task.task_id,
@@ -130,6 +131,7 @@ class SimulationWorker(threading.Thread):
                 rerun_log = _maybe_rerun_with_dump(
                     vvp=vvp,
                     node_id=node_id,
+                    attempt=attempt,
                     cycle=cycle,
                     log_lines=log_lines,
                 )
@@ -225,6 +227,7 @@ def _maybe_rerun_with_dump(
     *,
     vvp: str,
     node_id: str | None,
+    attempt: int | None,
     cycle: int | None,
     log_lines: list[str],
 ) -> dict:
@@ -241,21 +244,20 @@ def _maybe_rerun_with_dump(
     after = int(os.getenv("SIM_FAIL_WINDOW_AFTER", "5"))
     start_cycle = max(0, cycle - before)
     end_cycle = cycle + after
-    waveform_path = Path("artifacts/task_memory") / node_id / "sim" / "waveform.vcd"
+    waveform_path = Path("artifacts/task_memory") / node_id / _stage_dir("sim", attempt) / "waveform.vcd"
     waveform_path.parent.mkdir(parents=True, exist_ok=True)
 
-    rerun_cmd = [
-        vvp,
-        "/tmp/sim.out",
-        "+DUMP",
-        f"+DUMP_START={start_cycle}",
-        f"+DUMP_END={end_cycle}",
-        f"+DUMP_FILE={waveform_path}",
-    ]
+    # Many benches gate dumping with $dumpoff/$dumpon and (incorrectly) treat DUMP_START=0 as "disabled".
+    # If we want to start at cycle 0, omit DUMP_START/DUMP_END entirely so the bench dumps from time 0.
+    use_window = start_cycle > 0
+    rerun_cmd = [vvp, "/tmp/sim.out", "+DUMP", f"+DUMP_FILE={waveform_path}"]
+    if use_window:
+        rerun_cmd.extend([f"+DUMP_START={start_cycle}", f"+DUMP_END={end_cycle}"])
     log_lines.append("[rerun]")
-    log_lines.append(
-        f"Re-running for waveform capture (cycles {start_cycle}..{end_cycle}).",
-    )
+    if use_window:
+        log_lines.append(f"Re-running for waveform capture (cycles {start_cycle}..{end_cycle}).")
+    else:
+        log_lines.append("Re-running for waveform capture from cycle 0 (window omitted; DUMP_START=0 can break some benches).")
     log_lines.append(f"cmd: {' '.join(rerun_cmd)}")
     try:
         rerun = subprocess.run(rerun_cmd, capture_output=True, text=True, timeout=30)
@@ -270,3 +272,19 @@ def _maybe_rerun_with_dump(
         return {"waveform_path": str(waveform_path)}
     log_lines.append("Waveform not generated; testbench may not support dump plusargs.")
     return {}
+
+
+def _parse_attempt(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        attempt = int(value)
+    except Exception:
+        return None
+    return attempt if attempt > 0 else None
+
+
+def _stage_dir(kind: str, attempt: int | None) -> str:
+    if attempt is None:
+        return kind
+    return f"{kind}_attempt{attempt}"

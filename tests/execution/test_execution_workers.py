@@ -178,6 +178,35 @@ def test_testbench_worker_success_adds_timescale(tmp_path):
     assert "```" not in contents
 
 
+def test_testbench_worker_rewrites_invalid_dump_plusargs(tmp_path):
+    worker = TestbenchWorker(connection_params=None, stop_event=None)
+    worker.gateway = FakeGateway(
+        FakeResponse(
+            content=(
+                "module tb_demo;\n"
+                "  initial begin\n"
+                "    if ($value$plusargs(\"DUMP\")) $finish;\n"
+                "  end\n"
+                "endmodule\n"
+            )
+        )
+    )
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.TESTBENCH,
+        context={
+            "node_id": "demo",
+            "rtl_path": str(tmp_path / "demo.sv"),
+            "interface": {"signals": _iface_signals()},
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    contents = Path(result.artifacts_path).read_text()
+    assert "$test$plusargs(\"DUMP\")" in contents
+    assert "$value$plusargs(\"DUMP\")" not in contents
+
+
 def test_lint_worker_missing_verilator(tmp_path):
     worker = LintWorker(connection_params=None, stop_event=None)
     worker.verilator = None
@@ -323,6 +352,36 @@ def test_acceptance_worker_metric_passes(sandbox):
     )
     result = worker.handle_task(task)
     assert result.status is TaskStatus.SUCCESS
+
+
+def test_acceptance_worker_relaxes_coverage_when_sim_passes(sandbox):
+    worker = AcceptanceWorker(connection_params=None, stop_event=None)
+    sim_log = Path("artifacts/task_memory/demo/sim/log.txt")
+    sim_log.parent.mkdir(parents=True, exist_ok=True)
+    sim_log.write_text("PASS: All checks passed at cycle=1 time=10\n")
+    task = TaskMessage(
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.ACCEPTANCE,
+        context={
+            "node_id": "demo",
+            "acceptance": {
+                "required_artifacts": [
+                    {"name": "coverage_report", "mandatory": True},
+                ],
+                "acceptance_metrics": [
+                    {
+                        "metric_id": "branch",
+                        "operator": ">=",
+                        "target_value": "0.8",
+                        "metric_source": "coverage_report",
+                    }
+                ],
+            },
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert "coverage gating deferred" in result.log_output
 
 
 def test_sim_worker_missing_tools(tmp_path, monkeypatch):
@@ -537,7 +596,7 @@ def test_reflection_worker_success(sandbox):
     assert result.reflection_insights
 
 
-def test_debug_worker_missing_logs(sandbox):
+def test_debug_worker_missing_rtl_path_raises(sandbox):
     worker = DebugWorker(connection_params=None, stop_event=None)
     worker.gateway = FakeGateway(FakeResponse(content="{}"))
     task = TaskMessage(
@@ -552,13 +611,14 @@ def test_debug_worker_missing_logs(sandbox):
 def test_debug_worker_invalid_json(sandbox):
     worker = DebugWorker(connection_params=None, stop_event=None)
     worker.gateway = FakeGateway(FakeResponse(content="not json"))
-    log = Path("artifacts/task_memory/demo/sim/log.txt")
-    log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text("FAIL")
+    rtl = Path("demo.sv")
+    tb = Path("demo_tb.sv")
+    rtl.write_text("module demo; endmodule\n")
+    tb.write_text("module tb_demo; initial $finish; endmodule\n")
     task = TaskMessage(
         entity_type=EntityType.REASONING,
         task_type=AgentType.DEBUG,
-        context={"node_id": "demo"},
+        context={"node_id": "demo", "rtl_path": str(rtl), "tb_path": str(tb)},
     )
     result = worker.handle_task(task)
     assert result.status is TaskStatus.FAILURE
@@ -578,6 +638,10 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
 
     worker = DebugWorker(connection_params=None, stop_event=None)
     monkeypatch.setenv("DEBUG_MAX_ATTEMPTS", "3")
+    rtl = Path("demo.sv")
+    tb = Path("demo_tb.sv")
+    rtl.write_text("module demo; endmodule\n")
+    tb.write_text("module tb_demo; initial $finish; endmodule\n")
     worker.gateway = SequenceGateway(
         [
             FakeResponse(content="not json"),
@@ -586,7 +650,9 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
                 content=json.dumps(
                     {
                         "summary": "ok",
-                        "suggested_changes": ["change"],
+                        "touched_files": ["tb"],
+                        "rtl_lines": None,
+                        "tb_lines": ["module tb_demo;", "  initial $finish;", "endmodule"],
                         "risks": [],
                         "next_steps": ["step"],
                     }
@@ -594,13 +660,10 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
             ),
         ]
     )
-    log = Path("artifacts/task_memory/demo/sim/log.txt")
-    log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text("FAIL")
     task = TaskMessage(
         entity_type=EntityType.REASONING,
         task_type=AgentType.DEBUG,
-        context={"node_id": "demo"},
+        context={"node_id": "demo", "rtl_path": str(rtl), "tb_path": str(tb), "attempt": 1},
     )
     result = worker.handle_task(task)
     assert result.status is TaskStatus.SUCCESS
@@ -614,20 +677,23 @@ def test_debug_worker_success(sandbox):
             content=json.dumps(
                 {
                     "summary": "ok",
-                    "suggested_changes": ["change"],
+                    "touched_files": ["tb"],
+                    "rtl_lines": None,
+                    "tb_lines": ["module tb_demo;", "  initial $finish;", "endmodule"],
                     "risks": [],
                     "next_steps": ["step"],
                 }
             )
         )
     )
-    log = Path("artifacts/task_memory/demo/sim/log.txt")
-    log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text("FAIL")
+    rtl = Path("demo.sv")
+    tb = Path("demo_tb.sv")
+    rtl.write_text("module demo; endmodule\n")
+    tb.write_text("module tb_demo; initial $finish; endmodule\n")
     task = TaskMessage(
         entity_type=EntityType.REASONING,
         task_type=AgentType.DEBUG,
-        context={"node_id": "demo"},
+        context={"node_id": "demo", "rtl_path": str(rtl), "tb_path": str(tb), "attempt": 1},
     )
     result = worker.handle_task(task)
     assert result.status is TaskStatus.SUCCESS

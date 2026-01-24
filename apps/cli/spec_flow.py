@@ -10,6 +10,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -24,6 +25,7 @@ from agents.spec_helper.checklist import (
 )
 from agents.spec_helper.llm_helper import (
     generate_field_draft,
+    generate_field_draft_options,
     generate_followup_question,
     update_checklist_from_spec,
 )
@@ -61,9 +63,44 @@ WELCOME_BANNER = r"""
 ============================================================
 """
 
+# ---------------------------------------------------------------------------
+# Minimal ANSI color helpers (no extra deps)
+# ---------------------------------------------------------------------------
+
+
+def _colors_enabled() -> bool:
+    if os.getenv("CLI_COLOR", "").strip() == "0":
+        return False
+    if os.getenv("NO_COLOR") is not None:
+        return False
+    if os.getenv("FORCE_COLOR", "").strip() == "1":
+        return True
+    try:
+        return bool(sys.stdout.isatty())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+_COLOR = _colors_enabled()
+
+_RESET = "\033[0m"
+_BOLD = "\033[1m"
+_DIM = "\033[2m"
+_RED = "\033[31m"
+_YELLOW = "\033[33m"
+_BLUE = "\033[34m"
+_MAGENTA = "\033[35m"
+_CYAN = "\033[36m"
+
+
+def _style(text: str, *codes: str) -> str:
+    if not _COLOR or not codes:
+        return text
+    return "".join(codes) + text + _RESET
+
 
 def _print_banner() -> None:
-    print(WELCOME_BANNER)
+    print(_style(WELCOME_BANNER, _BOLD, _CYAN))
     print()
 
 
@@ -98,10 +135,33 @@ def _open_editor_for_spec() -> Tuple[str, Path]:
     SPEC_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     spec_path = SPEC_DIR / f"spec_input_{stamp}.txt"
-    spec_path.write_text("")
     print("Spec Input")
     print("-" * 10)
-    print("Press Enter to open your editor and paste the initial specification.")
+    print("Choose how to provide the spec:")
+    print("1) Create a new spec file (default)")
+    print("2) Use an existing spec file (copied into a new file)")
+    choice = input("Select [1/2]: ").strip().lower()
+    use_existing = choice in ("2", "existing", "file", "path")
+
+    if use_existing:
+        path_text = input("Path to existing spec file: ").strip()
+        if not path_text:
+            print("No path provided; aborting.")
+            return "", spec_path
+        src_path = Path(os.path.expanduser(path_text)).expanduser()
+        if not src_path.exists() or not src_path.is_file():
+            print(f"Spec path not found or not a file: {src_path}")
+            return "", spec_path
+        try:
+            spec_path.write_text(src_path.read_text())
+        except Exception as exc:  # noqa: BLE001
+            print(f"Could not read spec file: {exc}")
+            return "", spec_path
+        print("Existing spec copied into a new file for this run.")
+    else:
+        spec_path.write_text("")
+
+    print("Press Enter to open your editor and paste/confirm the specification.")
     print("Save and close the editor when you're done.")
     print(f"File: {spec_path}")
     try:
@@ -827,7 +887,39 @@ def _complete_checklist(
 
     def _thinking() -> None:
         if interactive:
-            print("\nThinking...", flush=True)
+            print(_style("\nThinking...", _DIM), flush=True)
+
+    def _read_multiline(prompt: str) -> str:
+        print(prompt)
+        print("(finish with an empty line)")
+        lines: list[str] = []
+        while True:
+            try:
+                line = input()
+            except KeyboardInterrupt:
+                raise
+            if not line.strip():
+                break
+            lines.append(line.rstrip("\n"))
+        return "\n".join(lines).strip()
+
+    def _parse_list_answer(answer: str) -> List[str]:
+        if not answer.strip():
+            return []
+        lines = [ln.strip() for ln in answer.splitlines() if ln.strip()]
+        if len(lines) > 1:
+            items: List[str] = []
+            for ln in lines:
+                if ln.startswith(("-", "•")):
+                    ln = ln[1:].strip()
+                if ln and not _is_none_token(ln):
+                    items.append(ln)
+            return items
+        text = lines[0]
+        if "," in text:
+            parts = [p.strip() for p in text.split(",")]
+            return [p for p in parts if p and not _is_none_token(p)]
+        return [] if _is_none_token(text) else [text]
 
     spec_text = _load_spec_text(spec_text)
     _sync_module_name_from_spec()
@@ -863,100 +955,139 @@ def _complete_checklist(
             missing = list_missing_fields(checklist)
             continue
 
-        _thinking()
-        question = generate_followup_question(gateway, field, checklist, spec_text)
-        print(f"\nSpec Helper: {question}")
-        allow_none = field.optional
-        prompt = "Your answer (type 'gen' to draft"
-        if allow_none:
-            prompt += ", 'none' if not applicable"
-        prompt += "): "
         while True:
-            try:
-                answer = input(prompt).strip()
-            except KeyboardInterrupt:
-                raise
-            if not answer:
-                continue
-            lowered = answer.lower()
-            if _is_none_token(answer):
-                if not allow_none:
-                    print("This field is required. Please provide a value or type 'gen' to draft.")
-                    continue
-                set_field(checklist, field.path, _none_value(field))
-                _append_note(f"User answered none for {field.path}", answer)
-                break
-            if lowered in ("gen", "g", "draft"):
-                _thinking()
-                draft = generate_field_draft(gateway, field, checklist, spec_text)
-                draft_text = draft.get("draft_text", "").strip()
-                value = _coerce_answer_value(field, draft.get("value"))
-                if _value_missing(field, value):
-                    if draft_text:
-                        print("\nDraft proposal:")
-                        print(draft_text)
-                    print(f"Draft is missing required structure for {field.path}. Try again or answer manually.")
-                    continue
-                if draft_text:
-                    print("\nDraft proposal:")
-                    print(draft_text)
+            spec_text = _load_spec_text(spec_text)
+            _sync_module_name_from_spec()
+            question = generate_followup_question(gateway, field, checklist, spec_text)
+
+            phase = field.path.split(".", 1)[0] if "." in field.path else field.path
+            phase_missing = [f for f in missing if f.path == phase or f.path.startswith(f"{phase}.")]
+            phase_names: List[str] = []
+            for info in phase_missing[:6]:
+                if "." in info.path:
+                    phase_names.append(info.path.split(".", 1)[1])
                 else:
-                    print("\nDraft proposal ready.")
-                if _confirm("Accept this draft?", True):
-                    set_field(checklist, field.path, value)
-                    if field.path == "module_name":
-                        module_name = _sanitize_name(str(value))
-                        if spec_path:
-                            _set_module_name_in_file(spec_path, module_name)
-                            spec_text = _load_spec_text(spec_text)
-                        else:
-                            spec_text = _set_module_name_in_text(spec_text, module_name)
-                    if draft_text:
-                        _append_note(f"Spec helper draft for {field.path}", draft_text)
-                    else:
-                        _append_note(f"Spec helper draft for {field.path}", _format_value_for_notes(value))
-                    break
-                follow_prompt = "Provide your answer (or type 'gen' to try again"
-                if allow_none:
-                    follow_prompt += ", 'none' if not applicable"
-                follow_prompt += "): "
-                follow_up = input(follow_prompt).strip()
-                if not follow_up:
-                    print("Missing input. Let's try again.")
+                    phase_names.append(info.path)
+            suffix = " ..." if len(phase_missing) > 6 else ""
+            print(
+                _style(
+                    f"\nStatus: {len(missing)} missing fields remaining. "
+                    f"Current section: {phase} ({len(phase_missing)}): {', '.join(phase_names)}{suffix}",
+                    _DIM,
+                )
+            )
+
+            print(f"\n{_style('Missing', _BOLD, _RED)}: {_style(field.path, _BOLD)}")
+            if field.description:
+                print(f"{_style('Why it matters', _YELLOW)}: {field.description}")
+            if question:
+                print(f"\n{_style('Spec Helper', _BLUE, _BOLD)}: {question}")
+
+            print("\nChoose next action:")
+            print(f"  {_style('1', _CYAN, _BOLD)}) Edit the spec in your editor")
+            print(f"  {_style('2', _CYAN, _BOLD)}) Answer here (chat)")
+            print(f"  {_style('3', _CYAN, _BOLD)}) Let the spec helper propose a draft")
+            print()
+
+            choice = input(_style("Select 1/2/3: ", _BOLD)).strip()
+            if choice not in ("1", "2", "3"):
+                print(_style("Please type 1, 2, or 3.", _YELLOW))
+                continue
+
+            if choice == "1":
+                if not spec_path:
+                    print("No spec file available to edit in this mode. Choose option 2 or 3.")
                     continue
-                if _is_none_token(follow_up):
-                    if not allow_none:
-                        print("This field is required. Please provide a value or type 'gen' to draft.")
+                cmd = _select_editor() + [str(spec_path)]
+                subprocess.run(cmd, check=True)
+                spec_text = _load_spec_text(spec_text)
+                break
+
+            if choice == "2":
+                answer = _read_multiline("Type your answer:")
+                if not answer:
+                    print(_style("No input received. Try again.", _YELLOW))
+                    continue
+
+                if _is_none_token(answer):
+                    if not field.optional:
+                        print(_style("This field is required. Provide a value, edit the spec, or choose option 3.", _YELLOW))
                         continue
                     set_field(checklist, field.path, _none_value(field))
-                    _append_note(f"User answered none for {field.path}", follow_up)
+                    _append_note(f"User answered none for {field.path}", answer)
                     break
-                if follow_up.lower() in ("gen", "g", "draft"):
-                    continue
+
                 if field.path == "module_name":
-                    module_name = _sanitize_name(follow_up)
+                    module_name = _sanitize_name(answer.splitlines()[0].strip())
                     set_field(checklist, field.path, module_name)
                     if spec_path:
                         _set_module_name_in_file(spec_path, module_name)
                         spec_text = _load_spec_text(spec_text)
                     else:
                         spec_text = _set_module_name_in_text(spec_text, module_name)
+                    _append_note(f"User answer for {field.path}", module_name)
                     break
-                _append_note(f"User answer for {field.path}", follow_up)
+
+                if field.field_type == "text":
+                    set_field(checklist, field.path, _coerce_answer_value(field, answer))
+                elif field.field_type == "list":
+                    parsed = _parse_list_answer(answer)
+                    if parsed:
+                        set_field(checklist, field.path, parsed)
+
+                _append_note(f"User answer for {field.path}", answer)
                 break
 
+            # choice == "3"
+            _thinking()
+            draft_options = generate_field_draft_options(gateway, field, checklist, spec_text, n_options=3)
+            rendered: List[Tuple[str, Any]] = []
+            for opt in draft_options:
+                if not isinstance(opt, dict):
+                    continue
+                draft_text = str(opt.get("draft_text") or "").strip()
+                value = _coerce_answer_value(field, opt.get("value"))
+                if _value_missing(field, value):
+                    continue
+                note = draft_text or _format_value_for_notes(value)
+                rendered.append((note, value))
+
+            if not rendered:
+                print(_style(f"Spec helper could not draft a valid proposal for {field.path}. Try option 1 or 2.", _YELLOW))
+                continue
+
+            print(_style("\nDraft options:", _MAGENTA, _BOLD))
+            for idx, (note, _) in enumerate(rendered, start=1):
+                print(f"  {_style(str(idx), _CYAN, _BOLD)}) {note}")
+            print(f"  {_style('0', _CYAN, _BOLD)}) Reject / go back")
+
+            selection = input(_style(f"Choose 1-{len(rendered)} to apply, or 0 to reject: ", _BOLD)).strip()
+            if selection in ("0", "n", "no"):
+                reason = input("Why did you reject the drafts? (optional) ").strip()
+                if not reason:
+                    reason = input("What should be different instead? (optional) ").strip()
+                _append_note(f"User rejected draft for {field.path}", reason or "rejected")
+                continue
+
+            try:
+                chosen = int(selection)
+            except ValueError:
+                print(_style("Please type a number.", _YELLOW))
+                continue
+            if chosen < 1 or chosen > len(rendered):
+                print(_style("Invalid choice.", _YELLOW))
+                continue
+
+            note, value = rendered[chosen - 1]
+            set_field(checklist, field.path, value)
+            _append_note(f"Spec helper draft for {field.path}", note)
             if field.path == "module_name":
-                module_name = _sanitize_name(answer)
-                set_field(checklist, field.path, module_name)
+                module_name = _sanitize_name(str(value))
                 if spec_path:
                     _set_module_name_in_file(spec_path, module_name)
                     spec_text = _load_spec_text(spec_text)
                 else:
                     spec_text = _set_module_name_in_text(spec_text, module_name)
-                break
-            if field.field_type == "text":
-                set_field(checklist, field.path, _coerce_answer_value(field, answer))
-            _append_note(f"User answer for {field.path}", answer)
             break
 
         spec_text = _load_spec_text(spec_text)
@@ -965,7 +1096,7 @@ def _complete_checklist(
         checklist = update_checklist_from_spec(gateway, spec_text, checklist)
         missing = list_missing_fields(checklist)
         if any(item.path == field.path for item in missing):
-            print(f"Still missing {field.path}. The last answer could not be applied.")
+            print(_style(f"Still missing {field.path}. The last answer could not be applied.", _RED))
 
     spec_text = _load_spec_text(spec_text)
     return checklist, spec_text
