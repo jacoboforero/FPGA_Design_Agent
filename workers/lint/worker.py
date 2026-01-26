@@ -88,18 +88,25 @@ class LintWorker(threading.Thread):
                 artifacts_path=None,
                 log_output="Verilator not found; set VERILATOR_PATH or install verilator.",
             )
+        strict_warnings = os.getenv("VERILATOR_STRICT_WARNINGS", "0") == "1"
         try:
             cmd = [self.verilator, "--lint-only", "--quiet", "--sv", str(rtl_path)]
             completed = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if completed.returncode != 0:
+            output = (completed.stderr or "") + (completed.stdout or "")
+            output = output.strip()
+            has_error = ("%Error" in output) or ("%Fatal" in output)
+            if completed.returncode != 0 and (strict_warnings or has_error):
                 return ResultMessage(
                     task_id=task.task_id,
                     correlation_id=task.correlation_id,
                     status=TaskStatus.FAILURE,
                     artifacts_path=None,
-                    log_output=completed.stderr or completed.stdout,
+                    log_output=output or "Verilator lint failed.",
                 )
-            log = completed.stdout or "Verilator lint passed."
+            if completed.returncode != 0 and not has_error and not strict_warnings:
+                log = output or "Verilator lint passed (non-fatal warnings)."
+            else:
+                log = output or "Verilator lint passed."
         except subprocess.TimeoutExpired as exc:
             raise RetryableError(f"Verilator timeout: {exc}") from exc
         except Exception as exc:  # noqa: BLE001
