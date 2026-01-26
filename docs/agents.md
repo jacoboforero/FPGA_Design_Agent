@@ -21,8 +21,8 @@ All agents run inside the agent-worker runtime and are selected by `AgentType`. 
   - Success: non-empty insights
 - **Debug**
   - Inputs: failing RTL/TB context, reflection insights, failure signature
-  - Outputs: patched RTL/TB (or justified no-op) + rationale
-  - Success: interface preserved and changes explained
+  - Outputs: patched RTL and/or TB written to the target paths + a structured rationale report
+  - Success: interface preserved, code written, rationale persisted to task memory
 
 ## Interaction rules
 - All work is brokered; agents never call each other directly.

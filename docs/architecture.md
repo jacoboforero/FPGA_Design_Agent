@@ -10,11 +10,13 @@ Short map of the moving pieces. For the story, start with [overview.md](./overvi
 - **Storage** — `artifacts/generated/` (design context + RTL/TB), `artifacts/task_memory/` (logs, artifact paths, insights; CLI auto-purges per run), and `artifacts/observability/` (per-run event logs and cost summaries).
 
 ## Execution path (per node)
-`PENDING → IMPLEMENTING → LINTING → TESTBENCHING → TB_LINTING → SIMULATING → ACCEPTING → DONE` (on pass), or `SIMULATING → DISTILLING → REFLECTING → DEBUGGING → FAILED` on sim failure.
+`PENDING → IMPLEMENTING → LINTING → TESTBENCHING → TB_LINTING → SIMULATING → ACCEPTING → DONE` (on pass).
 
-If testbench lint fails, the orchestrator skips sim and runs `DEBUGGING → FAILED`. If acceptance gating fails, the node is marked FAILED and dependents are blocked.
+On sim failure, the orchestrator runs an analysis+patch loop and re-verifies (bounded retries): `SIMULATING → DISTILLING → REFLECTING → DEBUGGING → (LINTING and/or TB_LINTING) → SIMULATING ... → (ACCEPTING → DONE | FAILED)`.
 
-For multi-module runs, only the top module executes TB/SIM; submodules stop after lint and are marked DONE. The orchestrator enqueues the next task only when the prior stage returns `SUCCESS`. Distill/reflect/debug run only after sim failures.
+If testbench lint fails, the orchestrator runs `DEBUGGING` and then retries verification (bounded retries). If acceptance gating fails, the node is marked FAILED and dependents are blocked.
+
+For multi-module runs, only the top module executes TB/SIM; submodules stop after lint and are marked DONE. The orchestrator enqueues the next task only when the prior stage returns `SUCCESS`. Distill/reflect run only after sim failures.
 
 ## Queue routing (defaults)
 - `REASONING` → `agent_tasks`

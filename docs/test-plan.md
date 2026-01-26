@@ -8,8 +8,8 @@ Cover contracts first, then the orchestration flow. Keep fast tests default; gat
 ## Integration (broker + workers)
 - Happy path: implementation → lint → testbench → TB lint → simulation → acceptance → DONE; assert states and artifacts/logs exist.
 - Failure: missing file → DLQ, schema mismatch → DLQ, transient tool error → one retry then DLQ.
-- Sim failure: distill → reflect → debug → FAILED; assert logs/insights are persisted.
-- TB lint failure: debug → FAILED; assert TB lint log + debug output exist.
+- Sim failure: distill → reflect → debug (patch) → re-run verification (bounded retries) → (DONE or FAILED); assert per-attempt logs/insights are persisted.
+- TB lint failure: debug (patch) → retry verification (bounded retries); assert TB lint log + debug outputs exist.
 - Acceptance failure: mark FAILED; assert acceptance log includes missing artifacts/metrics.
 - Timeout: long sim triggers timeout → distill → reflect → debug → FAILED.
 - Ordering: verify orchestrator issues tasks in the defined sequence and marks DONE/FAILED correctly.

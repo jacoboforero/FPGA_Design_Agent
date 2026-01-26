@@ -9,6 +9,7 @@ import os
 import shutil
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List
@@ -98,6 +99,8 @@ def stop_workers(workers: Iterable[threading.Thread], stop_event: threading.Even
 
 
 def _run_planner_task(params: pika.ConnectionParameters, timeout: float = 30.0) -> None:
+    if timeout <= 0:
+        timeout = float("inf")
     task = TaskMessage(
         entity_type=EntityType.REASONING,
         task_type=AgentType.PLANNER,
@@ -120,6 +123,7 @@ def _run_planner_task(params: pika.ConnectionParameters, timeout: float = 30.0) 
         while (datetime.now(timezone.utc) - start).total_seconds() < timeout:
             method, props, body = ch.basic_get(queue="results", auto_ack=True)
             if body is None:
+                time.sleep(0.05)
                 continue
             result = ResultMessage.model_validate_json(body)
             if result.task_id != task.task_id:
@@ -211,7 +215,7 @@ def run_full(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Hardware agent system CLI")
-    parser.add_argument("--timeout", type=float, default=120.0, help="Pipeline timeout in seconds")
+    parser.add_argument("--timeout", type=float, default=0.0, help="Pipeline timeout in seconds (0 disables)")
     parser.add_argument("--run-name", help="Optional run name for observability/AgentOps")
     return parser
 

@@ -76,7 +76,8 @@ class DistillWorker(threading.Thread):
         node_id = task.context.get("node_id")
         if not node_id:
             raise TaskInputError("Missing node_id in task context.")
-        sim_log = Path("artifacts/task_memory") / node_id / "sim" / "log.txt"
+        attempt = _parse_attempt(task.context.get("attempt"))
+        sim_log = Path("artifacts/task_memory") / node_id / _stage_dir("sim", attempt) / "log.txt"
         if not sim_log.exists():
             raise TaskInputError(f"Missing simulation log for distillation: {sim_log}")
 
@@ -88,13 +89,14 @@ class DistillWorker(threading.Thread):
             before = int(os.getenv("SIM_FAIL_WINDOW_BEFORE", "20"))
             after = int(os.getenv("SIM_FAIL_WINDOW_AFTER", "5"))
             window = {"start_cycle": max(0, cycle - before), "end_cycle": cycle + after}
-        waveform_path = Path("artifacts/task_memory") / node_id / "sim" / "waveform.vcd"
+        waveform_path = Path("artifacts/task_memory") / node_id / _stage_dir("sim", attempt) / "waveform.vcd"
         waveform_present = waveform_path.exists()
         waveform_str = str(waveform_path) if waveform_present else None
-        distilled_path = Path("artifacts/task_memory") / node_id / "distill" / "distilled_dataset.json"
+        distilled_path = Path("artifacts/task_memory") / node_id / _stage_dir("distill", attempt) / "distilled_dataset.json"
         distilled_path.parent.mkdir(parents=True, exist_ok=True)
         distilled_payload = {
             "node_id": node_id,
+            "attempt": attempt,
             "failure_cycle": cycle,
             "failure_time": time_val,
             "failure_window": window,
@@ -183,3 +185,19 @@ def _distill_log(
     else:
         parts.append("waveform_present=no")
     return " ".join(parts)
+
+
+def _parse_attempt(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        attempt = int(value)
+    except Exception:
+        return None
+    return attempt if attempt > 0 else None
+
+
+def _stage_dir(kind: str, attempt: int | None) -> str:
+    if attempt is None:
+        return kind
+    return f"{kind}_attempt{attempt}"

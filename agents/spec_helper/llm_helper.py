@@ -101,13 +101,13 @@ def _default_cfg(max_tokens: int, temperature: float) -> GenerationConfig:
 
 def _resolve_cfg(stage: str) -> GenerationConfig:
     if stage == "question":
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS_SPEC_QUESTION", "200"))
+        max_tokens = int(os.getenv("LLM_MAX_TOKENS_SPEC_QUESTION", "10000"))
         temperature = float(os.getenv("LLM_TEMPERATURE_SPEC_QUESTION", "0.3"))
     elif stage == "draft":
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS_SPEC_DRAFT", "500"))
+        max_tokens = int(os.getenv("LLM_MAX_TOKENS_SPEC_DRAFT", "10000"))
         temperature = float(os.getenv("LLM_TEMPERATURE_SPEC_DRAFT", "0.4"))
     else:
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS_SPEC", "4000"))
+        max_tokens = int(os.getenv("LLM_MAX_TOKENS_SPEC", "10000"))
         temperature = float(os.getenv("LLM_TEMPERATURE_SPEC", "0.2"))
     return _default_cfg(max_tokens, temperature)
 
@@ -248,7 +248,12 @@ def generate_field_draft(
 ) -> Dict[str, Any]:
     system = (
         "You are Spec Helper, drafting missing checklist details for a hardware spec. "
-        "Generate a proposal based on the spec context. "
+        "Generate a proposal based on the spec and the current checklist. "
+        "Your proposal must be faithful to what is already stated; do not introduce new ports, signals, flags, "
+        "protocols, or behaviors unless they are explicitly present in the spec/checklist. "
+        "Avoid adding 'error' behaviors/flags unless the spec explicitly defines them. "
+        "If the spec is silent, make the smallest reasonable assumption and clearly label it as an 'Assumption:' "
+        "in draft_text. Keep draft_text concrete and short (no marketing language). "
         "Return JSON only with keys: draft_text (human-readable) and value (matches the field type). "
         "Use proper JSON types for values; numeric fields must be numbers, not prose. "
         "If the correct answer is 'none' or not applicable, set value to the sentinel: "
@@ -261,10 +266,16 @@ def generate_field_draft(
         "type": field.field_type,
         "item_keys": field.item_keys or [],
     }
+    parent_key = field.path.split(".", 1)[0] if "." in field.path else None
+    relevant_checklist: Dict[str, Any] = {"module_name": checklist.get("module_name")}
+    if parent_key and isinstance(checklist.get(parent_key), dict):
+        relevant_checklist[parent_key] = checklist.get(parent_key)
     user = (
         "Field info:\n"
         f"{json.dumps(field_context, indent=2)}\n\n"
         f"Field shape hint: {_field_shape_hint(field, user_facing=False)}\n\n"
+        "Current checklist context (partial):\n"
+        f"{json.dumps(relevant_checklist, indent=2)}\n\n"
         "Spec text:\n"
         f"{_truncate_text(spec_text)}\n\n"
         "Return JSON with draft_text and value."
@@ -279,3 +290,81 @@ def generate_field_draft(
         "draft_text": parsed.get("draft_text", "").strip() if isinstance(parsed, dict) else "",
         "value": parsed.get("value") if isinstance(parsed, dict) else None,
     }
+
+
+def generate_field_draft_options(
+    gateway: object,
+    field: FieldInfo,
+    checklist: Dict[str, Any],
+    spec_text: str,
+    *,
+    n_options: int = 3,
+) -> List[Dict[str, Any]]:
+    """
+    Generate multiple candidate drafts for a single missing field.
+
+    Returns a list of objects with keys: draft_text (human-readable) and value (typed for the field).
+    """
+    n_options = max(1, min(int(n_options), 5))
+    system = (
+        "You are Spec Helper, drafting missing checklist details for a hardware spec. "
+        f"Generate {n_options} distinct candidate proposals for the missing field. "
+        "Return JSON only with a single key 'options'. "
+        "options must be a JSON array of objects. Each object must have keys: draft_text and value. "
+        "draft_text should be concise and readable by a human. "
+        "value must match the field type exactly.\n\n"
+        "Rules:\n"
+        "- Do not output markdown.\n"
+        "- Do not repeat identical options.\n"
+        "- Be faithful to the spec/checklist. Do not introduce new ports, signals, flags, protocols, or behaviors "
+        "unless they are explicitly present in the spec/checklist.\n"
+        "- Avoid adding 'error' behaviors/flags unless the spec explicitly defines them.\n"
+        "- If you must make assumptions, state them clearly as 'Assumption:' in draft_text, and keep them minimal.\n"
+        "- Avoid vague marketing language; prefer concrete, testable statements.\n"
+        "- Use proper JSON types; numeric fields must be numbers.\n"
+        "- Do not use 'none' for required fields unless the spec explicitly says it is not applicable.\n"
+    )
+    field_context = {
+        "path": field.path,
+        "description": field.description,
+        "type": field.field_type,
+        "item_keys": field.item_keys or [],
+    }
+    parent_key = field.path.split(".", 1)[0] if "." in field.path else None
+    relevant_checklist: Dict[str, Any] = {"module_name": checklist.get("module_name")}
+    if parent_key and isinstance(checklist.get(parent_key), dict):
+        relevant_checklist[parent_key] = checklist.get(parent_key)
+    user = (
+        "Field info:\n"
+        f"{json.dumps(field_context, indent=2)}\n\n"
+        f"Field shape hint: {_field_shape_hint(field, user_facing=False)}\n\n"
+        "Current checklist context (partial):\n"
+        f"{json.dumps(relevant_checklist, indent=2)}\n\n"
+        "Spec text:\n"
+        f"{_truncate_text(spec_text)}\n\n"
+        f"Return JSON: {{\"options\": [ ... {n_options} items ... ]}}"
+    )
+    messages = [
+        Message(role=MessageRole.SYSTEM, content=system),
+        Message(role=MessageRole.USER, content=user),
+    ]
+    content = _run_llm(gateway, messages, stage="draft")
+    parsed = _safe_json(content) or {}
+    options = parsed.get("options") if isinstance(parsed, dict) else None
+    if isinstance(options, list):
+        normalized: List[Dict[str, Any]] = []
+        for opt in options:
+            if not isinstance(opt, dict):
+                continue
+            normalized.append(
+                {
+                    "draft_text": str(opt.get("draft_text") or "").strip(),
+                    "value": opt.get("value"),
+                }
+            )
+        if normalized:
+            return normalized[:n_options]
+
+    # Fallback: single draft
+    one = generate_field_draft(gateway, field, checklist, spec_text)
+    return [one]

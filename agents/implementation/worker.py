@@ -155,7 +155,9 @@ class ImplementationWorker(AgentWorkerBase):
             "Rules: no code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no always_ff/always_comb/logic/interfaces). "
             "If no clock is provided, emit pure combinational logic with continuous assigns only. "
             "If sequential logic is used, declare outputs as reg and drive them in always blocks; no delays inside sequential logic. "
-            "Implement the behavior described by the spec summary; do not invent features not stated."
+            "Implement the behavior described by the spec summary; do not invent features not stated. "
+            "Prefer lint-clean RTL under Verilator: avoid constant comparisons due to bit-width (e.g., don't compare a 3-bit signal to > 7), "
+            "avoid unused signals, and avoid self-assignments like `x <= x`."
         )
         user = (
             f"Module name: {node_id}\n"
