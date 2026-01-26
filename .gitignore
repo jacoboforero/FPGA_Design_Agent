@@ -39,7 +39,7 @@ venv.bak/
 .env
 
 # Project artifacts
-artifacts/task_memory/
+artifacts/
 
 # VS Code extension build output
 apps/vscode-extension/node_modules/
