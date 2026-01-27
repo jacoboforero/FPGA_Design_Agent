@@ -72,6 +72,7 @@ Open the repo in a Dev Container to use the same pinned toolchain automatically.
 - Unit/schema: `pytest tests/core/schemas -q`
 - Workers/planner smoke: `pytest tests/workers/test_* tests/core/test_planner.py`
 
+<<<<<<< HEAD
 ## Docs (start here)
 - `docs/overview.md` — how the system flows
 - `docs/architecture.md` — components and queues
@@ -80,3 +81,13 @@ Open the repo in a Dev Container to use the same pinned toolchain automatically.
 - `docs/observability.md` — AgentOps setup and cost tracking
 - `docs/spec-and-planning.md` — L1–L5 checklist and artifacts
 - `docs/queues-and-workers.md` — broker layout and DLQ notes
+=======
+## Docs (start here)
+- `docs/overview.md` — how the system flows
+- `docs/architecture.md` — components and queues
+- `docs/agents.md` — role-by-role IO
+- `docs/cli.md` — command details
+- `docs/observability.md` — AgentOps setup and cost tracking
+- `docs/spec-and-planning.md` — L1–L5 checklist and artifacts
+- `docs/queues-and-workers.md` — broker layout and DLQ notes
+>>>>>>> 8653a13 (Add Verilog-Eval dataset and processed prompts)
