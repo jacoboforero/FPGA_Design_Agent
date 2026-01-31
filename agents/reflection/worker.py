@@ -38,7 +38,8 @@ class ReflectionWorker(AgentWorkerBase):
         if "node_id" not in ctx:
             raise TaskInputError("Missing node_id in task context.")
         node_id = ctx["node_id"]
-        distill_path = Path("artifacts/task_memory") / node_id / "distill" / "distilled_dataset.json"
+        attempt = _parse_attempt(ctx.get("attempt"))
+        distill_path = Path("artifacts/task_memory") / node_id / _stage_dir("distill", attempt) / "distilled_dataset.json"
         if not distill_path.exists():
             raise TaskInputError(f"Missing distilled dataset: {distill_path}")
 
@@ -59,7 +60,7 @@ class ReflectionWorker(AgentWorkerBase):
             Message(role=MessageRole.SYSTEM, content=system),
             Message(role=MessageRole.USER, content=user),
         ]
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS_REFLECT", "600"))
+        max_tokens = int(os.getenv("LLM_MAX_TOKENS_REFLECT", "10000"))
         temperature = float(os.getenv("LLM_TEMPERATURE_REFLECT", "0.2"))
         cfg = GenerationConfig(temperature=temperature, max_tokens=max_tokens)
 
@@ -139,3 +140,19 @@ def _safe_json(text: str):
         except Exception:
             return None
     return None
+
+
+def _parse_attempt(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        attempt = int(value)
+    except Exception:
+        return None
+    return attempt if attempt > 0 else None
+
+
+def _stage_dir(kind: str, attempt: int | None) -> str:
+    if attempt is None:
+        return kind
+    return f"{kind}_attempt{attempt}"

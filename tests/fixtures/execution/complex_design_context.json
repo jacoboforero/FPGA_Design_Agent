@@ -1,0 +1,219 @@
+{
+  "design_context_hash": "testhash",
+  "top_module": "event_logger_top",
+  "modules": [
+    "axi_lite_regs",
+    "event_fifo",
+    "event_logger_top"
+  ],
+  "nodes": {
+    "event_logger_top": {
+      "rtl_file": "rtl/event_logger_top.sv",
+      "testbench_file": "rtl/event_logger_top_tb.sv",
+      "interface": {
+        "signals": [
+          {
+            "name": "clk",
+            "direction": "INPUT",
+            "width": 1,
+            "semantics": "clock"
+          },
+          {
+            "name": "rst_n",
+            "direction": "INPUT",
+            "width": 1,
+            "semantics": "async reset"
+          },
+          {
+            "name": "event_valid",
+            "direction": "INPUT",
+            "width": 1,
+            "semantics": "event strobe"
+          },
+          {
+            "name": "event_code",
+            "direction": "INPUT",
+            "width": 8,
+            "semantics": "event code"
+          },
+          {
+            "name": "event_data",
+            "direction": "INPUT",
+            "width": 16,
+            "semantics": "event data"
+          },
+          {
+            "name": "irq",
+            "direction": "OUTPUT",
+            "width": 1,
+            "semantics": "interrupt"
+          }
+        ]
+      },
+      "uses_library": [],
+      "clocking": [
+        {
+          "clock_name": "clk",
+          "clock_polarity": "POSEDGE",
+          "reset_name": "rst_n",
+          "reset_polarity": "ACTIVE_LOW",
+          "reset_is_async": true,
+          "description": "single domain"
+        }
+      ],
+      "coverage_goals": {},
+      "demo_behavior": "Top-level event logger stub.",
+      "verification": {
+        "test_goals": [
+          "basic smoke"
+        ],
+        "oracle_strategy": "self-check",
+        "stimulus_strategy": "directed",
+        "pass_fail_criteria": [
+          "no errors"
+        ],
+        "coverage_targets": [],
+        "reset_constraints": {
+          "min_cycles_after_reset": 1,
+          "ordering_notes": "none"
+        }
+      },
+      "acceptance": {
+        "required_artifacts": [],
+        "acceptance_metrics": [],
+        "exclusions": [],
+        "synthesis_target": "fpga_generic"
+      },
+      "verification_scope": "full"
+    },
+    "axi_lite_regs": {
+      "rtl_file": "rtl/axi_lite_regs.sv",
+      "testbench_file": "rtl/axi_lite_regs_tb.sv",
+      "interface": {
+        "signals": [
+          {
+            "name": "clk",
+            "direction": "INPUT",
+            "width": 1,
+            "semantics": "clock"
+          },
+          {
+            "name": "rst_n",
+            "direction": "INPUT",
+            "width": 1,
+            "semantics": "async reset"
+          },
+          {
+            "name": "cfg_enable",
+            "direction": "OUTPUT",
+            "width": 1,
+            "semantics": "enable"
+          }
+        ]
+      },
+      "uses_library": [],
+      "clocking": [
+        {
+          "clock_name": "clk",
+          "clock_polarity": "POSEDGE",
+          "reset_name": "rst_n",
+          "reset_polarity": "ACTIVE_LOW",
+          "reset_is_async": true,
+          "description": "single domain"
+        }
+      ],
+      "coverage_goals": {},
+      "demo_behavior": "AXI-lite regs stub.",
+      "verification": {
+        "test_goals": [
+          "basic smoke"
+        ],
+        "oracle_strategy": "self-check",
+        "stimulus_strategy": "directed",
+        "pass_fail_criteria": [
+          "no errors"
+        ],
+        "coverage_targets": [],
+        "reset_constraints": {
+          "min_cycles_after_reset": 1,
+          "ordering_notes": "none"
+        }
+      },
+      "acceptance": {
+        "required_artifacts": [],
+        "acceptance_metrics": [],
+        "exclusions": [],
+        "synthesis_target": "fpga_generic"
+      },
+      "verification_scope": "lite"
+    },
+    "event_fifo": {
+      "rtl_file": "rtl/event_fifo.sv",
+      "testbench_file": "rtl/event_fifo_tb.sv",
+      "interface": {
+        "signals": [
+          {
+            "name": "clk",
+            "direction": "INPUT",
+            "width": 1,
+            "semantics": "clock"
+          },
+          {
+            "name": "rst_n",
+            "direction": "INPUT",
+            "width": 1,
+            "semantics": "async reset"
+          },
+          {
+            "name": "write_valid",
+            "direction": "INPUT",
+            "width": 1,
+            "semantics": "write"
+          },
+          {
+            "name": "write_ready",
+            "direction": "OUTPUT",
+            "width": 1,
+            "semantics": "write ready"
+          }
+        ]
+      },
+      "uses_library": [],
+      "clocking": [
+        {
+          "clock_name": "clk",
+          "clock_polarity": "POSEDGE",
+          "reset_name": "rst_n",
+          "reset_polarity": "ACTIVE_LOW",
+          "reset_is_async": true,
+          "description": "single domain"
+        }
+      ],
+      "coverage_goals": {},
+      "demo_behavior": "FIFO stub.",
+      "verification": {
+        "test_goals": [
+          "basic smoke"
+        ],
+        "oracle_strategy": "self-check",
+        "stimulus_strategy": "directed",
+        "pass_fail_criteria": [
+          "no errors"
+        ],
+        "coverage_targets": [],
+        "reset_constraints": {
+          "min_cycles_after_reset": 1,
+          "ordering_notes": "none"
+        }
+      },
+      "acceptance": {
+        "required_artifacts": [],
+        "acceptance_metrics": [],
+        "exclusions": [],
+        "synthesis_target": "fpga_generic"
+      },
+      "verification_scope": "lite"
+    }
+  },
+  "standard_library": {}
+}

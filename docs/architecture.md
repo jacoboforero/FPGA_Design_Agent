@@ -6,13 +6,17 @@ Short map of the moving pieces. For the story, start with [overview.md](./overvi
 - **Orchestrator** — reads `design_context.json` + `dag.json`, walks the DAG, publishes tasks, consumes results, advances state, and writes task memory.
 - **RabbitMQ** — queues for agents (`agent_tasks`), deterministic work (`process_tasks`), simulations (`simulation_tasks`), results (`results`), and DLQ.
 - **Agents (LLM-backed)** — spec-helper, planner, implementation, testbench, reflection, debug.
-- **Workers (deterministic)** — lint, simulation, distillation.
-- **Storage** — `artifacts/generated/` (design context + RTL/TB) and `artifacts/task_memory/` (logs, artifact paths, insights).
+- **Workers (deterministic)** — RTL lint, testbench lint, acceptance gating, simulation, distillation.
+- **Storage** — `artifacts/generated/` (design context + RTL/TB), `artifacts/task_memory/` (logs, artifact paths, insights; CLI auto-purges per run), and `artifacts/observability/` (per-run event logs and cost summaries).
 
 ## Execution path (per node)
-`PENDING → IMPLEMENTING → LINTING → TESTBENCHING → SIMULATING → DONE` (on pass), or `SIMULATING → DISTILLING → REFLECTING → DEBUGGING → FAILED` on sim failure.
+`PENDING → IMPLEMENTING → LINTING → TESTBENCHING → TB_LINTING → SIMULATING → ACCEPTING → DONE` (on pass).
 
-The orchestrator enqueues the next task only when the prior stage returns `SUCCESS`. Distill/reflect/debug run only after sim failures.
+On sim failure, the orchestrator runs an analysis+patch loop and re-verifies (bounded retries): `SIMULATING → DISTILLING → REFLECTING → DEBUGGING → (LINTING and/or TB_LINTING) → SIMULATING ... → (ACCEPTING → DONE | FAILED)`.
+
+If testbench lint fails, the orchestrator runs `DEBUGGING` and then retries verification (bounded retries). If acceptance gating fails, the node is marked FAILED and dependents are blocked.
+
+For multi-module runs, only the top module executes TB/SIM; submodules stop after lint and are marked DONE. The orchestrator enqueues the next task only when the prior stage returns `SUCCESS`. Distill/reflect run only after sim failures.
 
 ## Queue routing (defaults)
 - `REASONING` → `agent_tasks`

@@ -1,0 +1,292 @@
+Module: event_logger_top
+Title: Dual-channel timestamped event logger with AXI-Lite control and FIFO
+
+L1
+Role summary: Dual-channel event logger that timestamps incoming events and stores them in a FIFO exposed via AXI-Lite; raises an interrupt on overflow or threshold.
+Key rules:
+- Capture an event when cfg_enable=1, eventX_valid=1, and (eventX_code & cfg_maskX) == cfg_maskX.
+- If both channels are valid in the same cycle and FIFO has space, select round-robin using last_grant; after reset, channel0 has priority.
+- Event word format (64b): [63:32]=timestamp, [31]=src_id (0=event0, 1=event1), [30:23]=code, [22:7]=data, [6:0]=0.
+- If FIFO is full, drop the selected event and set overflow_sticky=1.
+- overflow_sticky clears only on cfg_clear_overflow pulse.
+- irq asserted when cfg_irq_enable=1 and (overflow_sticky=1 or fifo_level >= cfg_threshold). If cfg_threshold=0, irq depends only on overflow_sticky.
+Performance intent: Accept at most one event per cycle; FIFO supports simultaneous read/write.
+Reset semantics: Active-low async reset clears FIFO, timestamp, irq, overflow_sticky, and registers; cfg_enable=0, cfg_mask0/1=0, cfg_threshold=0.
+Corner cases:
+- Both event_valids high in same cycle.
+- FIFO full during event capture.
+- cfg_threshold=0 and cfg_maskX=0.
+- cfg_enable toggles mid-stream.
+- irq_enable toggles while overflow_sticky is set.
+- event_valid pulses during reset assertion/deassertion.
+Open questions:
+- none
+
+L2
+Clocking:
+- clock_name: clk
+  clock_polarity: POSEDGE
+  reset_name: rst_n
+  reset_polarity: ACTIVE_LOW
+  reset_is_async: true
+  description: single synchronous domain for event capture and AXI-Lite
+Signals:
+- name: clk
+  direction: INPUT
+  width_expr: 1
+  semantics: clock
+- name: rst_n
+  direction: INPUT
+  width_expr: 1
+  semantics: async active-low reset
+- name: s_axi_awaddr
+  direction: INPUT
+  width_expr: 8
+  semantics: AXI-Lite write address (byte address, 0x00-0x14 used)
+- name: s_axi_awvalid
+  direction: INPUT
+  width_expr: 1
+  semantics: AXI-Lite write address valid
+- name: s_axi_awready
+  direction: OUTPUT
+  width_expr: 1
+  semantics: AXI-Lite write address ready
+- name: s_axi_wdata
+  direction: INPUT
+  width_expr: 32
+  semantics: AXI-Lite write data
+- name: s_axi_wstrb
+  direction: INPUT
+  width_expr: 4
+  semantics: AXI-Lite byte strobes
+- name: s_axi_wvalid
+  direction: INPUT
+  width_expr: 1
+  semantics: AXI-Lite write valid
+- name: s_axi_wready
+  direction: OUTPUT
+  width_expr: 1
+  semantics: AXI-Lite write ready
+- name: s_axi_bresp
+  direction: OUTPUT
+  width_expr: 2
+  semantics: AXI-Lite write response (OKAY only)
+- name: s_axi_bvalid
+  direction: OUTPUT
+  width_expr: 1
+  semantics: AXI-Lite write response valid
+- name: s_axi_bready
+  direction: INPUT
+  width_expr: 1
+  semantics: AXI-Lite write response ready
+- name: s_axi_araddr
+  direction: INPUT
+  width_expr: 8
+  semantics: AXI-Lite read address (byte address, 0x00-0x14 used)
+- name: s_axi_arvalid
+  direction: INPUT
+  width_expr: 1
+  semantics: AXI-Lite read address valid
+- name: s_axi_arready
+  direction: OUTPUT
+  width_expr: 1
+  semantics: AXI-Lite read address ready
+- name: s_axi_rdata
+  direction: OUTPUT
+  width_expr: 32
+  semantics: AXI-Lite read data
+- name: s_axi_rresp
+  direction: OUTPUT
+  width_expr: 2
+  semantics: AXI-Lite read response (OKAY only)
+- name: s_axi_rvalid
+  direction: OUTPUT
+  width_expr: 1
+  semantics: AXI-Lite read valid
+- name: s_axi_rready
+  direction: INPUT
+  width_expr: 1
+  semantics: AXI-Lite read ready
+- name: event0_valid
+  direction: INPUT
+  width_expr: 1
+  semantics: event channel 0 strobe
+- name: event0_code
+  direction: INPUT
+  width_expr: 8
+  semantics: event channel 0 code
+- name: event0_data
+  direction: INPUT
+  width_expr: 16
+  semantics: event channel 0 data
+- name: event1_valid
+  direction: INPUT
+  width_expr: 1
+  semantics: event channel 1 strobe
+- name: event1_code
+  direction: INPUT
+  width_expr: 8
+  semantics: event channel 1 code
+- name: event1_data
+  direction: INPUT
+  width_expr: 16
+  semantics: event channel 1 data
+- name: irq
+  direction: OUTPUT
+  width_expr: 1
+  semantics: interrupt output
+- name: fifo_level
+  direction: OUTPUT
+  width_expr: 6
+  semantics: current FIFO occupancy (0-32)
+Handshake semantics:
+- name: axi_lite
+  rules: independent read/write channels; single outstanding read and write; OKAY responses only.
+- name: event_inputs
+  rules: event_valid is a 1-cycle pulse sampled on clk; no backpressure; events may be dropped when fifo full or cfg_enable=0.
+Transaction unit: one 32-bit AXI-Lite transfer; one event capture per clock.
+Configuration parameters:
+- name: FIFO_DEPTH
+  default_value: 32
+  description: number of 64-bit entries in event FIFO
+- name: TIMESTAMP_WIDTH
+  default_value: 32
+  description: width of timestamp counter
+- name: EVENT_WORD_WIDTH
+  default_value: 64
+  description: width of packed event word
+
+L3
+Test goals:
+- Correct event word formatting with timestamp and source ID.
+- Round-robin arbitration when both channels assert valid.
+- Overflow behavior and sticky flag handling.
+- IRQ assertion and deassertion based on threshold and overflow.
+- Correct AXI-Lite register access and FIFO read behavior.
+Oracle strategy: Cycle-accurate reference model for timestamp, FIFO, overflow_sticky, and irq.
+Stimulus strategy: Randomized event_valid pulses on both channels with random codes/data, mixed with directed AXI-Lite register writes/reads and mid-stream resets.
+Pass/fail criteria:
+- Event words match reference format and ordering.
+- FIFO level matches reference; no underflow.
+- overflow_sticky and irq match reference each cycle.
+- AXI-Lite reads/writes obey protocol and return expected data.
+Coverage targets:
+- coverage_id: branch
+  description: branch coverage of arbitration and overflow paths
+  metric_type: branch
+  goal: 0.9
+  notes: none
+- coverage_id: toggle
+  description: toggle coverage of event word bits and status flags
+  metric_type: toggle
+  goal: 0.8
+  notes: none
+Reset constraints:
+min_cycles_after_reset: 2
+ordering_notes: begin AXI-Lite and event traffic 2 cycles after reset deasserts.
+Scenarios:
+- scenario_id: reset_and_idle
+  description: reset clears state and no spurious irq
+  stimulus: assert rst_n low for 3 cycles, hold inputs idle
+  oracle: fifo_level=0, overflow_sticky=0, irq=0
+  pass_fail_criteria: outputs stay cleared until reset deasserts
+  illegal: false
+- scenario_id: single_event_capture
+  description: capture event0 with mask pass
+  stimulus: cfg_enable=1, cfg_mask0=0; pulse event0_valid for 1 cycle
+  oracle: one FIFO entry with src_id=0 and correct code/data
+  pass_fail_criteria: fifo_level increments and data matches
+  illegal: false
+- scenario_id: dual_event_round_robin
+  description: both channels valid simultaneously
+  stimulus: pulse event0_valid and event1_valid for 4 consecutive cycles
+  oracle: alternating src_id based on round-robin
+  pass_fail_criteria: event order matches reference arbiter
+  illegal: false
+- scenario_id: overflow_and_irq
+  description: overflow triggers sticky flag and irq
+  stimulus: fill FIFO to full then assert event_valid again
+  oracle: overflow_sticky=1 and irq asserted when enabled
+  pass_fail_criteria: drop count increments, overflow_sticky stays set until cleared
+  illegal: false
+- scenario_id: threshold_irq
+  description: irq on FIFO level threshold
+  stimulus: set cfg_threshold=4 and push 4 events
+  oracle: irq asserts when fifo_level>=4
+  pass_fail_criteria: irq toggles with level and enable
+  illegal: false
+
+L4
+Block diagram:
+- node_id: event_logger_top
+  description: top-level integrating arbiter, timestamp counter, FIFO, and AXI-Lite regs
+  node_type: top_level
+  interface_refs: [event_logger_if]
+  uses_standard_component: false
+  notes: internal timestamp counter free-runs at clk
+- node_id: axi_lite_regs
+  description: AXI-Lite register block
+  node_type: axi_lite_slave
+  interface_refs: [axi_lite_regs_if]
+  uses_standard_component: false
+  notes: provides config and FIFO read port
+- node_id: event_fifo
+  description: synchronous FIFO for event words
+  node_type: fifo
+  interface_refs: [event_fifo_if]
+  uses_standard_component: false
+  notes: depth 32, width 64
+Dependencies:
+- parent_id: axi_lite_regs
+  child_id: event_logger_top
+  dependency_type: structural
+- parent_id: event_fifo
+  child_id: event_logger_top
+  dependency_type: structural
+Clock domains:
+- name: clk
+  frequency_hz: 100000000
+  notes: single synchronous domain
+Resource strategy: 64-bit FIFO depth 32, round-robin arbiter, 32-bit timestamp counter, AXI-Lite register file.
+Latency budget: event captured to FIFO same cycle when ready; AXI-Lite read/write completes within 1-2 cycles.
+Assertion plan:
+sva:
+- if fifo_full then write_ready==0
+- if overflow_sticky then it remains set until cfg_clear_overflow
+- if cfg_irq_enable && (overflow_sticky || fifo_level>=cfg_threshold) then irq==1
+scoreboard_assertions:
+- event word fields match reference model
+- round-robin fairness when both channels active
+
+L5
+Required artifacts:
+- name: rtl
+  description: synthesizable RTL for event_logger_top
+  mandatory: true
+- name: testbench
+  description: self-checking testbench with AXI-Lite BFM and event stimulus
+  mandatory: true
+- name: lint_report
+  description: verilator lint log
+  mandatory: true
+- name: sim_log
+  description: simulation transcript
+  mandatory: true
+- name: coverage_report
+  description: branch/toggle coverage summary
+  mandatory: true
+Acceptance metrics:
+- metric_id: branch
+  description: branch coverage >= 0.9
+  operator: ">="
+  target_value: "0.9"
+  metric_source: coverage_report
+- metric_id: toggle
+  description: toggle coverage >= 0.8
+  operator: ">="
+  target_value: "0.8"
+  metric_source: coverage_report
+Exclusions:
+- no burst AXI support
+- no clock domain crossing
+Synthesis target: fpga_generic

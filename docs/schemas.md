@@ -11,7 +11,7 @@ Shared schemas keep the Orchestrator, agents, and deterministic workers aligned.
 
 - **EntityType:** `REASONING`, `LIGHT_DETERMINISTIC`, `HEAVY_DETERMINISTIC` (maps to routing/worker class).  
 - **AgentType:** `SpecificationHelperAgent`, `PlannerAgent`, `ImplementationAgent`, `TestbenchAgent`, `ReflectionAgent`, `DebugAgent` (selected per agent task).  
-- **WorkerType:** `LinterWorker`, `SimulatorWorker`, `SynthesizerWorker`, `DistillationWorker` (deterministic tasks).  
+- **WorkerType:** `LinterWorker`, `TestbenchLinterWorker`, `AcceptanceWorker`, `SimulatorWorker`, `SynthesizerWorker`, `DistillationWorker` (deterministic tasks).  
 - **TaskPriority:** `LOW`, `MEDIUM`, `HIGH`.  
 - **TaskStatus:** `SUCCESS`, `FAILURE`, `ESCALATED_TO_HUMAN`.
 

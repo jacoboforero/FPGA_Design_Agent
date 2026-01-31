@@ -85,7 +85,7 @@ class SimulationWorker(threading.Thread):
             sources = [rtl_path]
             if tb_path:
                 sources.append(tb_path)
-            cmd = [iverilog, "-g2012", "-g2005-sv", "-o", "/tmp/sim.out", *sources]
+            cmd = [iverilog, "-g2012", "-g2005-sv", "-o", "/tmp/sim.out", *sources] #TODO: make sure this command is correct
             build = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if build.returncode != 0:
                 return ResultMessage(

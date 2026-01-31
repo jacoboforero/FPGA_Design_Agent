@@ -26,7 +26,13 @@ Contracts:
 - Interface in L2 must match what the planner emits; changes require re-planning.
 
 ## Multi-module DAGs
-To generate multi-node DAGs, include `block_diagram` nodes and `dependencies` in `L4_architecture.json`.
-For each module referenced in the block diagram, provide per-module specs named:
-`L1_functional_<module>.json`, `L2_interface_<module>.json`, `L3_verification_<module>.json`, `L5_acceptance_<module>.json`.
-The planner fails if any referenced module spec is missing.
+You can describe multi-module designs in a single spec input by repeating `Module: <name>` sections.
+Optionally add `Top: <module_name>` (or `Top module:`) to mark the top-level; otherwise the first module is used.
+Text before the first `Module:` line is treated as shared defaults and prepended to each module section.
+
+When the spec helper locks the design:
+- Top module specs are written to `L*_*.json` (no suffix).
+- Submodule specs are written with suffixes (e.g., `L1_functional_<module>.json`).
+- `lock.json` records `top_module` and `modules` so the planner can build the DAG.
+
+The planner still uses `L4_architecture.json` from the top module to define the block diagram and dependencies.

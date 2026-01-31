@@ -35,6 +35,8 @@ def clean_artifacts() -> None:
 
 
 def run_planner_task(params, timeout: float) -> None:
+    if timeout <= 0:
+        timeout = float("inf")
     task = TaskMessage(
         entity_type=EntityType.REASONING,
         task_type=AgentType.PLANNER,
@@ -57,6 +59,7 @@ def run_planner_task(params, timeout: float) -> None:
         while time.time() - start < timeout:
             method, props, body = ch.basic_get(queue="results", auto_ack=True)
             if body is None:
+                time.sleep(0.05)
                 continue
             result = ResultMessage.model_validate_json(body)
             if result.task_id != task.task_id:

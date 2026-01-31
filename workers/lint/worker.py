@@ -89,7 +89,7 @@ class LintWorker(threading.Thread):
                 log_output="Verilator not found; set VERILATOR_PATH or install verilator.",
             )
         try:
-            cmd = [self.verilator, "--lint-only", "--quiet", "--sv", str(rtl_path)]
+            cmd = [self.verilator, "--lint-only", "--quiet", "--sv", str(rtl_path)] #TODO: double check the command
             completed = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if completed.returncode != 0:
                 return ResultMessage(

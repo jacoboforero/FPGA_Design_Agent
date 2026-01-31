@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List
@@ -24,6 +26,8 @@ from agents.planner.worker import PlannerWorker
 
 # Workers
 from workers.lint.worker import LintWorker
+from workers.acceptance.worker import AcceptanceWorker
+from workers.tb_lint.worker import TestbenchLintWorker
 from workers.sim.worker import SimulationWorker
 from workers.distill.worker import DistillWorker
 
@@ -78,6 +82,8 @@ def start_workers(params: pika.ConnectionParameters, stop_event: threading.Event
         DebugWorker(params, stop_event),
         SpecHelperWorker(params, stop_event),
         LintWorker(params, stop_event),
+        TestbenchLintWorker(params, stop_event),
+        AcceptanceWorker(params, stop_event),
         DistillWorker(params, stop_event),
         SimulationWorker(params, stop_event),
     ]
@@ -93,6 +99,8 @@ def stop_workers(workers: Iterable[threading.Thread], stop_event: threading.Even
 
 
 def _run_planner_task(params: pika.ConnectionParameters, timeout: float = 30.0) -> None:
+    if timeout <= 0:
+        timeout = float("inf")
     task = TaskMessage(
         entity_type=EntityType.REASONING,
         task_type=AgentType.PLANNER,
@@ -115,6 +123,7 @@ def _run_planner_task(params: pika.ConnectionParameters, timeout: float = 30.0) 
         while (datetime.now(timezone.utc) - start).total_seconds() < timeout:
             method, props, body = ch.basic_get(queue="results", auto_ack=True)
             if body is None:
+                time.sleep(0.05)
                 continue
             result = ResultMessage.model_validate_json(body)
             if result.task_id != task.task_id:
@@ -143,8 +152,16 @@ def _print_section(title: str) -> None:
     print(f"\n{title}\n{bar}")
 
 
+def _purge_task_memory(root: Path) -> None:
+    if not root.exists():
+        return
+    shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+
+
 def run_full(args: argparse.Namespace) -> None:
     run_name = args.run_name or _default_run_name("cli_full")
+    _purge_task_memory(REPO_ROOT / "artifacts" / "task_memory")
     configure_observability(run_name=run_name, default_tags=["cli", "full"])
     # 1) Collect specs interactively
     spec_flow.collect_specs()
@@ -198,7 +215,7 @@ def run_full(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Hardware agent system CLI")
-    parser.add_argument("--timeout", type=float, default=120.0, help="Pipeline timeout in seconds")
+    parser.add_argument("--timeout", type=float, default=0.0, help="Pipeline timeout in seconds (0 disables)")
     parser.add_argument("--run-name", help="Optional run name for observability/AgentOps")
     return parser
 

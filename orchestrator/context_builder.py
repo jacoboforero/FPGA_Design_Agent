@@ -35,4 +35,6 @@ class DemoContextBuilder:
             "demo_behavior": node.get("demo_behavior", "passthrough"),
             "verification": node.get("verification", {}),
             "acceptance": node.get("acceptance", {}),
+            "verification_scope": node.get("verification_scope", "full"),
+            "top_module": self._context.get("top_module"),
         }
