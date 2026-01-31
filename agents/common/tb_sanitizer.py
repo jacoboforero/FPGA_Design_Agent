@@ -11,12 +11,15 @@ _DECL_RE = re.compile(r"^\s*(reg|integer|wire|logic)\b")
 _BEGIN_RE = re.compile(r"\bbegin\b")
 _END_RE = re.compile(r"\bend\b")
 _CHECK_RE = re.compile(r"\b(if\s*\(|\$display\s*\(|\$finish\s*\()", re.IGNORECASE)
+_DUMPFILE_TARGET_BITS = 2048
+_DUMPFILE_NAMES = ("dumpfile", "dump_file", "dump_file_str")
 
 
 def sanitize_testbench(source: str) -> str:
     text = _fix_binary_literal_widths(source)
     lines = text.splitlines()
     lines = _hoist_declarations(lines)
+    lines = _widen_dumpfile_regs(lines)
     lines = _insert_check_delay(lines)
     return "\n".join(lines)
 
@@ -124,4 +127,40 @@ def _insert_check_delay(lines: list[str]) -> list[str]:
         if in_posedge and depth <= 0 and _END_RE.search(line):
             in_posedge = False
 
+    return out
+
+
+def _widen_dumpfile_regs(lines: list[str]) -> list[str]:
+    out: list[str] = []
+    target_msb = _DUMPFILE_TARGET_BITS - 1
+    width_re = re.compile(r"^\s*reg\s*(\[[^]]+\])?\s*([A-Za-z_][A-Za-z0-9_]*)\b(.*)$")
+    numeric_width_re = re.compile(r"\[(\d+)\s*:\s*(\d+)\]")
+
+    for line in lines:
+        match = width_re.match(line)
+        if not match:
+            out.append(line)
+            continue
+        width_decl, name, rest = match.group(1), match.group(2), match.group(3)
+        if name not in _DUMPFILE_NAMES:
+            out.append(line)
+            continue
+        replace_width = False
+        if width_decl is None:
+            replace_width = True
+        else:
+            width_match = numeric_width_re.search(width_decl)
+            if width_match:
+                msb = int(width_match.group(1))
+                lsb = int(width_match.group(2))
+                width = msb - lsb + 1
+                if width < _DUMPFILE_TARGET_BITS:
+                    replace_width = True
+            else:
+                replace_width = False
+        if replace_width:
+            indent = line[: line.find("reg")]
+            out.append(f"{indent}reg [{target_msb}:0] {name}{rest}")
+        else:
+            out.append(line)
     return out

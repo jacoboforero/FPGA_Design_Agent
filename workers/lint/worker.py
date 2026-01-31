@@ -77,8 +77,15 @@ class LintWorker(threading.Thread):
         if "rtl_path" not in task.context:
             raise TaskInputError("Missing rtl_path in task context.")
         rtl_path = Path(task.context["rtl_path"])
-        if not rtl_path.exists():
-            raise TaskInputError(f"RTL missing: {rtl_path}")
+        rtl_paths = task.context.get("rtl_paths") or [str(rtl_path)]
+        if not isinstance(rtl_paths, list):
+            rtl_paths = [str(rtl_path)]
+        rtl_paths = [str(path) for path in rtl_paths if path]
+        if not rtl_paths:
+            raise TaskInputError("Missing rtl_paths in task context.")
+        missing_rtl = [path for path in rtl_paths if not Path(path).exists()]
+        if missing_rtl:
+            raise TaskInputError(f"RTL missing: {missing_rtl}")
 
         if not self.verilator:
             return ResultMessage(
@@ -90,7 +97,8 @@ class LintWorker(threading.Thread):
             )
         strict_warnings = os.getenv("VERILATOR_STRICT_WARNINGS", "0") == "1"
         try:
-            cmd = [self.verilator, "--lint-only", "--quiet", "--sv", str(rtl_path)]
+            rtl_args = list(dict.fromkeys(rtl_paths))
+            cmd = [self.verilator, "--lint-only", "--quiet", "--sv", *rtl_args]
             completed = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             output = (completed.stderr or "") + (completed.stdout or "")
             output = output.strip()

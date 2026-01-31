@@ -85,8 +85,17 @@ class SimulationWorker(threading.Thread):
             )
         if not rtl_path:
             raise TaskInputError("Missing rtl_path in task context.")
+        rtl_paths = task.context.get("rtl_paths") or [rtl_path]
+        if not isinstance(rtl_paths, list):
+            rtl_paths = [rtl_path]
+        rtl_paths = [str(path) for path in rtl_paths if path]
+        if not rtl_paths:
+            raise TaskInputError("Missing rtl_paths in task context.")
+        missing_rtl = [path for path in rtl_paths if not Path(path).exists()]
+        if missing_rtl:
+            raise TaskInputError(f"RTL missing: {missing_rtl}")
         try:
-            sources = [rtl_path]
+            sources = list(dict.fromkeys(rtl_paths))
             if tb_path:
                 sources.append(tb_path)
             cmd = [iverilog, "-g2012", "-g2005-sv", "-o", "/tmp/sim.out", *sources]

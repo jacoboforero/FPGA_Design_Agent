@@ -86,6 +86,7 @@ class DebugWorker(AgentWorkerBase):
             "  If the testbench drives inputs immediately after an @(posedge clk) (same timestep as the sampling edge),\n"
             "  it can race the DUT/reference model and cause deterministic mismatches. Prefer driving on negedge (or add a small #1 delay).\n"
             "- If waveform dumping uses a cycle window, do NOT treat DUMP_START=0 as \"disabled\"; some benches accidentally $dumpoff forever.\n"
+            "- If the context includes child modules and connection wiring, preserve the integration structure; only fix wiring or glue logic as needed.\n"
         )
         user = (
             f"Node: {node_id}\n"

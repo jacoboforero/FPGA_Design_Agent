@@ -44,17 +44,29 @@ class ReflectionWorker(AgentWorkerBase):
             raise TaskInputError(f"Missing distilled dataset: {distill_path}")
 
         distill_text = distill_path.read_text()
+        rtl_path = Path(ctx.get("rtl_path", "")) if ctx.get("rtl_path") else Path("artifacts/generated/rtl") / f"{node_id}.sv"
+        tb_path = Path(ctx.get("tb_path", "")) if ctx.get("tb_path") else rtl_path.with_name(f"{node_id}_tb.sv")
+        rtl_text = rtl_path.read_text() if rtl_path.exists() else f"<<RTL missing at {rtl_path}>>"
+        tb_text = tb_path.read_text() if tb_path.exists() else f"<<TB missing at {tb_path}>>"
         system = (
             "You are a Reflection Agent for RTL verification. "
-            "Analyze the distilled simulation/log data and produce debugging insights. "
-            "Return JSON with keys: hypotheses (list), likely_failure_points (list), "
-            "recommended_probes (list), confidence_score (0-1), analysis_notes (string). "
+            "Analyze the distilled simulation/log data and the full RTL/TB code to produce debugging insights. "
+            "Return JSON with keys: hypotheses (list of strings), likely_failure_points (list of strings), "
+            "recommended_probes (list of strings), confidence_score (0-1), analysis_notes (string). "
+            "Do NOT return objects inside the lists; every list entry must be a plain string. "
+            "Evidence anchoring is required: each hypothesis and likely_failure_point MUST include a bracketed "
+            "evidence citation referencing the provided data (e.g., [evidence: log_excerpt L12 'FAIL: ...'], "
+            "[evidence: waveform_excerpt signal=tb.dut.count time=6000], "
+            "[evidence: RTL L42 'always @(posedge clk...)']). "
+            "If evidence is insufficient, state that explicitly in the analysis_notes. "
             "Do not include code fences or extra text."
         )
         user = (
             f"Node: {node_id}\n"
             f"Coverage goals: {json.dumps(ctx.get('coverage_goals', {}), indent=2)}\n"
-            f"Distilled dataset:\n{distill_text}\n"
+            f"Distilled dataset:\n{distill_text}\n\n"
+            f"RTL source (full, line-numbered):\n{_number_lines(rtl_text)}\n\n"
+            f"Testbench source (full, line-numbered):\n{_number_lines(tb_text)}\n"
         )
         msgs = [
             Message(role=MessageRole.SYSTEM, content=system),
@@ -103,6 +115,8 @@ class ReflectionWorker(AgentWorkerBase):
         insights_payload = parsed.get("insights") if isinstance(parsed, dict) else None
         if insights_payload is None and isinstance(parsed, dict):
             insights_payload = parsed
+        if isinstance(insights_payload, dict):
+            insights_payload = _normalize_reflection_payload(insights_payload)
         try:
             insights = ReflectionInsights(**insights_payload)
         except Exception as exc:  # noqa: BLE001
@@ -156,3 +170,60 @@ def _stage_dir(kind: str, attempt: int | None) -> str:
     if attempt is None:
         return kind
     return f"{kind}_attempt{attempt}"
+
+
+def _number_lines(text: str) -> str:
+    lines = text.splitlines()
+    width = len(str(len(lines))) if lines else 1
+    return "\n".join(f"{idx+1:>{width}}: {line}" for idx, line in enumerate(lines))
+
+
+def _normalize_reflection_payload(payload: dict) -> dict:
+    normalized = dict(payload)
+    for key in ("hypotheses", "likely_failure_points", "recommended_probes"):
+        normalized[key] = _normalize_list_field(normalized.get(key))
+    return normalized
+
+
+def _normalize_list_field(value) -> list[str]:
+    items: list[str] = []
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return items
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                items.append(text)
+            continue
+        if isinstance(item, dict):
+            text = None
+            for key in ("hypothesis", "point", "item", "text", "summary", "detail", "statement"):
+                if key in item and isinstance(item[key], str):
+                    text = item[key].strip()
+                    break
+            if text is None:
+                for val in item.values():
+                    if isinstance(val, str):
+                        text = val.strip()
+                        break
+            if text is None:
+                text = json.dumps(item, ensure_ascii=True)
+            evidence = None
+            for key in ("evidence", "citation", "citations", "source", "sources"):
+                if key in item:
+                    ev = item[key]
+                    if isinstance(ev, str):
+                        evidence = ev.strip()
+                    elif isinstance(ev, list):
+                        ev_items = [e.strip() for e in ev if isinstance(e, str) and e.strip()]
+                        if ev_items:
+                            evidence = "; ".join(ev_items)
+                    break
+            if evidence and "[evidence:" not in text:
+                text = f"{text} [evidence: {evidence}]"
+            items.append(text)
+            continue
+        items.append(str(item))
+    return items

@@ -24,6 +24,8 @@ from core.schemas import (
     L4Specification,
     BlockDiagramNode,
     DependencyEdge,
+    ConnectionEndpoint,
+    Connection,
     ClockDomain,
     AssertionPlan,
     L5Specification,
@@ -123,6 +125,14 @@ def build_l4(spec_id):
             )
         ],
         dependencies=[DependencyEdge(parent_id="fifo_core", child_id="fifo_ctrl", dependency_type="structural")],
+        connections=[
+            Connection(
+                src=ConnectionEndpoint(node_id="fifo_core", port="data_out"),
+                dst=ConnectionEndpoint(node_id="fifo_ctrl", port="data_in"),
+                width="DATA_WIDTH",
+                note="core to ctrl datapath",
+            )
+        ],
         clock_domains=[ClockDomain(name="clk_a"), ClockDomain(name="clk_b")],
         resource_strategy="Use 512-entry dual-port RAM.",
         latency_budget="1 cycle write + 1 cycle read latency budgeted to meet L3 throughput.",

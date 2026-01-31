@@ -157,7 +157,7 @@ def update_checklist_from_spec(
         "'Stimulus strategy' -> stimulus_strategy, "
         "'Pass/fail criteria' -> pass_fail_criteria, "
         "'Coverage goals' -> coverage_targets, "
-        "'L4 Architecture' -> block_diagram/resource_strategy/latency_budget, "
+        "'L4 Architecture' -> block_diagram/dependencies/connections/resource_strategy/latency_budget, "
         "'L5 Acceptance' -> required_artifacts/acceptance_metrics/exclusions. "
         "Treat headings ending with ':' as field labels. "
         "For list sections, collect subsequent bullet lines ('- ') until the next heading. "

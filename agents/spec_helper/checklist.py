@@ -115,6 +115,12 @@ CHECKLIST_SCHEMA: Dict[str, Any] = {
             "description": "Dependency edges between blocks.",
             "optional": True,
         },
+        "connections": {
+            "type": "list_of_objects",
+            "item_keys": ["src", "dst"],
+            "description": "Port-level wiring between blocks (src/dst endpoints).",
+            "optional": True,
+        },
         "clock_domains": {
             "type": "list_of_objects",
             "item_keys": ["name"],

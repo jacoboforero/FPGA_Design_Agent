@@ -65,12 +65,47 @@ def _build_deps_map(
         parent = dep.parent_id
         child = dep.child_id
         if parent and child:
-            deps_map.setdefault(child, set()).add(parent)
+            # Parent depends on child so leaf nodes run first.
+            deps_map.setdefault(parent, set()).add(child)
     for child, parents in deps_map.items():
         missing = [p for p in parents if p not in module_nodes]
         if missing:
             raise RuntimeError(f"Unknown DAG deps for {child}: {missing}")
     return {child: sorted(parents) for child, parents in deps_map.items()}
+
+
+def _collect_transitive_deps(node: str, deps_map: Dict[str, List[str]]) -> List[str]:
+    ordered: List[str] = []
+    seen: set[str] = set()
+    visiting: set[str] = set()
+
+    def _visit(curr: str) -> None:
+        for dep in deps_map.get(curr, []):
+            if dep in visiting:
+                raise RuntimeError(f"DAG cycle detected involving {dep}")
+            if dep in seen:
+                continue
+            visiting.add(dep)
+            _visit(dep)
+            visiting.remove(dep)
+            seen.add(dep)
+            ordered.append(dep)
+
+    _visit(node)
+    return ordered
+
+
+def _filter_connections(connections, scope: set[str]) -> List[dict]:
+    filtered = []
+    for conn in connections:
+        try:
+            src_node = conn.src.node_id
+            dst_node = conn.dst.node_id
+        except Exception:
+            continue
+        if src_node in scope and dst_node in scope:
+            filtered.append(conn.model_dump())
+    return filtered
 
 
 def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> None:
@@ -102,6 +137,8 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
     if len(set(module_nodes)) != len(module_nodes):
         raise RuntimeError(f"Duplicate module ids in block diagram: {module_nodes}")
 
+    deps_map = _build_deps_map(module_nodes, l4)
+
     l2_by_module: Dict[str, L2Specification] = {}
     l1_by_module: Dict[str, L1Specification] = {}
     l3_by_module: Dict[str, L3Specification] = {}
@@ -130,8 +167,12 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
         mod_l3 = l3_by_module[module]
         mod_l5 = l5_by_module[module]
 
+        children = deps_map.get(module, [])
+        dep_order = _collect_transitive_deps(module, deps_map)
+
         rtl_file = f"rtl/{module}.sv"
         tb_file = f"rtl/{module}_tb.sv"
+        rtl_files = [f"rtl/{dep}.sv" for dep in dep_order] + [rtl_file]
 
         interface_signals: List[Dict[str, Any]] = [
             {
@@ -182,8 +223,12 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
         ]
         demo_behavior = "\n".join(line for line in behavior_lines if line)
 
+        scope = {module} | set(dep_order)
+        node_connections = _filter_connections(l4.connections, scope)
+
         nodes[module] = {
             "rtl_file": rtl_file,
+            "rtl_files": rtl_files,
             "testbench_file": tb_file,
             "interface": {"signals": interface_signals},
             "uses_library": [],
@@ -193,6 +238,8 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
             "verification": verification,
             "acceptance": acceptance,
             "verification_scope": "full" if module == top_module else "lite",
+            "children": children,
+            "connections": node_connections,
         }
 
     design_context = {
@@ -201,10 +248,10 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
         "standard_library": {},
         "top_module": top_module,
         "modules": module_nodes,
+        "connections": [conn.model_dump() for conn in l4.connections],
     }
     design_context["design_context_hash"] = _hash_dict(design_context["nodes"])
 
-    deps_map = _build_deps_map(module_nodes, l4)
     dag = {
         "nodes": [
             {

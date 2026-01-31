@@ -173,9 +173,14 @@ class AcceptanceWorker(threading.Thread):
 def _resolve_artifact_path(name: str, ctx: dict, node_id: str, attempt: int | None) -> Path | None:
     base = Path("artifacts/task_memory") / node_id
     rtl_path = Path(ctx.get("rtl_path", "")) if ctx.get("rtl_path") else None
+    rtl_paths = ctx.get("rtl_paths") if isinstance(ctx.get("rtl_paths"), list) else []
     tb_path = Path(ctx.get("tb_path", "")) if ctx.get("tb_path") else None
     lowered = name.lower()
     if lowered in ("rtl", "rtl_file", "rtl_source"):
+        if rtl_path:
+            return rtl_path
+        if rtl_paths:
+            return Path(rtl_paths[0])
         return rtl_path
     if lowered in ("testbench", "tb", "tb_file", "testbench_file"):
         return tb_path

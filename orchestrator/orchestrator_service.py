@@ -181,11 +181,14 @@ class DemoOrchestrator:
                 try:
                     ctx = self.context_builder.build(node_id)
                     rtl_path = Path(ctx["rtl_path"])
+                    rtl_paths = ctx.get("rtl_paths") or [ctx["rtl_path"]]
                     tb_path = Path(ctx.get("tb_path") or rtl_path.with_name(f"{node_id}_tb.sv"))
                     stage_dir = self.task_memory.root / node_id / stage_key
                     stage_dir.mkdir(parents=True, exist_ok=True)
-                    if rtl_path.exists():
-                        shutil.copy2(rtl_path, stage_dir / rtl_path.name)
+                    for rtl_entry in rtl_paths:
+                        rtl_path = Path(rtl_entry)
+                        if rtl_path.exists():
+                            shutil.copy2(rtl_path, stage_dir / rtl_path.name)
                     if kind in ("tb_lint", "sim", "debug") and tb_path.exists():
                         shutil.copy2(tb_path, stage_dir / tb_path.name)
                 except Exception:

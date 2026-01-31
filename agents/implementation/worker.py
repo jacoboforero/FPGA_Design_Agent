@@ -150,6 +150,9 @@ class ImplementationWorker(AgentWorkerBase):
         clocking = ctx.get("clocking", {})
         verification = ctx.get("verification", {})
         acceptance = ctx.get("acceptance", {})
+        children = ctx.get("children") or []
+        child_interfaces = ctx.get("child_interfaces") or {}
+        connections = ctx.get("connections") or []
         system = (
             "You are an RTL Implementation Agent. Generate synthesizable Verilog-2001.\n"
             "Rules: no code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no always_ff/always_comb/logic/interfaces). "
@@ -159,6 +162,15 @@ class ImplementationWorker(AgentWorkerBase):
             "Prefer lint-clean RTL under Verilator: avoid constant comparisons due to bit-width (e.g., don't compare a 3-bit signal to > 7), "
             "avoid unused signals, and avoid self-assignments like `x <= x`."
         )
+        if children:
+            system += (
+                "\nIntegration rules: If child modules are provided, you MUST instantiate them and wire their ports "
+                "exactly as specified by the connections list. Do not invent ports or rename them. "
+                "Use the top-level module ports when a connection endpoint references the current node. "
+                "If a child input has no connection, tie it to 0 (width-safe). "
+                "If a child output has no connection, it may be left unconnected. "
+                "If a connection is between two child ports, introduce an internal wire with a clear name."
+            )
         user = (
             f"Module name: {node_id}\n"
             f"Ports:\n" + "\n".join(f"- {p}" for p in port_lines) + "\n"
@@ -166,6 +178,9 @@ class ImplementationWorker(AgentWorkerBase):
             f"Clocking:\n{json.dumps(clocking, indent=2)}\n"
             f"Verification hints:\n{json.dumps(verification, indent=2)}\n"
             f"Acceptance:\n{json.dumps(acceptance, indent=2)}\n"
+            f"Children:\n{json.dumps(children, indent=2)}\n"
+            f"Child interfaces:\n{json.dumps(child_interfaces, indent=2)}\n"
+            f"Connections:\n{json.dumps(connections, indent=2)}\n"
             "Implement the described RTL."
         )
         msgs: List[Message] = [

@@ -11,7 +11,7 @@ Freeze what will be built before any HDL is generated. L1–L5 lives under `arti
 - **L1 Functional intent:** plain-language behavior, reset rules, key edge cases.
 - **L2 Interface:** clock/reset, I/O table (name/direction/width), handshake semantics, params/defaults.
 - **L3 Verification:** test goals, oracle/scoreboard plan, stimulus strategy, pass/fail criteria, coverage intents.
-- **L4 Architecture:** simple block/FSM sketch, clocking/CDC notes, resource choices, latency/throughput goals.
+- **L4 Architecture:** simple block/FSM sketch, clocking/CDC notes, resource choices, latency/throughput goals, and optional port-level wiring (`connections`).
 - **L5 Acceptance:** what “done” means (artifacts required, coverage/threshold targets, exclusions/assumptions).
 
 ## Planner outputs (execution handoff)
@@ -36,3 +36,5 @@ When the spec helper locks the design:
 - `lock.json` records `top_module` and `modules` so the planner can build the DAG.
 
 The planner still uses `L4_architecture.json` from the top module to define the block diagram and dependencies.
+
+Dependency edges are interpreted as "parent depends on child" so leaves execute first.

@@ -40,6 +40,8 @@ from core.schemas.specifications import (
     ConfigurationParameter,
     CoverageTarget,
     DependencyEdge,
+    Connection,
+    ConnectionEndpoint,
     FrozenSpecification,
     HandshakeProtocol,
     L1Specification,
@@ -754,6 +756,28 @@ def _write_artifacts(
         for item in dep_items
     ]
 
+    conn_items = _clean_list_of_objects(l4.get("connections", []))
+    connections = []
+    for item in conn_items:
+        src_obj = _clean_object(item.get("src", {}))
+        dst_obj = _clean_object(item.get("dst", {}))
+        connections.append(
+            Connection(
+                src=ConnectionEndpoint(
+                    node_id=_require_text(src_obj.get("node_id"), "L4.connections.src.node_id"),
+                    port=_require_text(src_obj.get("port"), "L4.connections.src.port"),
+                    slice=_clean_text(src_obj.get("slice")) or None,
+                ),
+                dst=ConnectionEndpoint(
+                    node_id=_require_text(dst_obj.get("node_id"), "L4.connections.dst.node_id"),
+                    port=_require_text(dst_obj.get("port"), "L4.connections.dst.port"),
+                    slice=_clean_text(dst_obj.get("slice")) or None,
+                ),
+                width=_clean_text(item.get("width")) or None,
+                note=_clean_text(item.get("note")) or None,
+            )
+        )
+
     domain_items = _clean_list_of_objects(l4.get("clock_domains", []))
     clock_domains = [
         ClockDomain(
@@ -777,6 +801,7 @@ def _write_artifacts(
         approved_by=approved_by,
         block_diagram=block_diagram,
         dependencies=dependencies,
+        connections=connections,
         clock_domains=clock_domains,
         resource_strategy=_require_text(l4.get("resource_strategy"), "L4.resource_strategy"),
         latency_budget=_require_text(l4.get("latency_budget"), "L4.latency_budget"),

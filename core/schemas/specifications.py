@@ -210,6 +210,22 @@ class DependencyEdge(BaseModel):
     dependency_type: str = Field(..., description="e.g., structural, timing, configuration.")
 
 
+class ConnectionEndpoint(BaseModel):
+    node_id: str
+    port: str
+    slice: Optional[str] = Field(
+        None,
+        description="Optional slice expression (e.g., [7:0] or [0]) applied to the port.",
+    )
+
+
+class Connection(BaseModel):
+    src: ConnectionEndpoint
+    dst: ConnectionEndpoint
+    width: Optional[str] = Field(None, description="Optional width expression for the connection.")
+    note: Optional[str] = None
+
+
 class ClockDomain(BaseModel):
     name: str
     frequency_hz: Optional[float] = Field(None, ge=0)
@@ -227,6 +243,7 @@ class L4Specification(SpecificationDocument):
     level: Literal[SpecificationLevel.L4] = SpecificationLevel.L4
     block_diagram: List[BlockDiagramNode] = Field(..., min_length=1)
     dependencies: List[DependencyEdge] = Field(default_factory=list)
+    connections: List[Connection] = Field(default_factory=list)
     clock_domains: List[ClockDomain] = Field(default_factory=list)
     resource_strategy: str = Field(..., description="Resource allocations (FIFO/RAM sizes, etc.).")
     latency_budget: str = Field(..., description="Latency/throughput plan tied back to L3.")

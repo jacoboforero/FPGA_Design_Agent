@@ -6,6 +6,7 @@ which fields are still missing. LLM-only (no heuristic fallback).
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict
 
 from core.schemas.contracts import AgentType, ResultMessage, TaskMessage, TaskStatus
@@ -43,7 +44,10 @@ class SpecHelperWorker(AgentWorkerBase):
         structured = update_checklist_from_spec(self.gateway, spec_text, checklist)
         missing = list_missing_fields(structured)
         clarifications = [field.path for field in missing]
-        status = "complete" if not missing else "needs_clarification"
+        extra_clarifications = _detect_block_diagram_module_gaps(structured, spec_text)
+        if extra_clarifications:
+            clarifications.extend(extra_clarifications)
+        status = "complete" if not clarifications else "needs_clarification"
 
         log_lines = []
         if clarifications:
@@ -70,3 +74,41 @@ class SpecHelperWorker(AgentWorkerBase):
             log_output="\n".join(log_lines),
             reflections=json.dumps(payload),
         )
+
+
+def _detect_block_diagram_module_gaps(checklist: Dict[str, Any], spec_text: str) -> list[str]:
+    module_names = _extract_module_names(spec_text)
+    module_names_lower = {name.lower() for name in module_names}
+    node_ids = []
+    l4 = checklist.get("L4") if isinstance(checklist, dict) else None
+    block_diagram = l4.get("block_diagram") if isinstance(l4, dict) else None
+    if isinstance(block_diagram, list):
+        for node in block_diagram:
+            if isinstance(node, dict):
+                node_id = str(node.get("node_id", "")).strip()
+                if node_id:
+                    node_ids.append((node_id, bool(node.get("uses_standard_component"))))
+    missing_nodes = []
+    for node_id, is_std in node_ids:
+        if is_std:
+            continue
+        if module_names_lower and node_id.lower() not in module_names_lower:
+            missing_nodes.append(node_id)
+    if not missing_nodes:
+        return []
+    missing_sorted = ", ".join(sorted(set(missing_nodes)))
+    return [
+        (
+            "L4.block_diagram references node_id(s) not defined as Module blocks: "
+            f"{missing_sorted}. Add Module sections for these nodes or mark them uses_standard_component=true."
+        )
+    ]
+
+
+def _extract_module_names(spec_text: str) -> list[str]:
+    names = []
+    for match in re.finditer(r"^Module:\s*(.+)$", spec_text, flags=re.MULTILINE):
+        name = match.group(1).strip()
+        if name:
+            names.append(name)
+    return names

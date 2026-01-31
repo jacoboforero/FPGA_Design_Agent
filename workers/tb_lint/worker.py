@@ -82,10 +82,17 @@ class TestbenchLintWorker(threading.Thread):
             raise TaskInputError("Missing rtl_path in task context.")
         if not tb_path:
             raise TaskInputError("Missing tb_path in task context.")
+        rtl_paths = task.context.get("rtl_paths") or [rtl_path]
+        if not isinstance(rtl_paths, list):
+            rtl_paths = [rtl_path]
+        rtl_paths = [str(path) for path in rtl_paths if path]
+        if not rtl_paths:
+            raise TaskInputError("Missing rtl_paths in task context.")
+        missing_rtl = [path for path in rtl_paths if not Path(path).exists()]
+        if missing_rtl:
+            raise TaskInputError(f"RTL missing: {missing_rtl}")
         rtl_file = Path(rtl_path)
         tb_file = Path(tb_path)
-        if not rtl_file.exists():
-            raise TaskInputError(f"RTL missing: {rtl_file}")
         if not tb_file.exists():
             raise TaskInputError(f"Testbench missing: {tb_file}")
         if not self.iverilog:
@@ -97,7 +104,8 @@ class TestbenchLintWorker(threading.Thread):
                 log_output="Icarus not found; set IVERILOG_PATH or install iverilog.",
             )
         try:
-            cmd = [self.iverilog, "-g2012", "-g2005-sv", "-tnull", str(rtl_file), str(tb_file)]
+            rtl_args = list(dict.fromkeys(rtl_paths))
+            cmd = [self.iverilog, "-g2012", "-g2005-sv", "-tnull", *rtl_args, str(tb_file)]
             completed = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if completed.returncode != 0:
                 output = completed.stderr or completed.stdout or "Testbench lint failed."

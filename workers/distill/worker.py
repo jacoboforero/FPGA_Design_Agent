@@ -8,6 +8,7 @@ import json
 import os
 import re
 import threading
+from collections import deque
 from pathlib import Path
 
 import pika
@@ -89,9 +90,21 @@ class DistillWorker(threading.Thread):
             before = int(os.getenv("SIM_FAIL_WINDOW_BEFORE", "20"))
             after = int(os.getenv("SIM_FAIL_WINDOW_AFTER", "5"))
             window = {"start_cycle": max(0, cycle - before), "end_cycle": cycle + after}
+        fail_line_idx, fail_line = _extract_failure_line(sim_text)
+        log_excerpt = _extract_log_excerpt(sim_text, fail_line_idx)
+        signal_hints = _extract_signal_hints(sim_text, fail_line_idx)
         waveform_path = Path("artifacts/task_memory") / node_id / _stage_dir("sim", attempt) / "waveform.vcd"
         waveform_present = waveform_path.exists()
         waveform_str = str(waveform_path) if waveform_present else None
+        waveform_excerpt = None
+        if waveform_present:
+            waveform_excerpt = _distill_waveform_excerpt(
+                vcd_path=waveform_path,
+                failure_time=time_val,
+                failure_cycle=cycle,
+                cycle_window=window,
+                signal_hints=signal_hints,
+            )
         distilled_path = Path("artifacts/task_memory") / node_id / _stage_dir("distill", attempt) / "distilled_dataset.json"
         distilled_path.parent.mkdir(parents=True, exist_ok=True)
         distilled_payload = {
@@ -100,9 +113,13 @@ class DistillWorker(threading.Thread):
             "failure_cycle": cycle,
             "failure_time": time_val,
             "failure_window": window,
-            "log_excerpt": "\n".join(sim_text.splitlines()[:40]),
+            "failure_line_index": fail_line_idx,
+            "failure_line": fail_line,
+            "log_excerpt": log_excerpt,
             "log_length": original_size,
             "waveform_path": waveform_str,
+            "signal_hints": signal_hints,
+            "waveform_excerpt": waveform_excerpt,
         }
         distilled_path.write_text(json.dumps(distilled_payload, indent=2))
         distilled_size = len(distilled_path.read_bytes())
@@ -142,6 +159,23 @@ class DistillWorker(threading.Thread):
 
 _FAIL_CYCLE_RE = re.compile(r"\bcycle\b\s*=?\s*(\d+)", re.IGNORECASE)
 _FAIL_TIME_RE = re.compile(r"\btime\b\s*=?\s*(\d+)", re.IGNORECASE)
+_FAIL_LINE_RE = re.compile(r"\b(FAIL|ERROR)\b", re.IGNORECASE)
+_SIGNAL_HINT_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+_DEFAULT_SIGNAL_HINTS = {
+    "clk",
+    "clock",
+    "rst",
+    "rst_n",
+    "reset",
+    "reset_n",
+    "en",
+    "load",
+    "load_value",
+    "saturate",
+    "count",
+    "rollover",
+}
 
 
 def _extract_failure_info(text: str | None) -> tuple[int | None, int | None]:
@@ -165,6 +199,208 @@ def _extract_failure_info(text: str | None) -> tuple[int | None, int | None]:
         if cycle is not None or time_val is not None:
             break
     return cycle, time_val
+
+
+def _extract_failure_line(text: str | None) -> tuple[int | None, str | None]:
+    if not text:
+        return None, None
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        if _FAIL_LINE_RE.search(line):
+            return idx, line
+    return None, None
+
+
+def _extract_log_excerpt(text: str | None, fail_idx: int | None) -> str:
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if not lines:
+        return ""
+    if fail_idx is None:
+        excerpt_lines = lines[:40]
+        return "\n".join(f"{i+1}: {line}" for i, line in enumerate(excerpt_lines))
+    start = max(0, fail_idx - 20)
+    end = min(len(lines), fail_idx + 21)
+    return "\n".join(f"{i+1}: {lines[i]}" for i in range(start, end))
+
+
+def _extract_signal_hints(text: str | None, fail_idx: int | None) -> list[str]:
+    if not text:
+        return sorted(_DEFAULT_SIGNAL_HINTS)
+    lines = text.splitlines()
+    candidates: list[str] = []
+    if fail_idx is not None and 0 <= fail_idx < len(lines):
+        candidates.append(lines[fail_idx])
+    candidates += [line for line in lines if _FAIL_LINE_RE.search(line)]
+    hints: set[str] = set()
+    for line in candidates:
+        for match in _SIGNAL_HINT_RE.finditer(line):
+            hints.add(match.group(1))
+    if not hints:
+        hints = set(_DEFAULT_SIGNAL_HINTS)
+    else:
+        hints |= _DEFAULT_SIGNAL_HINTS
+    return sorted(hints)
+
+
+def _distill_waveform_excerpt(
+    *,
+    vcd_path: Path,
+    failure_time: int | None,
+    failure_cycle: int | None,
+    cycle_window: dict | None,
+    signal_hints: list[str],
+) -> dict | None:
+    try:
+        hints_lower = {h.lower() for h in signal_hints}
+        max_signals = int(os.getenv("VCD_MAX_SIGNALS", "40"))
+        max_changes = int(os.getenv("VCD_MAX_CHANGES_PER_SIGNAL", "200"))
+        before_time = int(os.getenv("VCD_TIME_WINDOW_BEFORE", "2000"))
+        after_time = int(os.getenv("VCD_TIME_WINDOW_AFTER", "2000"))
+
+        start_time = 0
+        end_time = 0
+        if failure_time is not None:
+            start_time = max(0, failure_time - before_time)
+            end_time = failure_time + after_time
+        elif failure_cycle is not None and cycle_window is not None:
+            start_time = max(0, (cycle_window.get("start_cycle", 0)) * before_time)
+            end_time = (cycle_window.get("end_cycle", 0)) * after_time
+        else:
+            end_time = before_time + after_time
+
+        id_to_name: dict[str, str] = {}
+        id_to_leaf: dict[str, str] = {}
+        id_to_leaf_base: dict[str, str] = {}
+        scope_stack: list[str] = []
+        with vcd_path.open() as handle:
+            for raw in handle:
+                line = raw.strip()
+                if line.startswith("$scope"):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        scope_stack.append(parts[2])
+                elif line.startswith("$upscope"):
+                    if scope_stack:
+                        scope_stack.pop()
+                elif line.startswith("$var"):
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        var_id = parts[3]
+                        ref = parts[4]
+                        full = ".".join(scope_stack + [ref]) if scope_stack else ref
+                        id_to_name[var_id] = full
+                        id_to_leaf[var_id] = ref
+                        id_to_leaf_base[var_id] = ref.split("[", 1)[0]
+                elif line.startswith("$enddefinitions"):
+                    break
+
+        selected_ids = []
+        for var_id, leaf in id_to_leaf.items():
+            leaf_base = id_to_leaf_base.get(var_id, leaf)
+            leaf_lower = leaf.lower()
+            base_lower = leaf_base.lower()
+            if leaf_lower in hints_lower:
+                selected_ids.append(var_id)
+            elif base_lower in hints_lower:
+                selected_ids.append(var_id)
+            elif leaf_lower in _DEFAULT_SIGNAL_HINTS or base_lower in _DEFAULT_SIGNAL_HINTS:
+                selected_ids.append(var_id)
+        # Deduplicate and cap
+        seen_ids = set()
+        ordered_ids: list[str] = []
+        for var_id in selected_ids:
+            if var_id in seen_ids:
+                continue
+            seen_ids.add(var_id)
+            ordered_ids.append(var_id)
+            if len(ordered_ids) >= max_signals:
+                break
+
+        if not ordered_ids:
+            return {
+                "time_window": {"start": start_time, "end": end_time},
+                "selected_signals": [],
+                "notes": "No matching signals found in VCD header for provided hints.",
+            }
+
+        changes: dict[str, deque] = {var_id: deque(maxlen=max_changes) for var_id in ordered_ids}
+        initial_values: dict[str, str | None] = {var_id: None for var_id in ordered_ids}
+        last_values: dict[str, str | None] = {var_id: None for var_id in ordered_ids}
+        truncated: dict[str, bool] = {var_id: False for var_id in ordered_ids}
+
+        current_time = None
+        in_dumpvars = False
+        with vcd_path.open() as handle:
+            for raw in handle:
+                line = raw.strip()
+                if not line:
+                    continue
+                if line.startswith("#"):
+                    try:
+                        current_time = int(line[1:])
+                    except ValueError:
+                        continue
+                    if current_time > end_time:
+                        break
+                    continue
+                if line.startswith("$dumpvars"):
+                    in_dumpvars = True
+                    continue
+                if in_dumpvars and line.startswith("$end"):
+                    in_dumpvars = False
+                    continue
+                if line.startswith("$"):
+                    continue
+
+                if current_time is None:
+                    continue
+
+                value = None
+                var_id = None
+                if line[0] in "01xXzZ":
+                    value = line[0]
+                    var_id = line[1:].strip()
+                elif line[0] in "bBrR":
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        value = parts[0][1:]
+                        var_id = parts[1]
+                if var_id is None or var_id not in changes:
+                    continue
+
+                last_values[var_id] = value
+                if current_time < start_time:
+                    continue
+                if initial_values[var_id] is None:
+                    initial_values[var_id] = value
+                if len(changes[var_id]) >= max_changes:
+                    truncated[var_id] = True
+                    continue
+                changes[var_id].append((current_time, value))
+
+        selected_signals = []
+        for var_id in ordered_ids:
+            selected_signals.append(
+                {
+                    "name": id_to_name.get(var_id, var_id),
+                    "id": var_id,
+                    "initial_value": initial_values[var_id],
+                    "last_value": last_values[var_id],
+                    "changes": list(changes[var_id]),
+                    "truncated": truncated[var_id],
+                }
+            )
+
+        return {
+            "time_window": {"start": start_time, "end": end_time},
+            "selected_signals": selected_signals,
+            "selected_signal_count": len(selected_signals),
+            "notes": "Signal changes limited to selected hints and defaults.",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"waveform excerpt failed: {exc}"}
 
 
 def _distill_log(
