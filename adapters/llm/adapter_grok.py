@@ -1,7 +1,11 @@
-# OpenAI implementation of the LLM Gateway interface.
+"""
+Grok (xAI) implementation of the LLM Gateway interface.
+
+Grok uses OpenAI-compatible API, so this adapter is similar to OpenAI
+but with Grok-specific models and pricing.
+"""
 
 from typing import Optional, List
-import logging
 from openai import AsyncOpenAI
 from adapters.llm.gateway import (
     LLMGateway,
@@ -11,55 +15,65 @@ from adapters.llm.gateway import (
     GenerationConfig,
 )
 
-logger = logging.getLogger(__name__)
 
-
-class OpenAIGateway(LLMGateway):
+class GrokGateway(LLMGateway):
+    """
+    Gateway implementation for xAI's Grok models.
     
-    # Pricing must currently be manually maintained. Price per million tokens.
+    Grok uses an OpenAI-compatible API but with different models and pricing.
+    
+    Supports:
+    - grok-2 (latest, most capable)
+    - grok-2-mini (faster, more efficient)
+    - grok-1 (legacy)
+    """
+    
+    # Pricing per million tokens (as of January 2025)
+    # Note: xAI pricing may vary - check https://x.ai/api for latest
     PRICING = {
-        # Very-High-Cost Model "gpt-5-pro": {"input": 15.00, "output": 120.00},
-        "gpt-5": {"input": 1.25, "output": 10.00},
-        "gpt-5-mini": {"input": 0.25, "output": 2.00},
-        "gpt-5-nano": {"input": 0.05, "output": 0.40},
-        "gpt-4.1": {"input": 2.00, "output": 8.00},
-        "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
-        "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
-        "gpt-4o": {"input": 2.50, "output": 10.00},
-        "gpt-4o-mini": {"input": 0.15, "output": 0.6},
-        # LEGACY "gpt-3.5-turbo": {"input": 0.5, "output": 1.5}
+        "grok-2": {"input": 2.00, "output": 10.00},
+        "grok-2-mini": {"input": 0.50, "output": 2.00},
+        "grok-1": {"input": 5.00, "output": 15.00},
     }
     
-
+    # xAI API endpoint
+    GROK_BASE_URL = "https://api.x.ai/v1"
+    
     def __init__(
         self,
         api_key: str,
-        model: str = "gpt-5-nano",
-        organization: Optional[str] = None, # Required for billing, rate limits, usage reports.
+        model: str = "grok-2-mini",
     ):
+        """
+        Initialize Grok gateway.
+        
+        Args:
+            api_key: xAI API key
+            model: Model identifier (e.g., "grok-2", "grok-2-mini")
+        """
+        # Use OpenAI client with xAI's endpoint
         self.client = AsyncOpenAI(
             api_key=api_key,
-            organization=organization,
+            base_url=self.GROK_BASE_URL,
         )
         self._model = model
-        self.logger = logger
     
     async def generate(
         self,
         messages: List[Message],
         config: Optional[GenerationConfig] = None,
     ) -> ModelResponse:
-        """Generate a response using OpenAI's chat completion API."""
+        """Generate a response using Grok's chat completion API."""
         config = config or GenerationConfig()
         config = self.validate_config(config)
         
-        # Convert our Message format to OpenAI's format
-        openai_messages = self._convert_messages(messages)
+        # Convert our Message format to OpenAI-compatible format
+        grok_messages = self._convert_messages(messages)
         
         # Build API parameters
         api_params = {
             "model": self._model,
-            "messages": openai_messages,
+            "messages": grok_messages,
         }
         
         # Add optional parameters
@@ -85,79 +99,67 @@ class OpenAIGateway(LLMGateway):
             return model_response
             
         except Exception as e:
-            error_msg = str(e).lower()
-            if "rate" in error_msg or "limit" in error_msg:
-                raise RuntimeError(f"OpenAI rate limit exceeded: {e}")
-            elif "quota" in error_msg or "insufficient" in error_msg:
-                raise RuntimeError(f"OpenAI quota exceeded: {e}")
-            elif "invalid" in error_msg and "key" in error_msg:
-                raise RuntimeError(f"OpenAI authentication failed: {e}")
+            # OpenAI client will raise various exceptions
+            if "rate" in str(e).lower():
+                raise RuntimeError(f"Grok rate limit exceeded: {e}")
             else:
-                raise RuntimeError(f"OpenAI API error: {e}")
+                raise RuntimeError(f"Grok API error: {e}")
     
     @property
     def model_name(self) -> str:
-        """The OpenAI model being used."""
+        """The Grok model being used."""
         return self._model
     
     @property
     def provider(self) -> str:
-        """Returns 'openai'."""
-        return "openai"
+        """Returns 'grok'."""
+        return "grok"
     
     @property
     def supports_files(self) -> bool:
-        """OpenAI supports vision/files for GPT-4 vision models."""
-        return "vision" in self._model or "gpt-4o" in self._model
+        """Grok-2 supports vision capabilities."""
+        return "grok-2" in self._model
     
     def validate_config(self, config: GenerationConfig) -> GenerationConfig:
         """
-        Validate configuration for OpenAI.
+        Validate configuration for Grok.
         
-        OpenAI constraints:
+        Grok uses OpenAI-compatible parameters:
         - temperature: [0, 2]
         - top_p: [0, 1]
-        - Can use both temperature and top_p (OpenAI recommends altering one, not both)
         - top_k not supported
         """
         if config.temperature is not None:
             if not 0 <= config.temperature <= 2:
-                raise ValueError("OpenAI temperature must be in [0, 2]")
+                raise ValueError("Grok temperature must be in [0, 2]")
         
         if config.top_p is not None:
             if not 0 <= config.top_p <= 1:
-                raise ValueError("OpenAI top_p must be in [0, 1]")
+                raise ValueError("Grok top_p must be in [0, 1]")
         
         if config.top_k is not None:
-            raise ValueError("OpenAI does not support top_k parameter")
-        
-        if config.temperature is not None and config.top_p is not None:
-            # OpenAI docs recommend not using both, but allow it
-            self.logger.warning(
-                "Using both temperature and top_p. OpenAI recommends using only one."
-            )
+            raise ValueError("Grok does not support top_k parameter")
         
         return config
     
     def estimate_cost(self, response: ModelResponse) -> float:
         """
-        Estimate cost based on OpenAI pricing.
+        Estimate cost based on Grok pricing.
         
         Returns cost in USD.
         """
-        # Find matching pricing model (handle versioned models)
-        # Sort by length descending to match most specific first
+        # Find matching pricing model
         pricing_key = None
-        model_families = sorted(self.PRICING.keys(), key=len, reverse=True)
         
+        # Match model family (longest first to avoid substring issues)
+        model_families = sorted(self.PRICING.keys(), key=len, reverse=True)
         for family in model_families:
             if family in response.model_name:
                 pricing_key = family
                 break
         
         if not pricing_key:
-            self.logger.warning(f"Unknown OpenAI model for pricing: {response.model_name}")
-            return 0.0  # Unknown model, can't estimate
+            return 0.0  # Unknown model
         
         pricing = self.PRICING[pricing_key]
         
@@ -168,11 +170,11 @@ class OpenAIGateway(LLMGateway):
         return input_cost + output_cost
     
     def _convert_messages(self, messages: List[Message]) -> List[dict]:
-        """Convert our Message format to OpenAI's format."""
-        openai_messages = []
+        """Convert our Message format to OpenAI-compatible format used by Grok."""
+        grok_messages = []
         
         for msg in messages:
-            openai_msg = {
+            grok_msg = {
                 "role": msg.role.value,
                 "content": msg.content,
             }
@@ -186,38 +188,30 @@ class OpenAIGateway(LLMGateway):
                         file_contents.append(f"\n\n--- {filename} ---\n{attachment['content']}")
                     elif "path" in attachment:
                         try:
-                            with open(attachment["path"], "r", encoding="utf-8") as f:
+                            with open(attachment["path"], "r") as f:
                                 content = f.read()
                                 filename = attachment.get("filename", attachment["path"])
                                 file_contents.append(f"\n\n--- {filename} ---\n{content}")
                         except Exception as e:
-                            self.logger.error(f"Error reading attachment {attachment['path']}: {e}")
-                            file_contents.append(f"\n\n[Error reading {attachment.get('filename', 'file')}: {e}]")
+                            file_contents.append(f"\n\n[Error reading {attachment['path']}: {e}]")
                 
                 if file_contents:
-                    openai_msg["content"] = msg.content + "".join(file_contents)
+                    grok_msg["content"] = msg.content + "".join(file_contents)
             
-            openai_messages.append(openai_msg)
+            grok_messages.append(grok_msg)
         
-        return openai_messages
+        return grok_messages
     
-    def _convert_response(self, openai_response) -> ModelResponse:
-        """Convert OpenAI response to our ModelResponse format."""
-        choice = openai_response.choices[0]
+    def _convert_response(self, grok_response) -> ModelResponse:
+        """Convert Grok (OpenAI-compatible) response to our ModelResponse format."""
+        choice = grok_response.choices[0]
         content = choice.message.content or ""
         
         # Extract token usage
-        usage = openai_response.usage
+        usage = grok_response.usage
         input_tokens = usage.prompt_tokens
         output_tokens = usage.completion_tokens
         total_tokens = usage.total_tokens
-        
-        # Warn if token counts seem wrong
-        if input_tokens == 0 or output_tokens == 0:
-            self.logger.warning(
-                f"Unusual token counts from OpenAI: "
-                f"input={input_tokens}, output={output_tokens}"
-            )
         
         # Estimate cost
         temp_response = ModelResponse(
@@ -226,7 +220,7 @@ class OpenAIGateway(LLMGateway):
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             model_name=self._model,
-            provider="openai",
+            provider="grok",
         )
         cost = self.estimate_cost(temp_response)
         
@@ -235,11 +229,11 @@ class OpenAIGateway(LLMGateway):
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
-            model_name=openai_response.model,
-            provider="openai",
+            model_name=grok_response.model,
+            provider="grok",
             finish_reason=choice.finish_reason,
             estimated_cost_usd=cost,
-            raw_response=openai_response.model_dump() if hasattr(openai_response, 'model_dump') else {},
+            raw_response=grok_response.model_dump() if hasattr(grok_response, 'model_dump') else {},
         )
     
     async def close(self):

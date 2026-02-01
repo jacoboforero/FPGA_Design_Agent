@@ -5,13 +5,16 @@ Handles local Qwen3:4b model calls through Ollama.
 """
 
 from typing import Optional, List
+import logging
 import httpx
-from gateway import (
+from adapters.llm.gateway import (
     LLMGateway,
     Message,
     ModelResponse,
     GenerationConfig,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class Qwen34BLocalGateway(LLMGateway):
@@ -24,16 +27,23 @@ class Qwen34BLocalGateway(LLMGateway):
     - Optimized for code generation and reasoning tasks
     """
     
-    def __init__(self, ollama_base_url: str = "http://localhost:11434"):
+    def __init__(
+        self,
+        ollama_base_url: str = "http://localhost:11434",
+        timeout: float = 300.0,
+    ):
         """
         Initialize Qwen3:4b gateway.
         
         Args:
             ollama_base_url: Ollama API base URL (default: http://localhost:11434)
+            timeout: Request timeout in seconds (default: 300.0)
         """
         self._model = "qwen3:4b"
         self._base_url = ollama_base_url.rstrip("/")
         self._api_url = f"{self._base_url}/api/chat"
+        self._timeout = timeout
+        self.logger = logger
     
     async def generate(
         self,
@@ -73,16 +83,34 @@ class Qwen34BLocalGateway(LLMGateway):
         if options:
             request_data["options"] = options
         
-        # Make API call
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(self._api_url, json=request_data)
-            response.raise_for_status()
-            ollama_response = response.json()
-        
-        # Convert to our standard format
-        model_response = self._convert_response(ollama_response)
-        
-        return model_response
+        try:
+            # Make API call
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(self._api_url, json=request_data)
+                response.raise_for_status()
+                ollama_response = response.json()
+            
+            # Convert to our standard format
+            model_response = self._convert_response(ollama_response)
+            
+            return model_response
+            
+        except httpx.TimeoutException as e:
+            raise RuntimeError(
+                f"Qwen3:4b request timed out after {self._timeout}s. "
+                f"Consider increasing timeout or reducing max_tokens. Error: {e}"
+            )
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(
+                f"Qwen3:4b HTTP error {e.response.status_code}: {e.response.text}"
+            )
+        except httpx.ConnectError as e:
+            raise RuntimeError(
+                f"Cannot connect to Ollama at {self._base_url}. "
+                f"Is Ollama running? Error: {e}"
+            )
+        except Exception as e:
+            raise RuntimeError(f"Qwen3:4b API error: {e}")
     
     @property
     def model_name(self) -> str:
@@ -123,7 +151,9 @@ class Qwen34BLocalGateway(LLMGateway):
         
         if config.max_tokens is not None:
             if config.max_tokens > 32000:
-                raise ValueError("Qwen3:4b supports up to 32K tokens")
+                self.logger.warning(
+                    f"max_tokens={config.max_tokens} exceeds recommended 32K limit for Qwen3:4b"
+                )
         
         return config
     
@@ -146,20 +176,18 @@ class Qwen34BLocalGateway(LLMGateway):
                 file_contents = []
                 for attachment in msg.attachments:
                     if "content" in attachment:
-                        # File content provided directly
                         filename = attachment.get("filename", "file")
                         file_contents.append(f"\n\n--- {filename} ---\n{attachment['content']}")
                     elif "path" in attachment:
-                        # File path provided - read it
                         try:
-                            with open(attachment["path"], "r") as f:
+                            with open(attachment["path"], "r", encoding="utf-8") as f:
                                 content = f.read()
                                 filename = attachment.get("filename", attachment["path"])
                                 file_contents.append(f"\n\n--- {filename} ---\n{content}")
                         except Exception as e:
-                            file_contents.append(f"\n\n[Error reading {attachment['path']}: {e}]")
+                            self.logger.error(f"Error reading attachment {attachment['path']}: {e}")
+                            file_contents.append(f"\n\n[Error reading {attachment.get('filename', 'file')}: {e}]")
                 
-                # Append all file contents to the message content
                 if file_contents:
                     ollama_msg["content"] = msg.content + "".join(file_contents)
             
@@ -178,6 +206,12 @@ class Qwen34BLocalGateway(LLMGateway):
         completion_tokens = ollama_response.get("eval_count", 0)
         total_tokens = prompt_tokens + completion_tokens
         
+        # Warn if token counts are missing
+        if prompt_tokens == 0 and completion_tokens == 0:
+            self.logger.warning(
+                "Ollama did not return token counts. Cost tracking may be inaccurate."
+            )
+        
         # Extract finish reason
         finish_reason = ollama_response.get("done_reason", "stop")
         
@@ -192,3 +226,7 @@ class Qwen34BLocalGateway(LLMGateway):
             finish_reason=finish_reason,
             raw_response=ollama_response,
         )
+    
+    async def close(self):
+        """Clean up resources (no-op for httpx client with context manager)."""
+        pass
