@@ -1,0 +1,75 @@
+// MODULE: counter
+module counter (
+    input logic clk,
+    input logic rst_n,
+    output logic [7:0] count
+);
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            count <= 8'b0;
+        end else begin
+            count <= count + 1;
+        end
+    end
+endmodule
+
+// MODULE: dff_en_rstn
+module dff_en_rstn (
+    input logic clk,
+    input logic rst_n,
+    input logic en,
+    input logic d,
+    output logic q
+);
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            q <= 1'b0;
+        end else if (en) begin
+            q <= d;
+        end
+    end
+endmodule
+
+// MODULE: mod10_counter
+module mod10_counter (
+    input logic clk,
+    input logic rst_n,
+    input logic en,
+    output logic [3:0] count,
+    output logic carry
+);
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            count <= 4'b0;
+            carry <= 1'b0;
+        end else if (en) begin
+            if (count == 9) begin
+                count <= 4'b0;
+                carry <= 1'b1;
+            end else begin
+                count <= count + 1;
+                carry <= 1'b0;
+            end
+        end
+    end
+endmodule
+
+// MODULE: shift_register
+module shift_register #(
+    parameter WIDTH = 8
+) (
+    input logic clk,
+    input logic rst_n,
+    input logic en,
+    input logic shift_in,
+    output logic [WIDTH-1:0] data_out
+);
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            data_out <= {WIDTH{1'b0}};
+        end else if (en) begin
+            data_out <= {data_out[WIDTH-2:0], shift_in};
+        end
+    end
+endmodule
+

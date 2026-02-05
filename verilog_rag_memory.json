@@ -1,0 +1,13 @@
+{
+  "designs": [
+    {
+      "module_name": "test_counter",
+      "summary": "test_counter: Generated HDL module.",
+      "signature": "module test_counter(input logic clk, input logic rst_n, output logic [3:0] count);",
+      "tags": [
+        "generated_design",
+        "verilog_rag"
+      ]
+    }
+  ]
+}

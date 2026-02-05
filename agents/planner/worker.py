@@ -2,8 +2,9 @@
 Planner agent runtime. Consumes PlannerAgent tasks and emits design_context.json + dag.json.
 """
 from __future__ import annotations
-
+import os
 from pathlib import Path
+from adapters.rag.rag_service import init_rag_service
 
 from agents.common.base import AgentWorkerBase
 from core.observability.emitter import emit_runtime_event
@@ -17,6 +18,23 @@ class PlannerWorker(AgentWorkerBase):
 
     def handle_task(self, task: TaskMessage) -> ResultMessage:
         ctx = task.context or {}
+        
+        rag = init_rag_service()
+        rag_context_path = None
+        if rag is not None:
+            query_parts = []
+            if ctx.get("user_request"):
+                query_parts.append(str(ctx["user_request"]))
+            if ctx.get("spec_text"):
+                query_parts.append(str(ctx["spec_text"]))
+            if ctx.get("node_id"):
+                query_parts.append(f"node_id={ctx['node_id']}")
+            query = "\n".join(query_parts).strip() or "rtl design planning"
+            context_str, _ = rag.retrieve_context(query=query, top_k=int(os.getenv("RAG_TOP_K_PLANNER", "3")))
+            out_dir = Path(ctx.get("out_dir", "artifacts/generated")).resolve()
+            out_dir.mkdir(parents=True, exist_ok=True)
+            rag_context_path = out_dir / "rag_context.txt"
+            rag_context_path.write_text(context_str, encoding="utf-8")
         spec_dir = Path(ctx.get("spec_dir", "artifacts/task_memory/specs")).resolve()
         out_dir = Path(ctx.get("out_dir", "artifacts/generated")).resolve()
         try:
