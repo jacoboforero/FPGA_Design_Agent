@@ -12,7 +12,7 @@ import os
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 import pika
 from core.schemas.contracts import (
@@ -52,6 +52,8 @@ class DemoOrchestrator:
         rtl_root: Path,
         task_memory_root: Path,
         state_callback=None,
+        event_callback: Optional[Callable[[str, dict[str, Any]], None]] = None,
+        raw_progress: bool = True,
     ):
         self.connection_params = connection_params
         self.design_context_path = design_context_path
@@ -71,6 +73,22 @@ class DemoOrchestrator:
         }
         self.task_memory = TaskMemory(task_memory_root)
         self.state_callback = state_callback
+        self.event_callback = event_callback
+        self.raw_progress = raw_progress
+
+    def _emit_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        if not self.event_callback:
+            return
+        try:
+            self.event_callback(event_type, payload)
+        except Exception:
+            return
+
+    def _emit_progress(self, message: str, *, event_type: str | None = None, payload: dict[str, Any] | None = None) -> None:
+        if self.raw_progress:
+            print(message)
+        if event_type:
+            self._emit_event(event_type, payload or {})
 
     def _publish_task(
         self,
@@ -104,7 +122,11 @@ class DemoOrchestrator:
     def _advance(self, node_id: str, new_state: NodeState) -> None:
         node = self.nodes[node_id]
         node.transition(new_state)
-        print(f"{node_id} -> {new_state.value}")
+        self._emit_progress(
+            f"{node_id} -> {new_state.value}",
+            event_type="state_transition",
+            payload={"node_id": node_id, "state": new_state.value},
+        )
         emit_runtime_event(runtime="orchestrator", event_type="state_transition", payload={"node_id": node_id, "state": new_state.value})
         if self.state_callback:
             self.state_callback(node_id, new_state.value)
@@ -285,14 +307,32 @@ class DemoOrchestrator:
                     _snapshot_failure_sources(target_node, stage, kind=kind)
                 _mirror_stage_to_observability(target_node, stage)
 
-                print(f"Result for {target_node} stage {stage}: {result.status.value}")
+                self._emit_progress(
+                    f"Result for {target_node} stage {stage}: {result.status.value}",
+                    event_type="stage_result",
+                    payload={
+                        "node_id": target_node,
+                        "stage_key": stage,
+                        "stage_kind": kind,
+                        "attempt": stage_attempt,
+                        "status": result.status.value,
+                        "log_output": result.log_output,
+                        "artifacts_path": result.artifacts_path,
+                        "reflections": result.reflections,
+                        "reflection_insights": _dump_model(result.reflection_insights),
+                    },
+                )
 
                 if result.status is not TaskStatus.SUCCESS:
                     if kind == "lint":
                         reason = "rtl_lint"
                         attempt = stage_attempt or attempt_by_node.get(target_node, 1)
                         if _get_debug_attempts(target_node, reason) >= max_debug_retries:
-                            print(f"{target_node} debug retries exhausted for {reason} ({max_debug_retries}); failing.")
+                            self._emit_progress(
+                                f"{target_node} debug retries exhausted for {reason} ({max_debug_retries}); failing.",
+                                event_type="execution_note",
+                                payload={"node_id": target_node, "reason": reason, "attempt": attempt, "max_debug_retries": max_debug_retries},
+                            )
                             _finish_failed(target_node)
                             continue
                         ctx = self.context_builder.build(target_node)
@@ -338,7 +378,11 @@ class DemoOrchestrator:
                         reason = "tb_lint"
                         attempt = stage_attempt or attempt_by_node.get(target_node, 1)
                         if _get_debug_attempts(target_node, reason) >= max_debug_retries:
-                            print(f"{target_node} debug retries exhausted for {reason} ({max_debug_retries}); failing.")
+                            self._emit_progress(
+                                f"{target_node} debug retries exhausted for {reason} ({max_debug_retries}); failing.",
+                                event_type="execution_note",
+                                payload={"node_id": target_node, "reason": reason, "attempt": attempt, "max_debug_retries": max_debug_retries},
+                            )
                             _finish_failed(target_node)
                             continue
                         ctx = self.context_builder.build(target_node)
@@ -383,7 +427,11 @@ class DemoOrchestrator:
                 elif kind == "lint":
                     _reset_debug_attempts(target_node, "rtl_lint")
                     if self._node_scopes.get(target_node, "full") != "full":
-                        print(f"Skipping TB/SIM for {target_node} (non-top module).")
+                        self._emit_progress(
+                            f"Skipping TB/SIM for {target_node} (non-top module).",
+                            event_type="execution_note",
+                            payload={"node_id": target_node, "note": "non_top_module_skip"},
+                        )
                         _finish_done(target_node)
                         continue
                     if not tb_generated_by_node.get(target_node, False):
@@ -479,7 +527,11 @@ class DemoOrchestrator:
                         continue
                     reason = "sim"
                     if _get_debug_attempts(target_node, reason) >= max_debug_retries:
-                        print(f"{target_node} debug retries exhausted for {reason} ({max_debug_retries}); failing.")
+                        self._emit_progress(
+                            f"{target_node} debug retries exhausted for {reason} ({max_debug_retries}); failing.",
+                            event_type="execution_note",
+                            payload={"node_id": target_node, "reason": reason, "attempt": attempt, "max_debug_retries": max_debug_retries},
+                        )
                         _finish_failed(target_node)
                         continue
                     ctx = self.context_builder.build(target_node)
@@ -518,7 +570,11 @@ class DemoOrchestrator:
                     attempt_by_node[target_node] = next_attempt
 
                     if not rtl_changed and not tb_changed:
-                        print(f"{target_node} debug produced no code changes; failing.")
+                        self._emit_progress(
+                            f"{target_node} debug produced no code changes; failing.",
+                            event_type="execution_note",
+                            payload={"node_id": target_node, "reason": "no_code_changes", "attempt": from_attempt},
+                        )
                         _finish_failed(target_node)
                         continue
 
@@ -547,4 +603,8 @@ class DemoOrchestrator:
                         tasks[target_node][tb_lint_key] = tb_lint_task
 
             if len(done_nodes) < len(node_ids):
-                print("Demo timed out before all nodes completed.")
+                self._emit_progress(
+                    "Demo timed out before all nodes completed.",
+                    event_type="execution_note",
+                    payload={"reason": "timeout", "done_nodes": len(done_nodes), "total_nodes": len(node_ids)},
+                )

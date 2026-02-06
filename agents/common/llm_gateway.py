@@ -22,15 +22,19 @@ except Exception:  # noqa: BLE001
 GatewayTuple = Tuple[object, object, object]
 
 
-def init_llm_gateway() -> Optional[object]:
+def init_llm_gateway(
+    *,
+    provider_override: Optional[str] = None,
+    model_override: Optional[str] = None,
+) -> Optional[object]:
     """Initialize an LLM gateway if env vars are set; otherwise return None."""
     if os.getenv("USE_LLM") != "1":
         return None
 
-    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+    provider = (provider_override or os.getenv("LLM_PROVIDER", "openai")).lower()
     if provider == "groq" and GroqGateway:
         api_key = os.getenv("GROQ_API_KEY")
-        model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+        model = model_override or os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
         if not api_key:
             return None
         try:
@@ -40,7 +44,7 @@ def init_llm_gateway() -> Optional[object]:
 
     if OpenAIGateway:
         api_key = os.getenv("OPENAI_API_KEY")
-        model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+        model = model_override or os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
         if not api_key:
             return None
         try:

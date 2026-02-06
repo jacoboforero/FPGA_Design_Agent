@@ -8,6 +8,8 @@ import asyncio
 import json
 import os
 import re
+import shutil
+import subprocess
 from hashlib import sha256
 from pathlib import Path
 
@@ -87,6 +89,7 @@ class DebugWorker(AgentWorkerBase):
             "  it can race the DUT/reference model and cause deterministic mismatches. Prefer driving on negedge (or add a small #1 delay).\n"
             "- If waveform dumping uses a cycle window, do NOT treat DUMP_START=0 as \"disabled\"; some benches accidentally $dumpoff forever.\n"
             "- If the context includes child modules and connection wiring, preserve the integration structure; only fix wiring or glue logic as needed.\n"
+            "- Your patch is accepted only if local deterministic validation passes (tb_lint for TB changes; lint for RTL changes).\n"
         )
         user = (
             f"Node: {node_id}\n"
@@ -200,17 +203,50 @@ class DebugWorker(AgentWorkerBase):
                         status=TaskStatus.FAILURE,
                         log_output=last_error,
                     )
+                local_validation = _run_local_validation(
+                    ctx=ctx,
+                    rtl_path=rtl_path,
+                    tb_path=tb_path,
+                    touched_files=write_result["touched_files"],
+                    debug_reason=debug_reason,
+                )
+                try:
+                    (stage_dir / f"local_validation_attempt{llm_attempt}.txt").write_text(
+                        local_validation["details"],
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    pass
+                if not local_validation["ok"]:
+                    last_error = (
+                        "Debug local validation failed "
+                        f"(llm_attempt={llm_attempt}/{max_attempts}): {local_validation['summary']}\n"
+                        f"{local_validation['details']}"
+                    )
+                    if llm_attempt < max_attempts:
+                        continue
+                    return ResultMessage(
+                        task_id=task.task_id,
+                        correlation_id=task.correlation_id,
+                        status=TaskStatus.FAILURE,
+                        log_output=last_error,
+                    )
                 emit_runtime_event(
                     runtime=self.runtime_name,
                     event_type="task_completed",
                     payload={"task_id": str(task.task_id)},
+                )
+                final_log = (
+                    f"{write_result['log_output']} "
+                    f"Local validation passed: {local_validation['summary']} "
+                    f"(llm_attempt={llm_attempt}/{max_attempts})."
                 )
                 return ResultMessage(
                     task_id=task.task_id,
                     correlation_id=task.correlation_id,
                     status=TaskStatus.SUCCESS,
                     artifacts_path=str(rtl_path),
-                    log_output=write_result["log_output"],
+                    log_output=final_log,
                     reflections=json.dumps(
                         {
                             "summary": parsed.get("summary", ""),
@@ -219,6 +255,8 @@ class DebugWorker(AgentWorkerBase):
                             "debug_reason": debug_reason,
                             "rtl_sha256": write_result.get("rtl_sha256"),
                             "tb_sha256": write_result.get("tb_sha256"),
+                            "local_validation": local_validation.get("checks", []),
+                            "llm_attempts_used": llm_attempt,
                             "risks": parsed.get("risks", []),
                             "next_steps": parsed.get("next_steps", []),
                         },
@@ -386,3 +424,131 @@ def _apply_debug_patch(
             f"(attempt={attempt if attempt is not None else 'unknown'})."
         ),
     }
+
+
+def _run_local_validation(
+    *,
+    ctx: dict,
+    rtl_path: Path,
+    tb_path: Path,
+    touched_files: list[str],
+    debug_reason: str,
+) -> dict:
+    checks: list[dict] = []
+
+    need_rtl_lint = ("rtl" in touched_files) or (debug_reason == "rtl_lint")
+    need_tb_lint = ("tb" in touched_files) or (debug_reason == "tb_lint")
+    rtl_paths = _resolve_rtl_paths(ctx, rtl_path)
+
+    if need_rtl_lint:
+        checks.append(_run_rtl_lint_check(rtl_paths))
+    if need_tb_lint:
+        checks.append(_run_tb_lint_check(rtl_paths, tb_path))
+
+    if not checks:
+        return {
+            "ok": True,
+            "summary": "no local checks required",
+            "details": "No local checks were required for this patch.",
+            "checks": [],
+        }
+
+    ok = all(bool(check.get("ok")) for check in checks)
+    summary = ", ".join(f"{check['name']}={'PASS' if check['ok'] else 'FAIL'}" for check in checks)
+    details_lines: list[str] = []
+    for check in checks:
+        details_lines.append(f"[{check['name']}] {'PASS' if check['ok'] else 'FAIL'}")
+        output = str(check.get("output", "")).strip()
+        if output:
+            details_lines.append(output)
+    details = "\n".join(details_lines).strip()
+    return {"ok": ok, "summary": summary, "details": details, "checks": checks}
+
+
+def _resolve_rtl_paths(ctx: dict, rtl_path: Path) -> list[str]:
+    candidates = ctx.get("rtl_paths") or [str(rtl_path)]
+    if not isinstance(candidates, list):
+        candidates = [str(rtl_path)]
+    out: list[str] = []
+    for item in candidates:
+        value = str(item).strip()
+        if value and value not in out:
+            out.append(value)
+    fallback = str(rtl_path)
+    if fallback not in out:
+        out.append(fallback)
+    return out
+
+
+def _run_rtl_lint_check(rtl_paths: list[str]) -> dict:
+    name = "rtl_lint"
+    missing = [path for path in rtl_paths if not Path(path).exists()]
+    if missing:
+        return {"name": name, "ok": False, "output": f"RTL missing for local lint: {missing}"}
+
+    verilator = os.getenv("VERILATOR_PATH") or shutil.which("verilator")
+    if not verilator:
+        return {"name": name, "ok": False, "output": "Verilator not found for local debug validation."}
+
+    cmd = [verilator, "--lint-only", "--quiet", "--sv", *rtl_paths]
+    timeout_s = float(os.getenv("DEBUG_LOCAL_LINT_TIMEOUT_S", "12"))
+    try:
+        completed = _run_subprocess(cmd, timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        return {"name": name, "ok": False, "output": f"Verilator local validation timed out: {exc}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"name": name, "ok": False, "output": f"Verilator local validation failed: {exc}"}
+
+    output = _format_tool_output(completed.stdout, completed.stderr)
+    strict_warnings = os.getenv("VERILATOR_STRICT_WARNINGS", "0") == "1"
+    has_error = ("%Error" in output) or ("%Fatal" in output)
+    failed = completed.returncode != 0 and (strict_warnings or has_error)
+    return {
+        "name": name,
+        "ok": not failed,
+        "output": output or "Verilator local validation passed.",
+    }
+
+
+def _run_tb_lint_check(rtl_paths: list[str], tb_path: Path) -> dict:
+    name = "tb_lint"
+    missing = [path for path in rtl_paths if not Path(path).exists()]
+    if missing:
+        return {"name": name, "ok": False, "output": f"RTL missing for local TB lint: {missing}"}
+    if not tb_path.exists():
+        return {"name": name, "ok": False, "output": f"Testbench missing for local TB lint: {tb_path}"}
+
+    iverilog = os.getenv("IVERILOG_PATH") or shutil.which("iverilog")
+    if not iverilog:
+        return {"name": name, "ok": False, "output": "Icarus (iverilog) not found for local debug validation."}
+
+    cmd = [iverilog, "-g2012", "-g2005-sv", "-tnull", *rtl_paths, str(tb_path)]
+    timeout_s = float(os.getenv("DEBUG_LOCAL_LINT_TIMEOUT_S", "12"))
+    try:
+        completed = _run_subprocess(cmd, timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        return {"name": name, "ok": False, "output": f"TB local validation timed out: {exc}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"name": name, "ok": False, "output": f"TB local validation failed: {exc}"}
+
+    output = _format_tool_output(completed.stdout, completed.stderr)
+    return {
+        "name": name,
+        "ok": completed.returncode == 0,
+        "output": output or ("TB local validation passed." if completed.returncode == 0 else "TB local validation failed."),
+    }
+
+
+def _format_tool_output(stdout: str | None, stderr: str | None) -> str:
+    raw = "\n".join(part for part in [stdout or "", stderr or ""] if part).strip()
+    if not raw:
+        return ""
+    lines = raw.splitlines()
+    max_lines = int(os.getenv("DEBUG_LOCAL_LINT_MAX_LINES", "20"))
+    trimmed = lines[:max_lines]
+    suffix = "\n... (truncated)" if len(lines) > max_lines else ""
+    return "\n".join(trimmed) + suffix
+
+
+def _run_subprocess(cmd: list[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)

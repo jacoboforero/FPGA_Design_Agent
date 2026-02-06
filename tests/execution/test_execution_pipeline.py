@@ -252,6 +252,7 @@ def _stub_lint_and_sim(monkeypatch, sim_fail_sequence: list[bool] | None = None,
     monkeypatch.setattr("workers.lint.worker.shutil.which", lambda name: f"/bin/{name}")
     monkeypatch.setattr("workers.sim.worker.shutil.which", lambda name: f"/bin/{name}")
     monkeypatch.setattr("workers.tb_lint.worker.shutil.which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
 
     sim_fail_sequence = sim_fail_sequence or [False]
     tb_lint_fail_sequence = tb_lint_fail_sequence or [False]
@@ -285,6 +286,11 @@ def _stub_lint_and_sim(monkeypatch, sim_fail_sequence: list[bool] | None = None,
     monkeypatch.setattr("workers.lint.worker.subprocess.run", fake_run)
     monkeypatch.setattr("workers.sim.worker.subprocess.run", fake_run)
     monkeypatch.setattr("workers.tb_lint.worker.subprocess.run", fake_run)
+
+    def fake_debug_run(cmd, timeout_s):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("agents.debug.worker._run_subprocess", fake_debug_run)
 
 
 def _build_workers():
