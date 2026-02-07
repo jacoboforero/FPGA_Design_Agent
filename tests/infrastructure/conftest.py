@@ -2,6 +2,7 @@
 Infrastructure test fixtures for RabbitMQ testing.
 """
 import os
+import shutil
 import subprocess
 import time
 import pytest
@@ -18,6 +19,22 @@ def rabbitmq_service():
     """
     Start RabbitMQ service and ensure it's healthy before tests.
     """
+    docker_path = shutil.which("docker")
+    compose_path = shutil.which("docker-compose")
+    if not docker_path or not compose_path:
+        pytest.skip("Docker or docker-compose is not available; skipping infrastructure tests.")
+
+    try:
+        subprocess.run(
+            [docker_path, "info"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        detail = getattr(exc, "stderr", "") or getattr(exc, "stdout", "") or str(exc)
+        pytest.skip(f"Docker daemon is unavailable: {detail.strip()}")
+
     # Change to infrastructure directory
     original_cwd = os.getcwd()
     os.chdir(INFRASTRUCTURE_DIR)
@@ -26,7 +43,7 @@ def rabbitmq_service():
         # Start the service
         print("Starting RabbitMQ service...")
         result = subprocess.run(
-            ["docker-compose", "up", "-d"], 
+            [compose_path, "up", "-d", "rabbitmq"],
             capture_output=True, 
             text=True, 
             check=True
@@ -55,19 +72,19 @@ def rabbitmq_service():
         print("Creating RabbitMQ user...")
         try:
             subprocess.run(
-                ["docker", "exec", "multi-agent-task-broker", "rabbitmqctl", "add_user", "user", "password"],
+                [docker_path, "exec", "multi-agent-task-broker", "rabbitmqctl", "add_user", "user", "password"],
                 capture_output=True,
                 text=True,
                 check=False  # User might already exist
             )
             subprocess.run(
-                ["docker", "exec", "multi-agent-task-broker", "rabbitmqctl", "set_user_tags", "user", "administrator"],
+                [docker_path, "exec", "multi-agent-task-broker", "rabbitmqctl", "set_user_tags", "user", "administrator"],
                 capture_output=True,
                 text=True,
                 check=True
             )
             subprocess.run(
-                ["docker", "exec", "multi-agent-task-broker", "rabbitmqctl", "set_permissions", "-p", "/", "user", ".*", ".*", ".*"],
+                [docker_path, "exec", "multi-agent-task-broker", "rabbitmqctl", "set_permissions", "-p", "/", "user", ".*", ".*", ".*"],
                 capture_output=True,
                 text=True,
                 check=True
@@ -98,7 +115,7 @@ def rabbitmq_service():
         # Cleanup: stop the service
         print("Stopping RabbitMQ service...")
         subprocess.run(
-            ["docker-compose", "down"], 
+            [compose_path, "down"], 
             capture_output=True, 
             text=True
         )

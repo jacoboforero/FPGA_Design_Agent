@@ -4,7 +4,7 @@ Test Dead Letter Queue (DLQ) functionality.
 import json
 import pytest
 import pika
-from schemas.contracts import TaskMessage, EntityType, AgentType, TaskPriority
+from core.schemas.contracts import TaskMessage, EntityType, AgentType, TaskPriority
 
 
 class TestDLQFunctionality:

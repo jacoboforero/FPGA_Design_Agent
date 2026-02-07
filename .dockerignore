@@ -1,0 +1,12 @@
+.git
+.pytest_cache
+.venv
+__pycache__
+artifacts
+dist
+node_modules
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.tmp

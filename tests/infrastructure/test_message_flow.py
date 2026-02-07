@@ -4,9 +4,15 @@ Test end-to-end message flow through RabbitMQ.
 import json
 import pytest
 import pika
-from schemas.contracts import (
-    TaskMessage, ResultMessage, TaskPriority, TaskStatus, 
-    EntityType, AgentType, WorkerType, CostMetrics
+from core.schemas.contracts import (
+    TaskMessage,
+    ResultMessage,
+    TaskPriority,
+    TaskStatus,
+    EntityType,
+    AgentType,
+    WorkerType,
+    CostMetrics,
 )
 
 

@@ -29,7 +29,33 @@ services:
       # For local development only. Do NOT use these credentials in production.
       - RABBITMQ_DEFAULT_USER=user
       - RABBITMQ_DEFAULT_PASS=password
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERILATOR_VERSION: "5.044"
+    container_name: fpga-design-agent
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+      - poetry-cache:/root/.cache/pypoetry
+      - pip-cache:/root/.cache/pip
+    environment:
+      - RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
+      - POETRY_CACHE_DIR=/root/.cache/pypoetry
+      - PIP_CACHE_DIR=/root/.cache/pip
+      - EDITOR=nano
+    depends_on:
+      - rabbitmq
+    command: ["sleep", "infinity"]
+    stdin_open: true
+    tty: true
 
 networks:
   default:
     name: multi-agent-network
+
+volumes:
+  poetry-cache:
+  pip-cache:

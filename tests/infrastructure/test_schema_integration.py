@@ -4,9 +4,15 @@ Test integration between schemas and RabbitMQ configuration.
 import json
 import pytest
 import pika
-from schemas.contracts import (
-    TaskMessage, ResultMessage, TaskPriority, TaskStatus, 
-    EntityType, AgentType, WorkerType, CostMetrics
+from core.schemas.contracts import (
+    TaskMessage,
+    ResultMessage,
+    TaskPriority,
+    TaskStatus,
+    EntityType,
+    AgentType,
+    WorkerType,
+    CostMetrics,
 )
 
 

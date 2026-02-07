@@ -4,7 +4,7 @@ Global pytest configuration and shared fixtures for the multi-agent hardware des
 import pytest
 from datetime import datetime
 from uuid import UUID, uuid4
-from schemas import (
+from core.schemas import (
     TaskPriority,
     TaskStatus,
     EntityType,
