@@ -238,11 +238,6 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
             "verification": verification,
             "acceptance": acceptance,
             "verification_scope": "full" if module == top_module else "lite",
-<<<<<<< HEAD
-            "children": children,
-            "connections": node_connections,
-=======
->>>>>>> bcda1974a0a8e3b0b72d1b4b801c760ea14dde72
         }
 
     design_context = {
@@ -251,10 +246,7 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
         "standard_library": {},
         "top_module": top_module,
         "modules": module_nodes,
-<<<<<<< HEAD
         "connections": [conn.model_dump() for conn in l4.connections],
-=======
->>>>>>> bcda1974a0a8e3b0b72d1b4b801c760ea14dde72
     }
     design_context["design_context_hash"] = _hash_dict(design_context["nodes"])
 

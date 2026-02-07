@@ -49,10 +49,4 @@ class DemoContextBuilder:
             "acceptance": node.get("acceptance", {}),
             "verification_scope": node.get("verification_scope", "full"),
             "top_module": self._context.get("top_module"),
-<<<<<<< HEAD
-            "children": children,
-            "child_interfaces": child_interfaces,
-            "connections": connections,
-=======
->>>>>>> bcda1974a0a8e3b0b72d1b4b801c760ea14dde72
         }

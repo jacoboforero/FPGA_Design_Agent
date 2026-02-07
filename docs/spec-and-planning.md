@@ -36,8 +36,3 @@ When the spec helper locks the design:
 - `lock.json` records `top_module` and `modules` so the planner can build the DAG.
 
 The planner still uses `L4_architecture.json` from the top module to define the block diagram and dependencies.
-<<<<<<< HEAD
-
-Dependency edges are interpreted as "parent depends on child" so leaves execute first.
-=======
->>>>>>> bcda1974a0a8e3b0b72d1b4b801c760ea14dde72
