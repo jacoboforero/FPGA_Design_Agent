@@ -287,43 +287,60 @@ def _stub_lint_and_sim(monkeypatch, sim_fail_sequence: list[bool] | None = None,
     monkeypatch.setattr("workers.tb_lint.worker.subprocess.run", fake_run)
 
 
-def _build_workers():
+def _build_workers(monkeypatch):
+    import os
+    os.environ['USE_LLM'] = '1'
+
+    #Create fake getways first
+    fake_impl_gateway = FakeGateway(FakeResponse(content="module demo; endmodule\n"))
+    fake_tb_gateway = FakeGateway(FakeResponse(content="module tb_demo; initial $finish; endmodule\n"))
+    fake_refl_gateway = FakeGateway(
+        FakeResponse(
+            content=json.dumps({
+                "hypotheses": ["h1"],
+                "likely_failure_points": ["p1"],
+                "recommended_probes": ["probe"],
+                "confidence_score": 0.5,
+                "analysis_notes": "ok",
+            })
+        )
+    )
+    fake_dbg_gateway = FakeGateway(
+        FakeResponse(
+            content=json.dumps({
+                "summary": "ok",
+                "touched_files": ["tb"],
+                "rtl_lines": None,
+                "tb_lines": ["module tb_demo;", "  initial $finish;", "endmodule"],
+                "risks": [],
+                "next_steps": ["step"],
+            })
+        )
+    )
+
+    # Patch init_llm_gateway to return fake gateways
+    def fake_impl_init():
+        return fake_impl_gateway
+    def fake_tb_init():
+        return fake_tb_gateway
+    def fake_refl_init():
+        return fake_refl_gateway
+    def fake_dbg_init():
+        return fake_dbg_gateway
+
+    monkeypatch.setattr("agents.implementation.worker.init_llm_gateway", fake_impl_init)
+    monkeypatch.setattr("agents.testbench.worker.init_llm_gateway", fake_tb_init)
+    monkeypatch.setattr("agents.reflection.worker.init_llm_gateway", fake_refl_init)
+    monkeypatch.setattr("agents.debug.worker.init_llm_gateway", fake_dbg_init)
+    
+    #Now we can create the workers - fake Gateways have already been created
     impl = ImplementationWorker(connection_params=None, stop_event=None)
-    impl.gateway = FakeGateway(FakeResponse(content="module demo; endmodule\n"))
 
     tb = TestbenchWorker(connection_params=None, stop_event=None)
-    tb.gateway = FakeGateway(FakeResponse(content="module tb_demo; initial $finish; endmodule\n"))
 
     refl = ReflectionWorker(connection_params=None, stop_event=None)
-    refl.gateway = FakeGateway(
-        FakeResponse(
-            content=json.dumps(
-                {
-                    "hypotheses": ["h1"],
-                    "likely_failure_points": ["p1"],
-                    "recommended_probes": ["probe"],
-                    "confidence_score": 0.5,
-                    "analysis_notes": "ok",
-                }
-            )
-        )
-    )
 
     dbg = DebugWorker(connection_params=None, stop_event=None)
-    dbg.gateway = FakeGateway(
-        FakeResponse(
-            content=json.dumps(
-                {
-                    "summary": "ok",
-                    "touched_files": ["tb"],
-                    "rtl_lines": None,
-                    "tb_lines": ["module tb_demo;", "  initial $finish;", "endmodule"],
-                    "risks": [],
-                    "next_steps": ["step"],
-                }
-            )
-        )
-    )
 
     lint = LintWorker(connection_params=None, stop_event=None)
     lint.verilator = "verilator"
@@ -359,7 +376,7 @@ def test_execution_pipeline_success(tmp_path, monkeypatch):
     task_memory_root = tmp_path / "artifacts/task_memory"
     rtl_root = tmp_path / "artifacts/generated"
 
-    workers = _build_workers()
+    workers = _build_workers(monkeypatch)
     _stub_lint_and_sim(monkeypatch, sim_fail_sequence=[False], tb_lint_fail_sequence=[False])
 
     ctx_builder = DemoContextBuilder(design_context_path, rtl_root)
@@ -393,7 +410,7 @@ def test_execution_pipeline_failure_triggers_distill(tmp_path, monkeypatch):
     task_memory_root = tmp_path / "artifacts/task_memory"
     rtl_root = tmp_path / "artifacts/generated"
 
-    workers = _build_workers()
+    workers = _build_workers(monkeypatch)
     _stub_lint_and_sim(monkeypatch, sim_fail_sequence=[True, True, True], tb_lint_fail_sequence=[False])
 
     ctx_builder = DemoContextBuilder(design_context_path, rtl_root)
@@ -432,7 +449,7 @@ def test_execution_pipeline_tb_lint_failure_triggers_debug(tmp_path, monkeypatch
     task_memory_root = tmp_path / "artifacts/task_memory"
     rtl_root = tmp_path / "artifacts/generated"
 
-    workers = _build_workers()
+    workers = _build_workers(monkeypatch)
     _stub_lint_and_sim(monkeypatch, sim_fail_sequence=[False], tb_lint_fail_sequence=[True, False])
 
     ctx_builder = DemoContextBuilder(design_context_path, rtl_root)
@@ -462,7 +479,7 @@ def test_execution_pipeline_tb_lint_and_sim_failures_have_separate_debug_budgets
     task_memory_root = tmp_path / "artifacts/task_memory"
     rtl_root = tmp_path / "artifacts/generated"
 
-    workers = _build_workers()
+    workers = _build_workers(monkeypatch)
     # TB lint fails once (needs one debug), then passes. Simulation then fails twice and must still
     # get two debug attempts for the sim failure reason.
     _stub_lint_and_sim(monkeypatch, sim_fail_sequence=[True, True, False], tb_lint_fail_sequence=[True, False])

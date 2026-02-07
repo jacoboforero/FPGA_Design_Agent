@@ -6,7 +6,6 @@
 #   2. Save the corresponding 'rabbitmq-definitions.json' in the same directory.
 #   3. Run 'docker-compose up -d' to start the service in the background.
 #
-version: "3.8"
 
 services:
   rabbitmq:
