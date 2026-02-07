@@ -97,8 +97,12 @@ class LintWorker(threading.Thread):
             )
         strict_warnings = os.getenv("VERILATOR_STRICT_WARNINGS", "0") == "1"
         try:
+<<<<<<< HEAD
             rtl_args = list(dict.fromkeys(rtl_paths))
             cmd = [self.verilator, "--lint-only", "--quiet", "--sv", *rtl_args]
+=======
+            cmd = [self.verilator, "--lint-only", "--quiet", "--sv", str(rtl_path)] #TODO: double check the command
+>>>>>>> bcda1974a0a8e3b0b72d1b4b801c760ea14dde72
             completed = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             output = (completed.stderr or "") + (completed.stdout or "")
             output = output.strip()

@@ -170,6 +170,7 @@ def _stage_dir(kind: str, attempt: int | None) -> str:
     if attempt is None:
         return kind
     return f"{kind}_attempt{attempt}"
+<<<<<<< HEAD
 
 
 def _number_lines(text: str) -> str:
@@ -227,3 +228,5 @@ def _normalize_list_field(value) -> list[str]:
             continue
         items.append(str(item))
     return items
+=======
+>>>>>>> bcda1974a0a8e3b0b72d1b4b801c760ea14dde72

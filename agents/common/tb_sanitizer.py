@@ -11,15 +11,21 @@ _DECL_RE = re.compile(r"^\s*(reg|integer|wire|logic)\b")
 _BEGIN_RE = re.compile(r"\bbegin\b")
 _END_RE = re.compile(r"\bend\b")
 _CHECK_RE = re.compile(r"\b(if\s*\(|\$display\s*\(|\$finish\s*\()", re.IGNORECASE)
+<<<<<<< HEAD
 _DUMPFILE_TARGET_BITS = 2048
 _DUMPFILE_NAMES = ("dumpfile", "dump_file", "dump_file_str")
+=======
+>>>>>>> bcda1974a0a8e3b0b72d1b4b801c760ea14dde72
 
 
 def sanitize_testbench(source: str) -> str:
     text = _fix_binary_literal_widths(source)
     lines = text.splitlines()
     lines = _hoist_declarations(lines)
+<<<<<<< HEAD
     lines = _widen_dumpfile_regs(lines)
+=======
+>>>>>>> bcda1974a0a8e3b0b72d1b4b801c760ea14dde72
     lines = _insert_check_delay(lines)
     return "\n".join(lines)
 
@@ -128,6 +134,7 @@ def _insert_check_delay(lines: list[str]) -> list[str]:
             in_posedge = False
 
     return out
+<<<<<<< HEAD
 
 
 def _widen_dumpfile_regs(lines: list[str]) -> list[str]:
@@ -164,3 +171,5 @@ def _widen_dumpfile_regs(lines: list[str]) -> list[str]:
         else:
             out.append(line)
     return out
+=======
+>>>>>>> bcda1974a0a8e3b0b72d1b4b801c760ea14dde72
