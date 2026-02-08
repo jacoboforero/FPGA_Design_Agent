@@ -17,6 +17,74 @@ from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
 
 
+#TODO: Delete this later. Added to try to fix error when testing. Both functions were added
+#=======================================================================================
+def number_lines(text: str) -> str:
+    return "\n".join(f"{i+1}: {line}" for i, line in enumerate(text.splitlines()))
+
+def _normalize_reflection_payload(payload: dict) -> dict:
+    # Initialize normalized data with defaults
+    normalized = {}
+
+    # Hypotheses
+    hypotheses = payload.get("hypotheses")
+    if hypotheses is None:
+        hypotheses = []
+    elif isinstance(hypotheses, str):
+        hypotheses = [hypotheses]
+    elif not isinstance(hypotheses, list):
+        hypotheses = list(hypotheses)
+    normalized["hypotheses"] = [str(h) for h in hypotheses]
+
+    # Likely failure points
+    failure_points = payload.get("likely_failure_points")
+    if failure_points is None:
+        failure_points = []
+    elif isinstance(failure_points, str):
+        failure_points = [failure_points]
+    elif not isinstance(failure_points, list):
+        failure_points = list(failure_points)
+    normalized["likely_failure_points"] = [str(fp) for fp in failure_points]
+
+    # Recommended probes
+    probes = payload.get("recommended_probes")
+    if probes is None:
+        probes = []
+    elif isinstance(probes, str):
+        probes = [probes]
+    elif not isinstance(probes, list):
+        probes = list(probes)
+    normalized["recommended_probes"] = [str(p) for p in probes]
+
+    # Confidence score
+    score = payload.get("confidence_score")
+    if not isinstance(score, (int, float)):
+        try:
+            score = float(score)
+        except Exception:
+            score = 0.0
+    normalized["confidence_score"] = float(score)
+
+    # Analysis notes
+    notes = payload.get("analysis_notes")
+    if notes is None:
+        notes = ""
+    elif not isinstance(notes, str):
+        notes = str(notes)
+    normalized["analysis_notes"] = notes
+
+    # Optional: include reflection_id if present
+    if "reflection_id" in payload:
+        normalized["reflection_id"] = payload["reflection_id"]
+
+    # Optional: handle created_at if present
+    if "created_at" in payload:
+        normalized["created_at"] = payload["created_at"]
+
+    return normalized
+
+#===========================================================================
+
 class ReflectionWorker(AgentWorkerBase):
     handled_types = {AgentType.REFLECTION}
     runtime_name = "agent_reflection"
@@ -25,6 +93,7 @@ class ReflectionWorker(AgentWorkerBase):
         super().__init__(connection_params, stop_event)
         self.gateway = init_llm_gateway()
 
+    
     def handle_task(self, task: TaskMessage) -> ResultMessage:
         if not self.gateway or not Message or not GenerationConfig:
             return ResultMessage(
@@ -65,8 +134,8 @@ class ReflectionWorker(AgentWorkerBase):
             f"Node: {node_id}\n"
             f"Coverage goals: {json.dumps(ctx.get('coverage_goals', {}), indent=2)}\n"
             f"Distilled dataset:\n{distill_text}\n\n"
-            f"RTL source (full, line-numbered):\n{_number_lines(rtl_text)}\n\n"
-            f"Testbench source (full, line-numbered):\n{_number_lines(tb_text)}\n"
+            f"RTL source (full, line-numbered):\n{number_lines(rtl_text)}\n\n"
+            f"Testbench source (full, line-numbered):\n{number_lines(tb_text)}\n"
         )
         msgs = [
             Message(role=MessageRole.SYSTEM, content=system),

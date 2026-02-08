@@ -20,6 +20,7 @@ from workers.sim.worker import SimulationWorker
 from workers.tb_lint.worker import TestbenchLintWorker
 
 
+
 def _iface_signals() -> list[dict]:
     return [
         {"name": "clk", "direction": "INPUT", "width": 1, "semantics": "clock"},
