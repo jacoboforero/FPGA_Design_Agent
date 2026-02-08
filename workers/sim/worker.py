@@ -75,6 +75,10 @@ class SimulationWorker(threading.Thread):
         tb_path = task.context.get("tb_path")
         node_id = task.context.get("node_id")
         attempt = _parse_attempt(task.context.get("attempt"))
+
+        #TODO: remove this comment once ensured this initialization fixed the error
+        log_lines = []
+
         if not iverilog or not vvp:
             return ResultMessage(
                 task_id=task.task_id,
@@ -100,6 +104,11 @@ class SimulationWorker(threading.Thread):
                 sources.append(tb_path)
             cmd = [iverilog, "-g2012", "-g2005-sv", "-o", "/tmp/sim.out", *sources] #TODO: make sure this command is correct
             build = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+            #add build info to logs
+            log_lines.append("[build]")
+            log_lines.append(f"cmd:{' '.join(cmd)}")
+
             if build.returncode != 0:
                 output = "\n".join(part for part in [build.stdout, build.stderr] if part).strip()
                 if output:
