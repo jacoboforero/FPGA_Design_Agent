@@ -2,7 +2,8 @@
 Common LLM gateway initialization for agents.
 
 This module provides the gateway factory used throughout the agent system.
-Supports both legacy direct initialization and new centralized configuration.
+Defaults to simple environment-based configuration for backward compatibility.
+Supports optional centralized tier-based configuration for advanced use cases.
 """
 
 import os
@@ -16,48 +17,56 @@ logger = logging.getLogger(__name__)
 
 def init_llm_gateway(agent_type: Optional[str] = None) -> Optional[LLMGateway]:
     """
-    Initialize an LLM gateway for the specified agent type.
+    Initialize an LLM gateway.
     
     This function supports two modes:
-    1. New mode (USE_GATEWAY_CONFIG=1): Uses centralized gateway_config.py
-    2. Legacy mode (default): Direct initialization for backward compatibility
+    1. Legacy mode (default): Simple environment-based provider/model selection
+    2. Config mode (USE_GATEWAY_CONFIG=1): Tier-based agent-aware selection
     
     Args:
         agent_type: Agent identifier (e.g., "planner", "implementation")
-                   If None, uses a balanced default gateway.
+                   Used to look up agent-specific model overrides in legacy mode.
+                   Ignored if not provided; may be used in future per-agent config.
     
     Returns:
         LLMGateway instance or None if LLMs are disabled or keys missing
     
-    Environment Variables:
+    Environment Variables (Legacy Mode - default):
         USE_LLM: Set to "1" to enable LLM usage (default: "0")
-        USE_GATEWAY_CONFIG: Set to "1" to use centralized config (default: "0")
         
-        # For centralized config mode:
+        # Provider and model selection (simple):
+        LLM_PROVIDER: Provider to use (openai|anthropic|google|groq|qwen3-local)
+                     (default: "openai")
+        LLM_MODEL: Model name to use (default varies by provider)
+        
+        # Per-agent overrides (optional, future feature):
+        LLM_PROVIDER_{agent_type}: Provider for specific agent (e.g., LLM_PROVIDER_planner=anthropic)
+        LLM_MODEL_{agent_type}: Model for specific agent (e.g., LLM_MODEL_planner=claude-opus)
+        
+        # API keys (required for each provider):
         OPENAI_API_KEY: OpenAI API key
         ANTHROPIC_API_KEY: Anthropic API key
         GOOGLE_API_KEY: Google API key
         GROQ_API_KEY: Groq API key
-        OLLAMA_BASE_URL: Ollama server URL (default: http://localhost:11434)
-        GATEWAY_TIER: Override tier selection (local|fast|budget|balanced|powerful)
-        
-        # For legacy mode:
-        LLM_PROVIDER: Provider to use (openai|anthropic|google|groq|qwen3-local)
-        LLM_MODEL: Model name to use
+    
+    Environment Variables (Config Mode - opt-in):
+        USE_LLM: Set to "1" to enable LLM usage
+        USE_GATEWAY_CONFIG: Set to "1" to use tier-based selection (default: "0")
+        GATEWAY_TIER: Override tier (local|fast|budget|balanced|powerful)
     
     Examples:
-        # Centralized config (recommended for new code)
-        export USE_LLM=1
-        export USE_GATEWAY_CONFIG=1
-        export ANTHROPIC_API_KEY=xxx
-        gateway = init_llm_gateway("planner")  # Auto-selects powerful model
-        
-        # Legacy mode (backward compatible)
+        # Legacy mode (simple, recommended for most users):
         export USE_LLM=1
         export LLM_PROVIDER=openai
         export LLM_MODEL=gpt-4o
-        export OPENAI_API_KEY=xxx
+        export OPENAI_API_KEY=sk-...
         gateway = init_llm_gateway()
+        
+        # Config mode (advanced, tier-based):
+        export USE_LLM=1
+        export USE_GATEWAY_CONFIG=1
+        export ANTHROPIC_API_KEY=sk-ant-...
+        gateway = init_llm_gateway("planner")  # Auto-selects by tier
     """
     use_llm = os.getenv("USE_LLM", "0") == "1"
     
@@ -65,7 +74,7 @@ def init_llm_gateway(agent_type: Optional[str] = None) -> Optional[LLMGateway]:
         logger.info("LLMs disabled (USE_LLM != 1)")
         return None
     
-    # Check if using new centralized config
+    # Check if using advanced centralized config mode
     use_config = os.getenv("USE_GATEWAY_CONFIG", "0") == "1"
     
     if use_config:
@@ -75,7 +84,12 @@ def init_llm_gateway(agent_type: Optional[str] = None) -> Optional[LLMGateway]:
 
 
 def _init_with_config(agent_type: Optional[str]) -> Optional[LLMGateway]:
-    """Initialize using centralized gateway_config.py"""
+    """
+    Initialize using centralized gateway_config (opt-in, advanced mode).
+    
+    Only used if USE_GATEWAY_CONFIG=1 is set. Provides tier-based agent-aware
+    gateway selection. See gateway_config.py for details.
+    """
     try:
         from adapters.llm.gateway_config import get_gateway_for_agent
         
@@ -98,12 +112,38 @@ def _init_with_config(agent_type: Optional[str]) -> Optional[LLMGateway]:
 
 def _init_legacy(agent_type: Optional[str]) -> Optional[LLMGateway]:
     """
-    Legacy initialization method for backward compatibility.
+    Legacy initialization using environment variables.
     
-    Uses LLM_PROVIDER and LLM_MODEL environment variables.
+    Environment variables (simple):
+    - LLM_PROVIDER: Provider name (default: "openai")
+    - LLM_MODEL: Model name (default varies by provider)
+    
+    Per-agent overrides (optional, for future use):
+    - LLM_PROVIDER_{agent_type}: Override provider for specific agent
+    - LLM_MODEL_{agent_type}: Override model for specific agent
+    
+    Example:
+        LLM_PROVIDER=openai
+        LLM_MODEL=gpt-4o
+        LLM_PROVIDER_planner=anthropic
+        LLM_MODEL_planner=claude-opus
+        
+        init_llm_gateway()  # Uses openai/gpt-4o
+        init_llm_gateway("planner")  # Uses anthropic/claude-opus
     """
-    provider = os.getenv("LLM_PROVIDER", "openai").lower()
-    model = os.getenv("LLM_MODEL")
+    # Check for agent-specific overrides first
+    provider = None
+    model = None
+    
+    if agent_type:
+        provider = os.getenv(f"LLM_PROVIDER_{agent_type}").lower() if os.getenv(f"LLM_PROVIDER_{agent_type}") else None
+        model = os.getenv(f"LLM_MODEL_{agent_type}")
+    
+    # Fall back to defaults
+    if not provider:
+        provider = os.getenv("LLM_PROVIDER", "openai").lower()
+    if not model:
+        model = os.getenv("LLM_MODEL")
     
     try:
         if provider == "openai":
@@ -161,17 +201,16 @@ def _init_legacy(agent_type: Optional[str]) -> Optional[LLMGateway]:
 
 def init_llm_gateway_with_fallback(agent_type: str) -> Optional[LLMGateway]:
     """
-    Initialize an LLM gateway with fallback support.
+    Initialize an LLM gateway with fallback support (config mode only).
     
-    Only works in USE_GATEWAY_CONFIG=1 mode.
-    Returns the primary gateway, but you can get the full fallback
-    chain using get_fallback_chain().
+    Only works when USE_GATEWAY_CONFIG=1. Returns the primary gateway for an agent,
+    but also enables fallback chains if primary gateway fails.
     
     Args:
-        agent_type: Agent identifier
+        agent_type: Agent identifier (e.g., "planner", "implementation")
         
     Returns:
-        Primary gateway or None
+        Primary gateway or None if none available
     """
     use_llm = os.getenv("USE_LLM", "0") == "1"
     if not use_llm:

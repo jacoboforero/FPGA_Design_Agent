@@ -1,13 +1,18 @@
 """
-Centralized gateway configuration for the RTL agentic loop.
+Centralized gateway configuration (opt-in, advanced mode).
+
+This module provides tier-based gateway selection for advanced use cases.
+Requires USE_GATEWAY_CONFIG=1 to be enabled - disabled by default.
+
+For simple provider/model selection, use legacy mode with LLM_PROVIDER and LLM_MODEL
+environment variables (see llm_gateway.py).
 
 This module provides a factory for creating LLM gateways based on:
 - Agent type (planner, implementation, debug, etc.)
-- Task complexity
-- Cost constraints
+- Gateway tier (local, fast, budget, balanced, powerful)
 - Available API keys
 
-Usage:
+Usage (only when USE_GATEWAY_CONFIG=1):
     from adapters.llm.gateway_config import get_gateway_for_agent
     
     gateway = get_gateway_for_agent("implementation")
