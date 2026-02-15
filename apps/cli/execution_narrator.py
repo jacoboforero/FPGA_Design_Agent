@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -184,12 +185,19 @@ class ExecutionNarrator:
     def _handle_note(self, payload: dict[str, Any]) -> None:
         node_id = str(payload.get("node_id", "")).strip() or "pipeline"
         reason = str(payload.get("reason", "")).strip()
+        note = str(payload.get("note", "")).strip()
         if reason == "timeout":
             header = "pipeline | execution timeout"
             lines = ["I hit the configured timeout before all modules completed."]
+        elif note == "non_top_module_skip":
+            header = f"{node_id} | verification skipped"
+            lines = ["I skipped testbench and simulation for this non-top module as planned."]
         elif reason == "no_code_changes":
             header = f"{node_id} | retries stopped"
             lines = ["I could not generate a meaningful code delta, so I stopped retries."]
+        elif reason in {"rtl_lint", "tb_lint", "sim"}:
+            header = f"{node_id} | retries stopped"
+            lines = [f"I reached the retry guardrail for {reason} and stopped this path."]
         else:
             header = f"{node_id} | retries stopped"
             lines = ["I reached a retry guardrail and stopped this path."]
@@ -323,12 +331,15 @@ class ExecutionNarrator:
         next_step = str(parsed.get("next_step", "")).strip()
         if not all([headline, narrative, evidence, next_step]):
             return None
-        return {
+        card = {
             "headline": _truncate(headline, 120),
             "narrative": _truncate(narrative, 360),
             "evidence": _truncate(evidence, 260),
             "next_step": _truncate(self._normalize_next(next_step), 260),
         }
+        if not self._llm_card_consistent(card, str(context.get("status", "UNKNOWN"))):
+            return None
+        return card
 
     @staticmethod
     def _init_llm_gateway() -> Optional[object]:
@@ -422,6 +433,21 @@ class ExecutionNarrator:
         if lowered.startswith("i will ") or lowered.startswith("we will "):
             return f"Next {cleaned}"
         return f"Next I will {cleaned[0].lower() + cleaned[1:]}" if cleaned[0].isupper() else f"Next I will {cleaned}"
+
+    @staticmethod
+    def _llm_card_consistent(card: dict[str, str], status: str) -> bool:
+        text = " ".join(str(card.get(k, "")) for k in ("headline", "narrative", "evidence", "next_step")).lower()
+        has_failure_markers = bool(
+            re.search(r"\b(fail|failed|failure|error|mismatch|incorrect|bug|issue)\b", text)
+        )
+        has_success_markers = bool(
+            re.search(r"\b(pass|passed|success|successful|no issues|without errors)\b", text)
+        )
+        if status == "SUCCESS" and has_failure_markers:
+            return False
+        if status != "SUCCESS" and has_success_markers and not has_failure_markers:
+            return False
+        return True
 
     def _append_narrative(self, node_id: str, text: str) -> None:
         if not node_id:

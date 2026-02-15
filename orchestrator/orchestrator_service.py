@@ -62,10 +62,6 @@ class DemoOrchestrator:
         self.rtl_root = rtl_root
         self.context_builder = DemoContextBuilder(design_context_path, rtl_root)
         self._design_context = json.loads(design_context_path.read_text())
-        self._node_scopes = {
-            node_id: node.get("verification_scope", "full")
-            for node_id, node in self._design_context.get("nodes", {}).items()
-        }
         self._top_module = self._design_context.get("top_module")
         self.dag = json.loads(dag_path.read_text())
         self.nodes: Dict[str, Node] = {n["id"]: Node(n["id"]) for n in self.dag["nodes"]}
@@ -624,14 +620,6 @@ class DemoOrchestrator:
                     tasks[target_node][lint_key] = lint_task
                 elif kind == "lint":
                     _reset_debug_attempts(target_node, "rtl_lint")
-                    if self._node_scopes.get(target_node, "full") != "full":
-                        self._emit_progress(
-                            f"Skipping TB/SIM for {target_node} (non-top module).",
-                            event_type="execution_note",
-                            payload={"node_id": target_node, "note": "non_top_module_skip"},
-                        )
-                        _finish_done(target_node)
-                        continue
                     if not tb_generated_by_node.get(target_node, False):
                         self._advance(target_node, NodeState.TESTBENCHING)
                         tb_task = self._publish_task(ch, EntityType.REASONING, AgentType.TESTBENCH, target_node)

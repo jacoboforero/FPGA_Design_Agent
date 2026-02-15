@@ -795,7 +795,7 @@ def test_debug_worker_invalid_json(sandbox):
     rtl = Path("demo.sv")
     tb = Path("demo_tb.sv")
     rtl.write_text("module demo; endmodule\n")
-    tb.write_text("module tb_demo; initial $finish; endmodule\n")
+    tb.write_text('module tb_demo; initial begin $display("old"); $finish; end endmodule\n')
     task = TaskMessage(
         entity_type=EntityType.REASONING,
         task_type=AgentType.DEBUG,
@@ -830,7 +830,7 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
     rtl = Path("demo.sv")
     tb = Path("demo_tb.sv")
     rtl.write_text("module demo; endmodule\n")
-    tb.write_text("module tb_demo; initial $finish; endmodule\n")
+    tb.write_text('module tb_demo; initial begin $display("old"); $finish; end endmodule\n')
     worker.gateway = SequenceGateway(
         [
             FakeResponse(content="not json"),
@@ -841,7 +841,14 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
                         "summary": "ok",
                         "touched_files": ["tb"],
                         "rtl_lines": None,
-                        "tb_lines": ["module tb_demo;", "  initial $finish;", "endmodule"],
+                        "tb_lines": [
+                            "module tb_demo;",
+                            "  initial begin",
+                            '    $display(\"new\");',
+                            "    $finish;",
+                            "  end",
+                            "endmodule",
+                        ],
                         "risks": [],
                         "next_steps": ["step"],
                     }
@@ -877,7 +884,14 @@ def test_debug_worker_success(sandbox, monkeypatch):
                     "summary": "ok",
                     "touched_files": ["tb"],
                     "rtl_lines": None,
-                    "tb_lines": ["module tb_demo;", "  initial $finish;", "endmodule"],
+                    "tb_lines": [
+                        "module tb_demo;",
+                        "  initial begin",
+                        '    $display(\"new\");',
+                        "    $finish;",
+                        "  end",
+                        "endmodule",
+                    ],
                     "risks": [],
                     "next_steps": ["step"],
                 }
@@ -887,7 +901,7 @@ def test_debug_worker_success(sandbox, monkeypatch):
     rtl = Path("demo.sv")
     tb = Path("demo_tb.sv")
     rtl.write_text("module demo; endmodule\n")
-    tb.write_text("module tb_demo; initial $finish; endmodule\n")
+    tb.write_text('module tb_demo; initial begin $display("old"); $finish; end endmodule\n')
     task = TaskMessage(
         entity_type=EntityType.REASONING,
         task_type=AgentType.DEBUG,
@@ -918,7 +932,14 @@ def test_debug_worker_local_validation_failure(sandbox, monkeypatch):
                     "summary": "fix tb",
                     "touched_files": ["tb"],
                     "rtl_lines": None,
-                    "tb_lines": ["module tb_demo;", "  initial $finish;", "endmodule"],
+                    "tb_lines": [
+                        "module tb_demo;",
+                        "  initial begin",
+                        '    $display(\"new\");',
+                        "    $finish;",
+                        "  end",
+                        "endmodule",
+                    ],
                     "risks": [],
                     "next_steps": ["retry"],
                 }
@@ -928,7 +949,7 @@ def test_debug_worker_local_validation_failure(sandbox, monkeypatch):
     rtl = Path("demo.sv")
     tb = Path("demo_tb.sv")
     rtl.write_text("module demo; endmodule\n")
-    tb.write_text("module tb_demo; initial $finish; endmodule\n")
+    tb.write_text('module tb_demo; initial begin $display("old"); $finish; end endmodule\n')
     task = TaskMessage(
         entity_type=EntityType.REASONING,
         task_type=AgentType.DEBUG,
@@ -938,6 +959,90 @@ def test_debug_worker_local_validation_failure(sandbox, monkeypatch):
     assert result.status is TaskStatus.FAILURE
     assert "local validation failed" in result.log_output.lower()
     assert "tb_lint=FAIL" in result.log_output
+
+
+def test_debug_worker_noop_patch_fails(sandbox, monkeypatch):
+    monkeypatch.setenv("DEBUG_MAX_ATTEMPTS", "1")
+    worker = DebugWorker(connection_params=None, stop_event=None)
+    worker.gateway = FakeGateway(
+        FakeResponse(
+            content=json.dumps(
+                {
+                    "summary": "noop",
+                    "touched_files": ["rtl"],
+                    "rtl_lines": ["module demo; endmodule"],
+                    "tb_lines": None,
+                    "risks": [],
+                    "next_steps": ["retry"],
+                }
+            )
+        )
+    )
+    rtl = Path("demo.sv")
+    tb = Path("demo_tb.sv")
+    rtl.write_text("module demo; endmodule")
+    tb.write_text("module tb_demo;\n  initial $finish;\nendmodule\n")
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.DEBUG,
+        context={"node_id": "demo", "rtl_path": str(rtl), "tb_path": str(tb), "attempt": 1},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "no patch" in result.log_output.lower()
+
+
+def test_debug_worker_local_validation_fails_on_semantic_lint(sandbox, monkeypatch):
+    monkeypatch.setenv("DEBUG_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("VERILATOR_PATH", "verilator")
+    monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
+
+    def fake_run(cmd, timeout_s):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("agents.debug.worker._run_subprocess", fake_run)
+
+    worker = DebugWorker(connection_params=None, stop_event=None)
+    worker.gateway = FakeGateway(
+        FakeResponse(
+            content=json.dumps(
+                {
+                    "summary": "bad rtl",
+                    "touched_files": ["rtl"],
+                    "rtl_lines": [
+                        "module demo(input clk, input [7:0] a, input [7:0] b, output reg y);",
+                        "always @(posedge clk) begin",
+                        "  y <= (a < b);",
+                        "end",
+                        "endmodule",
+                    ],
+                    "tb_lines": None,
+                    "risks": [],
+                    "next_steps": ["retry"],
+                }
+            )
+        )
+    )
+    rtl = Path("demo.sv")
+    tb = Path("demo_tb.sv")
+    rtl.write_text("module demo(input [7:0] a, input [7:0] b, output y); assign y = (a < b); endmodule\n")
+    tb.write_text("module tb_demo; initial $finish; endmodule\n")
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.DEBUG,
+        context={
+            "node_id": "demo",
+            "rtl_path": str(rtl),
+            "tb_path": str(tb),
+            "attempt": 1,
+            "debug_reason": "rtl_lint",
+            "module_contract": {"style": "combinational", "forbid_edge_always": True},
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "local validation failed" in result.log_output.lower()
+    assert "RLSEM001" in result.log_output
 
 
 def test_debug_worker_local_validation_retry_then_success(sandbox, monkeypatch):
@@ -966,22 +1071,46 @@ def test_debug_worker_local_validation_retry_then_success(sandbox, monkeypatch):
 
     monkeypatch.setattr("agents.debug.worker._run_subprocess", fake_run)
 
-    payload = json.dumps(
+    payload_first = json.dumps(
         {
-            "summary": "fix tb",
+            "summary": "fix tb first",
             "touched_files": ["tb"],
             "rtl_lines": None,
-            "tb_lines": ["module tb_demo;", "  initial $finish;", "endmodule"],
+            "tb_lines": [
+                "module tb_demo;",
+                "  initial begin",
+                '    $display(\"new1\");',
+                "    $finish;",
+                "  end",
+                "endmodule",
+            ],
+            "risks": [],
+            "next_steps": ["retry"],
+        }
+    )
+    payload_second = json.dumps(
+        {
+            "summary": "fix tb second",
+            "touched_files": ["tb"],
+            "rtl_lines": None,
+            "tb_lines": [
+                "module tb_demo;",
+                "  initial begin",
+                '    $display(\"new2\");',
+                "    $finish;",
+                "  end",
+                "endmodule",
+            ],
             "risks": [],
             "next_steps": ["retry"],
         }
     )
     worker = DebugWorker(connection_params=None, stop_event=None)
-    worker.gateway = SequenceGateway([FakeResponse(content=payload), FakeResponse(content=payload)])
+    worker.gateway = SequenceGateway([FakeResponse(content=payload_first), FakeResponse(content=payload_second)])
     rtl = Path("demo.sv")
     tb = Path("demo_tb.sv")
     rtl.write_text("module demo; endmodule\n")
-    tb.write_text("module tb_demo; initial $finish; endmodule\n")
+    tb.write_text('module tb_demo; initial begin $display("old"); $finish; end endmodule\n')
     task = TaskMessage(
         entity_type=EntityType.REASONING,
         task_type=AgentType.DEBUG,

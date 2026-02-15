@@ -18,6 +18,7 @@ from core.observability.emitter import emit_runtime_event
 from agents.common.base import AgentWorkerBase
 from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, init_llm_gateway
 from agents.common.tb_sanitizer import sanitize_testbench
+from workers.lint.worker import _format_semantic_issues, _run_rtl_semantic_lint
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import TaskInputError
 
@@ -337,10 +338,6 @@ def _sanitize_verilog(source: str, *, kind: str) -> str:
     if kind == "rtl":
         text = text.replace("always_ff", "always")
         text = text.replace("always_comb", "always @*")
-        if "always" in text:
-            text = text.replace("output logic", "output reg")
-            text = text.replace("output wire", "output reg")
-        text = text.replace("logic", "wire")
         return text
     if kind == "tb":
         text = text.replace("logic", "reg")
@@ -386,10 +383,12 @@ def _apply_debug_patch(
             raise ValueError("touched_files includes 'rtl' but rtl_lines is missing/empty")
         rtl_source = "\n".join(str(line) for line in rtl_lines)
         rtl_source = _sanitize_verilog(rtl_source, kind="rtl")
-        rtl_path.parent.mkdir(parents=True, exist_ok=True)
-        rtl_path.write_text(rtl_source)
+        existing_rtl = rtl_path.read_text() if rtl_path.exists() else ""
+        if rtl_source != existing_rtl:
+            rtl_path.parent.mkdir(parents=True, exist_ok=True)
+            rtl_path.write_text(rtl_source)
+            wrote_rtl = True
         rtl_sha = sha256(rtl_source.encode()).hexdigest()
-        wrote_rtl = True
 
     if "tb" in touched_norm:
         tb_lines = payload.get("tb_lines")
@@ -397,10 +396,12 @@ def _apply_debug_patch(
             raise ValueError("touched_files includes 'tb' but tb_lines is missing/empty")
         tb_source = "\n".join(str(line) for line in tb_lines)
         tb_source = _sanitize_verilog(tb_source, kind="tb")
-        tb_path.parent.mkdir(parents=True, exist_ok=True)
-        tb_path.write_text(tb_source)
+        existing_tb = tb_path.read_text() if tb_path.exists() else ""
+        if tb_source != existing_tb:
+            tb_path.parent.mkdir(parents=True, exist_ok=True)
+            tb_path.write_text(tb_source)
+            wrote_tb = True
         tb_sha = sha256(tb_source.encode()).hexdigest()
-        wrote_tb = True
 
     # Snapshot patched artifacts under task_memory for traceability across attempts.
     if attempt is not None:
@@ -443,7 +444,7 @@ def _run_local_validation(
     rtl_paths = _resolve_rtl_paths(ctx, rtl_path)
 
     if need_rtl_lint:
-        checks.append(_run_rtl_lint_check(rtl_paths))
+        checks.append(_run_rtl_lint_check(ctx=ctx, rtl_paths=rtl_paths, rtl_path=rtl_path))
     if need_tb_lint:
         checks.append(_run_tb_lint_check(rtl_paths, tb_path))
 
@@ -482,7 +483,7 @@ def _resolve_rtl_paths(ctx: dict, rtl_path: Path) -> list[str]:
     return out
 
 
-def _run_rtl_lint_check(rtl_paths: list[str]) -> dict:
+def _run_rtl_lint_check(*, ctx: dict, rtl_paths: list[str], rtl_path: Path) -> dict:
     name = "rtl_lint"
     missing = [path for path in rtl_paths if not Path(path).exists()]
     if missing:
@@ -503,12 +504,41 @@ def _run_rtl_lint_check(rtl_paths: list[str]) -> dict:
 
     output = _format_tool_output(completed.stdout, completed.stderr)
     strict_warnings = os.getenv("VERILATOR_STRICT_WARNINGS", "0") == "1"
+    fail_moddup = os.getenv("RTL_LINT_FAIL_MODDUP", "1") != "0"
+    has_moddup = "MODDUP" in output.upper()
     has_error = ("%Error" in output) or ("%Fatal" in output)
-    failed = completed.returncode != 0 and (strict_warnings or has_error)
+    failed = (completed.returncode != 0 and (strict_warnings or has_error)) or (has_moddup and fail_moddup)
+    if failed:
+        return {
+            "name": name,
+            "ok": False,
+            "output": output or "Verilator local validation failed.",
+        }
+
+    semantic_enabled = os.getenv("RTL_LINT_SEMANTIC", "1") != "0"
+    semantic_strict = os.getenv("RTL_LINT_SEMANTIC_STRICT", "1") != "0"
+    semantic_issues: list[str] = []
+    if semantic_enabled:
+        semantic_issues = _run_rtl_semantic_lint(
+            rtl_text=rtl_path.read_text(),
+            module_contract=ctx.get("module_contract") if isinstance(ctx, dict) else None,
+        )
+    if semantic_issues and semantic_strict:
+        semantic_log = "[rtl_semantic] FAIL\n" + _format_semantic_issues(semantic_issues)
+        if output:
+            semantic_log += f"\n{output}"
+        return {"name": name, "ok": False, "output": semantic_log}
+
+    merged_output = output or "Verilator local validation passed."
+    if semantic_issues:
+        merged_output = f"{merged_output}\n[rtl_semantic] WARN\n{_format_semantic_issues(semantic_issues)}".strip()
+    elif semantic_enabled:
+        merged_output = f"{merged_output}\n[rtl_semantic] PASS".strip()
+
     return {
         "name": name,
-        "ok": not failed,
-        "output": output or "Verilator local validation passed.",
+        "ok": True,
+        "output": merged_output,
     }
 
 

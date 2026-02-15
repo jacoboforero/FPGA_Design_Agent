@@ -960,6 +960,33 @@ def _node_meta_from_top_checklist(checklist: Dict[str, Any], node_id: str) -> Di
     return {}
 
 
+def _normalize_node_type(node_meta: Dict[str, Any]) -> str:
+    if not isinstance(node_meta, dict):
+        return ""
+    return str(node_meta.get("node_type", "")).strip().lower()
+
+
+def _child_style_from_node_meta(node_meta: Dict[str, Any]) -> str:
+    text = " ".join(
+        [
+            _normalize_node_type(node_meta),
+            str(node_meta.get("description", "")).strip().lower() if isinstance(node_meta, dict) else "",
+            str(node_meta.get("notes", "")).strip().lower() if isinstance(node_meta, dict) else "",
+        ]
+    )
+    if any(token in text for token in ("comparator", "compare", "combinational", "mux", "decoder", "encoder")):
+        return "combinational"
+    if any(token in text for token in ("counter", "register", "sequential", "flop", "fsm", "state")):
+        return "sequential"
+    return "unknown"
+
+
+def _width_from_top_signal(by_name: Dict[str, Dict[str, Any]], name: str, default: str = "1") -> str:
+    item = by_name.get(name, {})
+    value = str(item.get("width_expr", default)).strip() if isinstance(item, dict) else default
+    return value or default
+
+
 def _infer_child_signals_from_connections(top_checklist: Dict[str, Any], node_id: str) -> List[Dict[str, Any]]:
     l4 = top_checklist.get("L4") if isinstance(top_checklist, dict) else None
     connections = l4.get("connections") if isinstance(l4, dict) else None
@@ -981,10 +1008,30 @@ def _infer_child_signals_from_connections(top_checklist: Dict[str, Any], node_id
             port = str(dst.get("port", "")).strip()
             if port:
                 ports.setdefault(port, "INPUT")
-    return [{"name": name, "direction": direction, "width_expr": "1", "semantics": ""} for name, direction in ports.items()]
+    l2 = top_checklist.get("L2") if isinstance(top_checklist, dict) else None
+    top_signals = l2.get("signals") if isinstance(l2, dict) else None
+    by_name: Dict[str, Dict[str, Any]] = {}
+    if isinstance(top_signals, list):
+        for sig in top_signals:
+            if not isinstance(sig, dict):
+                continue
+            sig_name = str(sig.get("name", "")).strip()
+            if sig_name:
+                by_name[sig_name] = sig
+    out: List[Dict[str, Any]] = []
+    for name, direction in ports.items():
+        out.append(
+            {
+                "name": name,
+                "direction": direction,
+                "width_expr": _width_from_top_signal(by_name, name, "1"),
+                "semantics": "",
+            }
+        )
+    return out
 
 
-def _infer_child_signals_fallback(top_checklist: Dict[str, Any], node_id: str) -> List[Dict[str, Any]]:
+def _infer_child_signals_fallback(top_checklist: Dict[str, Any], node_id: str, node_meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     l2 = top_checklist.get("L2") if isinstance(top_checklist, dict) else {}
     clocking = l2.get("clocking") if isinstance(l2, dict) else []
     top_signals = l2.get("signals") if isinstance(l2, dict) else []
@@ -1007,16 +1054,18 @@ def _infer_child_signals_fallback(top_checklist: Dict[str, Any], node_id: str) -
     def _sig(name: str, direction: str, width_expr: str = "1", semantics: str = "") -> Dict[str, Any]:
         return {"name": name, "direction": direction, "width_expr": width_expr, "semantics": semantics}
 
+    node_style = _child_style_from_node_meta(node_meta)
     signals: List[Dict[str, Any]] = []
-    signals.append(_sig(clk_name, "INPUT", "1", "clock"))
-    if rst_name:
-        signals.append(_sig(rst_name, "INPUT", "1", "reset"))
+    if node_style != "combinational":
+        signals.append(_sig(clk_name, "INPUT", "1", "clock"))
+        if rst_name:
+            signals.append(_sig(rst_name, "INPUT", "1", "reset"))
 
     lowered = node_id.lower()
     if "counter" in lowered:
-        signals.append(_sig("count", "OUTPUT", str(by_name.get("count_dbg", {}).get("width_expr", "8")), "count value"))
+        signals.append(_sig("count", "OUTPUT", _width_from_top_signal(by_name, "count_dbg", "8"), "count value"))
     elif "duty" in lowered and "reg" in lowered:
-        wr_data_w = str(by_name.get("wr_data", {}).get("width_expr", "8"))
+        wr_data_w = _width_from_top_signal(by_name, "wr_data", "8")
         signals.extend(
             [
                 _sig("wr_en", "INPUT", "1", "write enable"),
@@ -1025,7 +1074,7 @@ def _infer_child_signals_fallback(top_checklist: Dict[str, Any], node_id: str) -
             ]
         )
     elif "compare" in lowered:
-        cmp_w = str(by_name.get("count_dbg", {}).get("width_expr", by_name.get("duty_dbg", {}).get("width_expr", "8")))
+        cmp_w = _width_from_top_signal(by_name, "count_dbg", _width_from_top_signal(by_name, "duty_dbg", "8"))
         signals.extend(
             [
                 _sig("count", "INPUT", cmp_w, "count input"),
@@ -1042,6 +1091,7 @@ def _build_autogenerated_child_checklist(top_checklist: Dict[str, Any], node_id:
     node_meta = _node_meta_from_top_checklist(top_checklist, node_id)
     node_desc = str(node_meta.get("description", "")).strip() if isinstance(node_meta, dict) else ""
     node_type = str(node_meta.get("node_type", "")).strip() if isinstance(node_meta, dict) else ""
+    node_style = _child_style_from_node_meta(node_meta)
 
     top_l1 = top_checklist.get("L1", {}) if isinstance(top_checklist, dict) else {}
     top_l2 = top_checklist.get("L2", {}) if isinstance(top_checklist, dict) else {}
@@ -1051,23 +1101,40 @@ def _build_autogenerated_child_checklist(top_checklist: Dict[str, Any], node_id:
 
     role_summary = node_desc or f"Auto-generated child module scaffold for {node_id}."
     key_rule = f"Implements node '{node_id}' ({node_type or 'child block'}) within the top-level architecture."
+    if node_style == "combinational":
+        key_rules = [
+            key_rule,
+            "Combinational-only contract: no edge-triggered state or internal cycle-to-cycle storage.",
+        ]
+        reset_semantics = "none (combinational module)"
+        performance_intent = "combinational evaluation each cycle from current inputs"
+    else:
+        key_rules = [key_rule]
+        reset_semantics = str(top_l1.get("reset_semantics", "")).strip() or "reset to deterministic safe state"
+        performance_intent = str(top_l1.get("performance_intent", "")).strip() or "single-cycle operation"
     checklist["L1"] = {
         "role_summary": role_summary,
-        "key_rules": [key_rule],
-        "performance_intent": str(top_l1.get("performance_intent", "")).strip() or "single-cycle operation",
-        "reset_semantics": str(top_l1.get("reset_semantics", "")).strip() or "reset to deterministic safe state",
+        "key_rules": key_rules,
+        "performance_intent": performance_intent,
+        "reset_semantics": reset_semantics,
         "corner_cases": [f"integration of {node_id} with top-level wiring"],
         "open_questions": [],
     }
 
     signals = _infer_child_signals_from_connections(top_checklist, node_id)
     if not signals:
-        signals = _infer_child_signals_fallback(top_checklist, node_id)
+        signals = _infer_child_signals_fallback(top_checklist, node_id, node_meta)
     checklist["L2"] = {
+        # Keep at least one clocking entry to satisfy L2 schema requirements.
+        # Combinational behavior is enforced via module_contract/style instead.
         "clocking": top_l2.get("clocking", []),
         "signals": signals,
         "handshake_semantics": top_l2.get("handshake_semantics", []),
-        "transaction_unit": str(top_l2.get("transaction_unit", "")).strip() or "one update per clock edge",
+        "transaction_unit": (
+            "combinational evaluation"
+            if node_style == "combinational"
+            else (str(top_l2.get("transaction_unit", "")).strip() or "one update per clock edge")
+        ),
         "configuration_parameters": top_l2.get("configuration_parameters", []),
     }
 

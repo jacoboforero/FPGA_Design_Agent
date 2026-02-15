@@ -200,7 +200,7 @@ class SimulationWorker(threading.Thread):
 
 _FAIL_CYCLE_RE = re.compile(r"\bcycle\b\s*=?\s*(\d+)", re.IGNORECASE)
 _FAIL_TIME_RE = re.compile(r"\btime\b\s*=?\s*(\d+)", re.IGNORECASE)
-_FAIL_MARKER_RE = re.compile(r"\b(FAIL|ERROR)\b", re.IGNORECASE)
+_FAIL_MARKER_RE = re.compile(r"\b(FAIL|FAILURE|ERROR|FATAL|ASSERT|ASSERTION)\b", re.IGNORECASE)
 
 
 def _extract_failure_info(text: str | None) -> tuple[int | None, int | None]:

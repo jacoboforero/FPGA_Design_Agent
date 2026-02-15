@@ -4,6 +4,7 @@ Deterministic lint worker. Runs Verilator lint and fails hard on errors.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -16,6 +17,62 @@ from core.runtime.retry import RetryableError, TaskInputError, get_retry_count, 
 
 TASK_EXCHANGE = "tasks_exchange"
 RESULTS_ROUTING_KEY = "RESULTS"
+
+
+_EDGE_ALWAYS_RE = re.compile(r"always\s*@\s*\(([^)]*(?:posedge|negedge)[^)]*)\)", re.IGNORECASE | re.DOTALL)
+
+
+def _run_rtl_semantic_lint(
+    *,
+    rtl_text: str,
+    module_contract: dict | None,
+) -> list[str]:
+    if not isinstance(module_contract, dict):
+        return []
+    issues: list[str] = []
+    style = str(module_contract.get("style", "")).strip().lower()
+
+    if style == "combinational" or module_contract.get("forbid_edge_always"):
+        for match in _EDGE_ALWAYS_RE.finditer(rtl_text):
+            line = rtl_text.count("\n", 0, match.start()) + 1
+            issues.append(
+                f"RLSEM001 L{line}: combinational contract violated by edge-sensitive always block: always @({match.group(1).strip()})."
+            )
+
+    if module_contract.get("prefer_debug_passthrough"):
+        debug_outputs = module_contract.get("debug_outputs")
+        if isinstance(debug_outputs, list):
+            for raw_name in debug_outputs:
+                name = str(raw_name).strip()
+                if not name:
+                    continue
+                pattern = re.compile(
+                    rf"always\s*@\s*\([^)]*(?:posedge|negedge)[^)]*\)[\s\S]*?\b{re.escape(name)}\b\s*(?:<=|=)",
+                    re.IGNORECASE,
+                )
+                match = pattern.search(rtl_text)
+                if match:
+                    line = rtl_text.count("\n", 0, match.start()) + 1
+                    issues.append(
+                        f"RLSEM010 L{line}: integration contract prefers direct passthrough for debug output '{name}', but it is assigned in a sequential block."
+                    )
+    return sorted(set(issues))
+
+
+def _format_semantic_issues(issues: list[str]) -> str:
+    return "\n".join(f"- {issue}" for issue in issues)
+
+
+def _format_semantic_failure_log(issues: list[str], compile_log: str) -> str:
+    base = (
+        "RTL semantic lint failed.\n"
+        "[rtl_semantic] FAIL\n"
+        f"{_format_semantic_issues(issues)}"
+    )
+    compile_log = (compile_log or "").strip()
+    if compile_log:
+        base += f"\n[compile]\n{compile_log}"
+    return base
 
 
 class LintWorker(threading.Thread):
@@ -96,13 +153,25 @@ class LintWorker(threading.Thread):
                 log_output="Verilator not found; set VERILATOR_PATH or install verilator.",
             )
         strict_warnings = os.getenv("VERILATOR_STRICT_WARNINGS", "0") == "1"
+        fail_moddup = os.getenv("RTL_LINT_FAIL_MODDUP", "1") != "0"
+        semantic_enabled = os.getenv("RTL_LINT_SEMANTIC", "1") != "0"
+        semantic_strict = os.getenv("RTL_LINT_SEMANTIC_STRICT", "1") != "0"
         try:
             rtl_args = list(dict.fromkeys(rtl_paths))
             cmd = [self.verilator, "--lint-only", "--quiet", "--sv", *rtl_args]
             completed = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             output = (completed.stderr or "") + (completed.stdout or "")
             output = output.strip()
+            has_moddup = "MODDUP" in output.upper()
             has_error = ("%Error" in output) or ("%Fatal" in output)
+            if has_moddup and fail_moddup:
+                return ResultMessage(
+                    task_id=task.task_id,
+                    correlation_id=task.correlation_id,
+                    status=TaskStatus.FAILURE,
+                    artifacts_path=None,
+                    log_output=output or "Verilator lint failed: duplicate module declarations (MODDUP).",
+                )
             if completed.returncode != 0 and (strict_warnings or has_error):
                 return ResultMessage(
                     task_id=task.task_id,
@@ -115,6 +184,25 @@ class LintWorker(threading.Thread):
                 log = output or "Verilator lint passed (non-fatal warnings)."
             else:
                 log = output or "Verilator lint passed."
+
+            semantic_issues: list[str] = []
+            if semantic_enabled:
+                semantic_issues = _run_rtl_semantic_lint(
+                    rtl_text=rtl_path.read_text(),
+                    module_contract=task.context.get("module_contract") if isinstance(task.context, dict) else None,
+                )
+                if semantic_issues and semantic_strict:
+                    return ResultMessage(
+                        task_id=task.task_id,
+                        correlation_id=task.correlation_id,
+                        status=TaskStatus.FAILURE,
+                        artifacts_path=None,
+                        log_output=_format_semantic_failure_log(semantic_issues, output),
+                    )
+                if semantic_issues:
+                    log = f"{log.rstrip()}\n[rtl_semantic] WARN\n{_format_semantic_issues(semantic_issues)}".strip()
+                else:
+                    log = f"{log.rstrip()}\n[rtl_semantic] PASS".strip()
         except subprocess.TimeoutExpired as exc:
             raise RetryableError(f"Verilator timeout: {exc}") from exc
         except Exception as exc:  # noqa: BLE001

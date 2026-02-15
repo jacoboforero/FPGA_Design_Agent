@@ -145,7 +145,7 @@
         "exclusions": [],
         "synthesis_target": "fpga_generic"
       },
-      "verification_scope": "lite"
+      "verification_scope": "full"
     },
     "event_fifo": {
       "rtl_file": "rtl/event_fifo.sv",
@@ -212,7 +212,7 @@
         "exclusions": [],
         "synthesis_target": "fpga_generic"
       },
-      "verification_scope": "lite"
+      "verification_scope": "full"
     }
   },
   "standard_library": {}
