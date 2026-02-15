@@ -35,6 +35,7 @@ from workers.distill.worker import DistillWorker
 # Orchestrator
 from orchestrator.orchestrator_service import DemoOrchestrator
 from apps.cli import spec_flow
+from apps.cli.execution_narrator import ExecutionNarrator
 
 # Schema models
 from core.observability.setup import configure_observability
@@ -72,7 +73,33 @@ def _load_env_file(path: Path) -> None:
 
 def connection_params_from_env() -> pika.ConnectionParameters:
     rabbit_url = os.getenv("RABBITMQ_URL", "amqp://user:password@localhost:5672/")
-    return pika.URLParameters(rabbit_url)
+    params = pika.URLParameters(rabbit_url)
+    params.heartbeat = int(os.getenv("RABBITMQ_HEARTBEAT", "600"))
+    params.blocked_connection_timeout = float(os.getenv("RABBITMQ_BLOCKED_CONNECTION_TIMEOUT", "300"))
+    params.connection_attempts = int(os.getenv("RABBITMQ_CONNECTION_ATTEMPTS", "5"))
+    params.retry_delay = float(os.getenv("RABBITMQ_RETRY_DELAY", "2"))
+    params.socket_timeout = float(os.getenv("RABBITMQ_SOCKET_TIMEOUT", "10"))
+    return params
+
+
+def _truthy_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _purge_broker_queues(params: pika.ConnectionParameters) -> None:
+    if not _truthy_env("CLI_PURGE_QUEUES", True):
+        return
+    queues = ("agent_tasks", "process_tasks", "simulation_tasks", "results")
+    with pika.BlockingConnection(params) as conn:
+        ch = conn.channel()
+        for queue_name in queues:
+            try:
+                ch.queue_purge(queue=queue_name)
+            except Exception:
+                continue
 
 
 def start_workers(params: pika.ConnectionParameters, stop_event: threading.Event) -> List[threading.Thread]:
@@ -133,7 +160,7 @@ def _run_planner_task(params: pika.ConnectionParameters, timeout: float = 30.0) 
             if result.status is not TaskStatus.SUCCESS:
                 raise RuntimeError(f"Planning failed: {result.log_output}")
             return
-    raise RuntimeError("Planner timed out waiting for results.")
+    raise RuntimeError("Planner timed out waiting for results. Verify broker queues are clean and planner worker is running.")
 
 def _confirm(prompt: str, default: bool = True) -> bool:
     suffix = " [Y/n]" if default else " [y/N]"
@@ -147,6 +174,13 @@ def _confirm(prompt: str, default: bool = True) -> bool:
 
 def _default_run_name(prefix: str) -> str:
     return f"{prefix}_{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+
+
+def _default_narrative_mode() -> str:
+    mode = os.getenv("CLI_NARRATIVE_MODE", "llm").strip().lower()
+    if mode in {"llm", "deterministic", "off"}:
+        return mode
+    return "llm"
 
 
 def _print_section(title: str) -> None:
@@ -171,11 +205,13 @@ def run_full(args: argparse.Namespace) -> None:
     # 2) Plan
     _print_section("Planning")
     params = connection_params_from_env()
+    _purge_broker_queues(params)
+    planner_timeout = args.timeout if args.timeout > 0 else float(os.getenv("CLI_PLANNER_TIMEOUT_S", "60"))
     planner_stop = threading.Event()
     planner_worker = PlannerWorker(params, planner_stop)
     planner_worker.start()
     try:
-        _run_planner_task(params, timeout=args.timeout)
+        _run_planner_task(params, timeout=planner_timeout)
     finally:
         planner_stop.set()
         planner_worker.join(timeout=1.0)
@@ -191,12 +227,24 @@ def run_full(args: argparse.Namespace) -> None:
 
     # 3) Execute
     _print_section("Execution")
+    rtl_root = REPO_ROOT / "artifacts" / "generated"
+    task_memory_root = REPO_ROOT / "artifacts" / "task_memory"
+    narrator = None
+    if args.narrative_mode != "off":
+        narrator = ExecutionNarrator(task_memory_root=task_memory_root, mode=args.narrative_mode)
+        print(f"Narrative output enabled ({args.narrative_mode}).")
     stop_event = threading.Event()
     workers = start_workers(params, stop_event)
     try:
-        rtl_root = REPO_ROOT / "artifacts" / "generated"
-        task_memory_root = REPO_ROOT / "artifacts" / "task_memory"
-        DemoOrchestrator(params, design_context, dag_path, rtl_root, task_memory_root).run(timeout_s=args.timeout)
+        DemoOrchestrator(
+            params,
+            design_context,
+            dag_path,
+            rtl_root,
+            task_memory_root,
+            event_callback=narrator.handle_event if narrator else None,
+            raw_progress=args.narrative_mode == "off",
+        ).run(timeout_s=args.timeout)
     finally:
         stop_workers(workers, stop_event)
         get_tracker().finalize()
@@ -219,6 +267,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Hardware agent system CLI")
     parser.add_argument("--timeout", type=float, default=0.0, help="Pipeline timeout in seconds (0 disables)")
     parser.add_argument("--run-name", help="Optional run name for observability/AgentOps")
+    parser.add_argument(
+        "--narrative-mode",
+        choices=("llm", "deterministic", "off"),
+        default=_default_narrative_mode(),
+        help="Execution output mode: LLM narrative, deterministic narrative, or raw internal progress.",
+    )
     return parser
 
 

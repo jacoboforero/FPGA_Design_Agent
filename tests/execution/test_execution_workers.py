@@ -301,6 +301,112 @@ def test_tb_lint_worker_success(tmp_path, monkeypatch):
     assert result.status is TaskStatus.SUCCESS
 
 
+def test_tb_lint_worker_semantic_failure_detects_stale_reference_compare(tmp_path, monkeypatch):
+    worker = TestbenchLintWorker(connection_params=None, stop_event=None)
+    worker.iverilog = "iverilog"
+    rtl_path = tmp_path / "demo.sv"
+    tb_path = tmp_path / "demo_tb.sv"
+    rtl_path.write_text(
+        "module demo(input clk, input rst_n, output reg out);\n"
+        "always @(posedge clk or negedge rst_n) begin\n"
+        "  if (!rst_n) out <= 1'b0;\n"
+        "  else out <= ~out;\n"
+        "end\n"
+        "endmodule\n"
+    )
+    tb_path.write_text(
+        "`timescale 1ns/1ps\n"
+        "module tb_demo;\n"
+        "  reg clk;\n"
+        "  reg rst_n;\n"
+        "  reg ref_out;\n"
+        "  wire out;\n"
+        "  demo dut(.clk(clk), .rst_n(rst_n), .out(out));\n"
+        "  always #5 clk = ~clk;\n"
+        "  always @(posedge clk or negedge rst_n) begin\n"
+        "    if (!rst_n) ref_out <= 1'b0;\n"
+        "    else begin\n"
+        "      if (out !== ref_out) begin\n"
+        "        $display(\"FAIL\");\n"
+        "        $finish(1);\n"
+        "      end\n"
+        "      ref_out <= ~ref_out;\n"
+        "    end\n"
+        "  end\n"
+        "  initial begin\n"
+        "    clk = 1'b0;\n"
+        "    rst_n = 1'b0;\n"
+        "    #2 rst_n = 1'b1;\n"
+        "  end\n"
+        "endmodule\n"
+    )
+
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("workers.tb_lint.worker.subprocess.run", fake_run)
+    task = TaskMessage(
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.TESTBENCH_LINTER,
+        context={
+            "rtl_path": str(rtl_path),
+            "tb_path": str(tb_path),
+            "clocking": {
+                "clock_name": "clk",
+                "clock_polarity": "POSEDGE",
+                "reset_name": "rst_n",
+                "reset_polarity": "ACTIVE_LOW",
+            },
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "TBSEM004" in result.log_output
+
+
+def test_tb_lint_worker_semantic_can_be_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("TB_LINT_SEMANTIC", "0")
+    worker = TestbenchLintWorker(connection_params=None, stop_event=None)
+    worker.iverilog = "iverilog"
+    rtl_path = tmp_path / "demo.sv"
+    tb_path = tmp_path / "demo_tb.sv"
+    rtl_path.write_text("module demo(input clk, input rst_n, output reg out); endmodule\n")
+    tb_path.write_text(
+        "module tb_demo;\n"
+        "  reg clk;\n"
+        "  reg rst_n;\n"
+        "  reg ref_out;\n"
+        "  wire out;\n"
+        "  demo dut(.clk(clk), .rst_n(rst_n), .out(out));\n"
+        "  always #5 clk = ~clk;\n"
+        "  always @(posedge clk or negedge rst_n) begin\n"
+        "    if (!rst_n) ref_out <= 1'b0;\n"
+        "    else begin\n"
+        "      if (out !== ref_out) begin\n"
+        "        $display(\"FAIL\");\n"
+        "        $finish(1);\n"
+        "      end\n"
+        "      ref_out <= ~ref_out;\n"
+        "    end\n"
+        "  end\n"
+        "  initial begin clk = 1'b0; rst_n = 1'b0; #2 rst_n = 1'b1; end\n"
+        "endmodule\n"
+    )
+
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("workers.tb_lint.worker.subprocess.run", fake_run)
+    task = TaskMessage(
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.TESTBENCH_LINTER,
+        context={"rtl_path": str(rtl_path), "tb_path": str(tb_path)},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert "TBSEM004" not in result.log_output
+
+
 def test_acceptance_worker_no_requirements(sandbox):
     worker = AcceptanceWorker(connection_params=None, stop_event=None)
     task = TaskMessage(
@@ -638,6 +744,14 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
 
     worker = DebugWorker(connection_params=None, stop_event=None)
     monkeypatch.setenv("DEBUG_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("IVERILOG_PATH", "iverilog")
+    monkeypatch.setenv("VERILATOR_PATH", "verilator")
+
+    def fake_run(cmd, timeout_s):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("agents.debug.worker._run_subprocess", fake_run)
+    monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
     rtl = Path("demo.sv")
     tb = Path("demo_tb.sv")
     rtl.write_text("module demo; endmodule\n")
@@ -670,7 +784,16 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
     assert worker.gateway.calls == 3
 
 
-def test_debug_worker_success(sandbox):
+def test_debug_worker_success(sandbox, monkeypatch):
+    monkeypatch.setenv("IVERILOG_PATH", "iverilog")
+    monkeypatch.setenv("VERILATOR_PATH", "verilator")
+
+    def fake_run(cmd, timeout_s):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("agents.debug.worker._run_subprocess", fake_run)
+    monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
+
     worker = DebugWorker(connection_params=None, stop_event=None)
     worker.gateway = FakeGateway(
         FakeResponse(
@@ -698,3 +821,98 @@ def test_debug_worker_success(sandbox):
     result = worker.handle_task(task)
     assert result.status is TaskStatus.SUCCESS
     assert result.reflections
+    assert "Local validation passed" in result.log_output
+
+
+def test_debug_worker_local_validation_failure(sandbox, monkeypatch):
+    monkeypatch.setenv("DEBUG_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("IVERILOG_PATH", "iverilog")
+    monkeypatch.setenv("VERILATOR_PATH", "verilator")
+    monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
+
+    def fake_run(cmd, timeout_s):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="tb syntax error")
+
+    monkeypatch.setattr("agents.debug.worker._run_subprocess", fake_run)
+
+    worker = DebugWorker(connection_params=None, stop_event=None)
+    worker.gateway = FakeGateway(
+        FakeResponse(
+            content=json.dumps(
+                {
+                    "summary": "fix tb",
+                    "touched_files": ["tb"],
+                    "rtl_lines": None,
+                    "tb_lines": ["module tb_demo;", "  initial $finish;", "endmodule"],
+                    "risks": [],
+                    "next_steps": ["retry"],
+                }
+            )
+        )
+    )
+    rtl = Path("demo.sv")
+    tb = Path("demo_tb.sv")
+    rtl.write_text("module demo; endmodule\n")
+    tb.write_text("module tb_demo; initial $finish; endmodule\n")
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.DEBUG,
+        context={"node_id": "demo", "rtl_path": str(rtl), "tb_path": str(tb), "attempt": 1, "debug_reason": "tb_lint"},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "local validation failed" in result.log_output.lower()
+    assert "tb_lint=FAIL" in result.log_output
+
+
+def test_debug_worker_local_validation_retry_then_success(sandbox, monkeypatch):
+    class SequenceGateway:
+        def __init__(self, responses):
+            self.responses = responses
+            self.calls = 0
+
+        async def generate(self, messages, config):
+            resp = self.responses[self.calls]
+            self.calls += 1
+            return resp
+
+    monkeypatch.setenv("DEBUG_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("IVERILOG_PATH", "iverilog")
+    monkeypatch.setenv("VERILATOR_PATH", "verilator")
+    monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
+
+    calls = {"n": 0}
+
+    def fake_run(cmd, timeout_s):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="tb syntax error")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("agents.debug.worker._run_subprocess", fake_run)
+
+    payload = json.dumps(
+        {
+            "summary": "fix tb",
+            "touched_files": ["tb"],
+            "rtl_lines": None,
+            "tb_lines": ["module tb_demo;", "  initial $finish;", "endmodule"],
+            "risks": [],
+            "next_steps": ["retry"],
+        }
+    )
+    worker = DebugWorker(connection_params=None, stop_event=None)
+    worker.gateway = SequenceGateway([FakeResponse(content=payload), FakeResponse(content=payload)])
+    rtl = Path("demo.sv")
+    tb = Path("demo_tb.sv")
+    rtl.write_text("module demo; endmodule\n")
+    tb.write_text("module tb_demo; initial $finish; endmodule\n")
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.DEBUG,
+        context={"node_id": "demo", "rtl_path": str(rtl), "tb_path": str(tb), "attempt": 1, "debug_reason": "tb_lint"},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert worker.gateway.calls == 2
+    assert "Local validation passed" in result.log_output

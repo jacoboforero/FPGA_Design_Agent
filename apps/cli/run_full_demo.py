@@ -37,6 +37,17 @@ TASK_EXCHANGE = "tasks_exchange"
 RESULTS_ROUTING_KEY = "RESULTS"
 
 
+def _connection_params_from_env() -> pika.ConnectionParameters:
+    rabbit_url = os.getenv("RABBITMQ_URL", "amqp://user:password@localhost:5672/")
+    params = pika.URLParameters(rabbit_url)
+    params.heartbeat = int(os.getenv("RABBITMQ_HEARTBEAT", "600"))
+    params.blocked_connection_timeout = float(os.getenv("RABBITMQ_BLOCKED_CONNECTION_TIMEOUT", "300"))
+    params.connection_attempts = int(os.getenv("RABBITMQ_CONNECTION_ATTEMPTS", "5"))
+    params.retry_delay = float(os.getenv("RABBITMQ_RETRY_DELAY", "2"))
+    params.socket_timeout = float(os.getenv("RABBITMQ_SOCKET_TIMEOUT", "10"))
+    return params
+
+
 def _run_planner_task(params, timeout: float = 30.0) -> None:
     task = TaskMessage(
         entity_type=EntityType.REASONING,
@@ -71,10 +82,9 @@ def _run_planner_task(params, timeout: float = 30.0) -> None:
 
 
 def main() -> None:
-
     rabbit_url = os.getenv("RABBITMQ_URL", "amqp://user:password@localhost:5672/")
     try:
-        params = pika.URLParameters(rabbit_url)
+        params = _connection_params_from_env()
         conn = pika.BlockingConnection(params)
         conn.close()
     except Exception as exc:  # noqa: BLE001

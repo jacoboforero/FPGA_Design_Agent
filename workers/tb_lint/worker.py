@@ -1,9 +1,11 @@
 """
-Deterministic testbench lint worker. Runs iverilog compile-only checks.
+Deterministic testbench lint worker. Runs iverilog compile checks plus
+lightweight semantic checks on checker/reset/timing patterns.
 """
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -17,6 +19,16 @@ from core.runtime.retry import RetryableError, TaskInputError, get_retry_count, 
 
 TASK_EXCHANGE = "tasks_exchange"
 RESULTS_ROUTING_KEY = "RESULTS"
+
+_PROC_START_RE = re.compile(r"(?im)^\s*(always\s*@\s*\(([^)]*)\)|initial)(?:\s|$)")
+_RESET_GATING_HINTS = (
+    "seen_reset",
+    "post_reset",
+    "after_reset",
+    "reset_done",
+    "reset_released",
+    "in_reset",
+)
 
 
 class TestbenchLintWorker(threading.Thread):
@@ -116,7 +128,42 @@ class TestbenchLintWorker(threading.Thread):
                     artifacts_path=None,
                     log_output=output,
                 )
+            semantic_enabled = os.getenv("TB_LINT_SEMANTIC", "1") != "0"
+            semantic_strict = os.getenv("TB_LINT_SEMANTIC_STRICT", "1") != "0"
+            semantic_issues: list[str] = []
+            if semantic_enabled:
+                clocking_raw = task.context.get("clocking")
+                clocking = clocking_raw if isinstance(clocking_raw, dict) else {}
+                clock_name = str(clocking.get("clock_name", "clk") or "clk")
+                reset_name_raw = clocking.get("reset_name")
+                reset_name = str(reset_name_raw).strip() if reset_name_raw else None
+                reset_polarity = str(clocking.get("reset_polarity", "ACTIVE_LOW")).upper()
+                reset_active_low = reset_polarity in {"ACTIVE_LOW", "LOW", "0"}
+                semantic_issues = _run_tb_semantic_lint(
+                    tb_text=tb_file.read_text(),
+                    clock_name=clock_name,
+                    reset_name=reset_name,
+                    reset_active_low=reset_active_low,
+                )
+                if semantic_issues and semantic_strict:
+                    compile_log = (completed.stdout or completed.stderr or "").strip()
+                    return ResultMessage(
+                        task_id=task.task_id,
+                        correlation_id=task.correlation_id,
+                        status=TaskStatus.FAILURE,
+                        artifacts_path=None,
+                        log_output=_format_semantic_failure_log(semantic_issues, compile_log),
+                    )
             log = completed.stdout or "Testbench lint passed."
+            if semantic_enabled:
+                if semantic_issues:
+                    log = (
+                        f"{log.rstrip()}\n"
+                        "[tb_semantic] WARN\n"
+                        f"{_format_semantic_issues(semantic_issues)}"
+                    ).strip()
+                else:
+                    log = f"{log.rstrip()}\n[tb_semantic] PASS".strip()
         except subprocess.TimeoutExpired as exc:
             raise RetryableError(f"Testbench lint timeout: {exc}") from exc
         except Exception as exc:  # noqa: BLE001
@@ -147,3 +194,172 @@ class TestbenchLintWorker(threading.Thread):
             body=result.model_dump_json().encode(),
             properties=pika.BasicProperties(content_type="application/json"),
         )
+
+
+def _run_tb_semantic_lint(
+    *,
+    tb_text: str,
+    clock_name: str,
+    reset_name: str | None,
+    reset_active_low: bool,
+) -> list[str]:
+    issues: list[str] = []
+    regions = list(_iter_procedural_regions(tb_text))
+    has_checker = _looks_self_checking_testbench(tb_text)
+    issues.extend(_check_clock_has_single_driver(regions, clock_name))
+    if has_checker:
+        issues.extend(_check_checker_reset_gating(regions, tb_text, reset_name, reset_active_low))
+        issues.extend(_check_stale_reference_compare(regions))
+        issues.extend(_check_reset_assertion(tb_text, reset_name, reset_active_low))
+    # Keep deterministic ordering for stable logs/narrative.
+    return sorted(set(issues))
+
+
+def _iter_procedural_regions(tb_text: str) -> list[dict]:
+    matches = list(_PROC_START_RE.finditer(tb_text))
+    regions: list[dict] = []
+    for idx, match in enumerate(matches):
+        start = match.start()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(tb_text)
+        region_text = tb_text[start:end]
+        sensitivity = (match.group(2) or "").strip().lower()
+        line = tb_text.count("\n", 0, start) + 1
+        regions.append({"text": region_text, "sensitivity": sensitivity, "line": line})
+    return regions
+
+
+def _looks_self_checking_testbench(tb_text: str) -> bool:
+    lowered = tb_text.lower()
+    if "$finish(1" in lowered or "fail cycle=" in lowered:
+        return True
+    if "!== ref_" in lowered or "!= ref_" in lowered:
+        return True
+    return False
+
+
+def _check_clock_has_single_driver(regions: list[dict], clock_name: str) -> list[str]:
+    if not clock_name:
+        return []
+    assignment_re = re.compile(rf"\b{re.escape(clock_name)}\b\s*(?:<=|=)\s*")
+    driver_lines: list[int] = []
+    for region in regions:
+        if assignment_re.search(region["text"]):
+            driver_lines.append(int(region["line"]))
+    if len(driver_lines) <= 1:
+        return []
+    joined = ", ".join(str(v) for v in driver_lines)
+    return [
+        f"TBSEM001 L{driver_lines[0]}: clock '{clock_name}' is assigned in multiple procedural regions ({joined}). Use one clock driver block."
+    ]
+
+
+def _check_checker_reset_gating(
+    regions: list[dict],
+    tb_text: str,
+    reset_name: str | None,
+    reset_active_low: bool,
+) -> list[str]:
+    if not reset_name:
+        return []
+    issues: list[str] = []
+    first_reset_value = _first_literal_assignment(tb_text, reset_name)
+    gate_hints = tuple(token.lower() for token in _RESET_GATING_HINTS)
+    raw_gate_re = (
+        re.compile(rf"\bif\s*\(\s*{re.escape(reset_name)}\s*\)", flags=re.IGNORECASE)
+        if reset_active_low
+        else re.compile(rf"\bif\s*\(\s*!\s*{re.escape(reset_name)}\s*\)", flags=re.IGNORECASE)
+    )
+    reset_mention_re = re.compile(re.escape(reset_name), flags=re.IGNORECASE)
+    for region in regions:
+        text = region["text"]
+        lowered = text.lower()
+        if "$finish(1" not in lowered and "fail" not in lowered:
+            continue
+        if "!=" not in text and "!==" not in text:
+            continue
+        has_reset_mention = reset_mention_re.search(text) is not None
+        has_gate_hint = any(token in lowered for token in gate_hints)
+        if not has_reset_mention and not has_gate_hint:
+            issues.append(
+                f"TBSEM002 L{region['line']}: checker appears ungated by reset/post-reset state."
+            )
+            continue
+        # If reset starts deasserted and checker only gates on raw reset, cycle-0 X comparisons are likely.
+        if first_reset_value is not None:
+            expected_start = 0 if reset_active_low else 1
+            starts_deasserted = first_reset_value != expected_start
+            if starts_deasserted and raw_gate_re.search(text) and not has_gate_hint:
+                issues.append(
+                    f"TBSEM003 L{region['line']}: checker gates only on raw reset while reset starts deasserted. Add post-reset stabilization gating."
+                )
+    return issues
+
+
+def _check_stale_reference_compare(regions: list[dict]) -> list[str]:
+    issues: list[str] = []
+    compare_re = re.compile(r"(?:!==|!=)\s*(ref_[A-Za-z_]\w*)")
+    for region in regions:
+        text = region["text"]
+        lowered = text.lower()
+        if "$finish(1" not in lowered and "fail" not in lowered:
+            continue
+        for match in compare_re.finditer(text):
+            ref_var = match.group(1)
+            assign_re = re.compile(rf"\b{re.escape(ref_var)}\b\s*(?:<=|=)\s*")
+            assign_positions = [assign_match.start() for assign_match in assign_re.finditer(text)]
+            if any(pos > match.start() for pos in assign_positions):
+                line_offset = text.count("\n", 0, match.start())
+                line = int(region["line"]) + line_offset
+                issues.append(
+                    f"TBSEM004 L{line}: checker compares against '{ref_var}' before updating it in the same procedural region."
+                )
+    return issues
+
+
+def _check_reset_assertion(tb_text: str, reset_name: str | None, reset_active_low: bool) -> list[str]:
+    if not reset_name:
+        return []
+    required_value = 0 if reset_active_low else 1
+    if _has_literal_assignment(tb_text, reset_name, required_value):
+        return []
+    level = "low" if reset_active_low else "high"
+    return [f"TBSEM005 L1: reset '{reset_name}' is never explicitly driven {level} in the testbench."]
+
+
+def _first_literal_assignment(tb_text: str, signal_name: str) -> int | None:
+    assign_re = re.compile(rf"\b{re.escape(signal_name)}\b\s*(?:<=|=)\s*([^;]+);")
+    for match in assign_re.finditer(tb_text):
+        value = _parse_logic_literal(match.group(1))
+        if value is not None:
+            return value
+    return None
+
+
+def _has_literal_assignment(tb_text: str, signal_name: str, value: int) -> bool:
+    assign_re = re.compile(rf"\b{re.escape(signal_name)}\b\s*(?:<=|=)\s*([^;]+);")
+    for match in assign_re.finditer(tb_text):
+        parsed = _parse_logic_literal(match.group(1))
+        if parsed == value:
+            return True
+    return False
+
+
+def _parse_logic_literal(expr: str) -> int | None:
+    text = expr.strip().lower()
+    if text in {"1", "1'b1", "'1"}:
+        return 1
+    if text in {"0", "1'b0", "'0"}:
+        return 0
+    return None
+
+
+def _format_semantic_issues(issues: list[str]) -> str:
+    return "\n".join(f"- {issue}" for issue in issues)
+
+
+def _format_semantic_failure_log(issues: list[str], compile_log: str) -> str:
+    parts = ["Testbench semantic lint failed.", _format_semantic_issues(issues)]
+    if compile_log:
+        parts.append("[compile]")
+        parts.append(compile_log)
+    return "\n".join(parts).strip()
