@@ -1,5 +1,5 @@
 """
-Testbench agent runtime. Generates SystemVerilog TBs via LLM.
+Testbench agent runtime. Generates Verilog-2001 testbenches via LLM.
 Fails hard if the LLM is unavailable or generation fails.
 """
 from __future__ import annotations
@@ -138,6 +138,59 @@ class TestbenchWorker(AgentWorkerBase):
                 return int(text)
         return None
 
+    def _normalize_clocking(self, raw_clocking: object) -> dict:
+        # Accept either dict or list[dict] and apply deterministic fallbacks.
+        item = {}
+        if isinstance(raw_clocking, dict):
+            item = raw_clocking
+        elif isinstance(raw_clocking, list) and raw_clocking and isinstance(raw_clocking[0], dict):
+            item = raw_clocking[0]
+
+        clock_name = str(item.get("clock_name") or "clk")
+        clock_polarity = str(item.get("clock_polarity") or "POSEDGE").upper()
+        sample_edge = "negedge" if clock_polarity == "NEGEDGE" else "posedge"
+        drive_edge = "posedge" if sample_edge == "negedge" else "negedge"
+
+        reset_name_raw = item.get("reset_name")
+        reset_name = str(reset_name_raw).strip() if reset_name_raw else "rst_n"
+        reset_polarity = str(item.get("reset_polarity") or "ACTIVE_LOW").upper()
+        reset_active_low = reset_polarity in {"ACTIVE_LOW", "LOW", "0"}
+        reset_active_expr = f"!{reset_name}" if reset_active_low else reset_name
+
+        reset_is_async_raw = item.get("reset_is_async")
+        reset_is_async = True if reset_is_async_raw is None else bool(reset_is_async_raw)
+
+        return {
+            "clock_name": clock_name,
+            "clock_polarity": clock_polarity,
+            "sample_edge": sample_edge,
+            "drive_edge": drive_edge,
+            "reset_name": reset_name,
+            "reset_polarity": reset_polarity,
+            "reset_is_async": reset_is_async,
+            "reset_active_expr": reset_active_expr,
+        }
+
+    def _verification_summary(self, verification: dict) -> str:
+        if not isinstance(verification, dict):
+            return "- No verification plan provided."
+        lines: list[str] = []
+        goals = verification.get("test_goals")
+        if isinstance(goals, list) and goals:
+            lines.append("Test goals:")
+            lines.extend(f"- {str(goal)}" for goal in goals)
+        oracle = verification.get("oracle_strategy")
+        if oracle:
+            lines.append(f"Oracle strategy: {oracle}")
+        stimuli = verification.get("stimulus_strategy")
+        if stimuli:
+            lines.append(f"Stimulus strategy: {stimuli}")
+        pass_fail = verification.get("pass_fail_criteria")
+        if isinstance(pass_fail, list) and pass_fail:
+            lines.append("Pass/fail criteria:")
+            lines.extend(f"- {str(item)}" for item in pass_fail)
+        return "\n".join(lines) if lines else "- No verification plan provided."
+
     async def _llm_generate_tb(self, ctx, node_id: str) -> Tuple[str, str]:
         iface = ctx["interface"]["signals"]
         ports = []
@@ -156,34 +209,63 @@ class TestbenchWorker(AgentWorkerBase):
             ports.append(f"{dir_kw} {base_type} {width_decl}{name}")
         verification = ctx.get("verification", {})
         behavior = ctx.get("demo_behavior", "")
-        clocking = ctx.get("clocking", {})
+        clocking = self._normalize_clocking(ctx.get("clocking"))
+        tb_module = f"tb_{node_id}"
         system = (
-            "You are a Verification Agent. Generate a simple self-checking Verilog-2001 testbench.\n"
-            "No code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no logic/always_ff/always_comb/interfaces). "
-            "Use regs for driven signals, wires for DUT outputs. Keep it concise and target the stated test goals. "
-            "Strict Verilog-2001 compatibility: declare all regs/wires/integers at module scope (no declarations inside initial/always/for/while blocks) "
-            "and avoid declaration-time initialization inside procedural blocks. "
-            "Name the testbench module tb_<node_id>. "
-            "Include an integer cycle counter incremented on the main clock edge. On any failure, print a single-line "
-            "message that includes cycle=<cycle> and time=<time> plus key signals. "
-            "Avoid race conditions: drive DUT inputs on the opposite clock edge (e.g. drive on negedge if DUT samples on posedge), "
-            "or after a small #1 delay, and never change stimulus in the same timestep as the sampling clock edge. "
-            "When using a reference model updated on the sampling edge with nonblocking assignments, perform checks after updates "
-            "(e.g. in an always @(posedge clk) begin #1; ... end) so DUT/ref values are stable. "
-            "Include optional VCD dump controls: if +DUMP is present (use $test$plusargs), set $dumpfile from "
-            "+DUMP_FILE=<path> (default dump.vcd) (use $value$plusargs with %s), call $dumpvars(0, tb_<node_id>), "
-            "and use $dumpoff/$dumpon to restrict to +DUMP_START=<cycle> and +DUMP_END=<cycle> if provided "
-            "(use $value$plusargs with %d; avoid SystemVerilog strings). Do NOT treat DUMP_START=0 as \"disabled\"; "
-            "if a dump window is provided and start==0, keep dumping enabled from time 0 (do not $dumpoff permanently). "
-            "Never use $stop; always terminate with $finish on pass/fail (use $finish(1) on failure, $finish(0) on pass if supported)."
+            "You are a hardware RTL testbench generation agent.\n"
+            "Generate one complete self-checking Verilog-2001 testbench.\n\n"
+            "Priority order:\n"
+            "1) Race-free event ordering.\n"
+            "2) Correct checking logic against DUT behavior.\n"
+            "3) Verilog-2001 syntax compatibility.\n"
+            "4) Readable concise code.\n\n"
+            "Output contract:\n"
+            "- Output code only. No markdown, no prose, no code fences.\n"
+            f"- Module name must be exactly {tb_module}.\n"
+            "- Avoid SystemVerilog-only constructs (no logic, always_ff, always_comb, interfaces).\n"
+            "- Declare regs/wires/integers at module scope only.\n"
+            "- Do not use $stop. Use $finish(1) on failure and $finish(0) on pass.\n"
+            "- Failure print must include cycle=<cycle> and time=<time> and key DUT signals.\n\n"
+            "Hard timing contract (must follow exactly):\n"
+            f"- DUT sample edge: {clocking['sample_edge']} {clocking['clock_name']}.\n"
+            f"- Drive DUT inputs only on {clocking['drive_edge']} {clocking['clock_name']}. Do not drive stimulus on DUT sample edge.\n"
+            f"- Use exactly one clock generator block for {clocking['clock_name']}.\n"
+            "- Use one scoreboard block on DUT sample edge.\n"
+            "- In that scoreboard block use this order:\n"
+            "  (a) handle reset and checker gating,\n"
+            "  (b) compute expected_next using blocking assignments from previous expected state and sampled inputs,\n"
+            "  (c) wait #1,\n"
+            "  (d) compare DUT outputs against expected_next,\n"
+            "  (e) commit expected state for next cycle.\n"
+            "- Do not split reference-update and compare into separate sample-edge blocks.\n"
+            "- Do not rely on multiple #1 delays across multiple always blocks for correctness.\n\n"
+            "Reset contract:\n"
+            "- Apply reset from time 0.\n"
+            f"- Active-reset expression is {clocking['reset_active_expr']}.\n"
+            "- Gate checker while reset is active and for at least one sampled edge after reset release.\n\n"
+            "Optional dumping:\n"
+            "- If +DUMP is present, enable VCD dump.\n"
+            "- +DUMP_FILE=<path> via $value$plusargs(\"DUMP_FILE=%s\", ...), default dump.vcd.\n"
+            "- Optional +DUMP_START/+DUMP_END window using %d.\n"
+            "- Do not treat DUMP_START=0 as disabled."
         )
         user = (
-            f"Unit Under Test: {node_id}\n"
-            f"Ports:\n" + "\n".join(f"- {p}" for p in ports) + "\n"
-            f"Behavior summary:\n{behavior}\n"
-            f"Clocking:\n{json.dumps(clocking, indent=2)}\n"
-            f"Verification plan:\n{json.dumps(verification, indent=2)}\n"
-            "Create a testbench that exercises the listed goals and checks outputs."
+            f"Task:\n"
+            f"- DUT module: {node_id}\n"
+            f"- Required TB module: {tb_module}\n"
+            f"- Port list:\n" + "\n".join(f"  - {p}" for p in ports) + "\n\n"
+            f"Normalized clock/reset contract:\n"
+            f"- clock_name: {clocking['clock_name']}\n"
+            f"- clock_polarity: {clocking['clock_polarity']}\n"
+            f"- sample_edge: {clocking['sample_edge']}\n"
+            f"- drive_edge: {clocking['drive_edge']}\n"
+            f"- reset_name: {clocking['reset_name']}\n"
+            f"- reset_polarity: {clocking['reset_polarity']}\n"
+            f"- reset_is_async: {clocking['reset_is_async']}\n"
+            f"- reset_active_expr: {clocking['reset_active_expr']}\n\n"
+            f"Behavior summary:\n{behavior}\n\n"
+            f"Verification summary:\n{self._verification_summary(verification)}\n\n"
+            "Generate the full testbench now."
         )
         msgs: List[Message] = [
             Message(role=MessageRole.SYSTEM, content=system),

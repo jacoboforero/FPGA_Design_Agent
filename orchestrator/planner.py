@@ -51,8 +51,12 @@ def _module_spec_paths(spec_dir: Path, module_name: str) -> Dict[str, Path]:
 
 def _extract_module_nodes(l4: L4Specification, default_module: str) -> List[str]:
     if l4.block_diagram:
-        nodes = [node.node_id for node in l4.block_diagram]
-        return nodes or [default_module]
+        nodes = [node.node_id for node in l4.block_diagram if not node.uses_standard_component]
+        if not nodes:
+            return [default_module]
+        if default_module in nodes:
+            return [default_module] + [node for node in nodes if node != default_module]
+        return [default_module] + nodes
     return [default_module]
 
 
@@ -61,16 +65,19 @@ def _build_deps_map(
     l4: L4Specification,
 ) -> Dict[str, List[str]]:
     deps_map = {module: set() for module in module_nodes}
+    module_set = set(module_nodes)
+    all_nodes = {node.node_id for node in l4.block_diagram}
     for dep in l4.dependencies:
         parent = dep.parent_id
         child = dep.child_id
         if parent and child:
-            # Parent depends on child so leaf nodes run first.
-            deps_map.setdefault(parent, set()).add(child)
-    for child, parents in deps_map.items():
-        missing = [p for p in parents if p not in module_nodes]
-        if missing:
-            raise RuntimeError(f"Unknown DAG deps for {child}: {missing}")
+            unknown = [name for name in (parent, child) if name not in all_nodes]
+            if unknown:
+                raise RuntimeError(f"Unknown DAG dependency endpoint(s): {unknown}")
+            # Interpret L4 edges as: child_id depends on parent_id.
+            # Example: parent=submodule, child=top means top runs after submodule.
+            if parent in module_set and child in module_set:
+                deps_map.setdefault(child, set()).add(parent)
     return {child: sorted(parents) for child, parents in deps_map.items()}
 
 
@@ -131,9 +138,9 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
         missing = [node for node in module_nodes if node not in lock_modules]
         extra = [node for node in lock_modules if node not in module_nodes]
         if missing:
-            raise RuntimeError(f"Lock modules missing from block diagram: {missing}")
+            raise RuntimeError(f"Lock missing required block-diagram modules: {missing}")
         if extra:
-            raise RuntimeError(f"Lock modules not present in block diagram: {extra}")
+            raise RuntimeError(f"Lock contains modules not generated from block diagram: {extra}")
     if len(set(module_nodes)) != len(module_nodes):
         raise RuntimeError(f"Duplicate module ids in block diagram: {module_nodes}")
 

@@ -25,7 +25,8 @@ class NodeState(str, Enum):
 
 
 ALLOWED_TRANSITIONS = {
-    NodeState.PENDING: {NodeState.IMPLEMENTING},
+    # Pending nodes may be marked FAILED when a dependency fails before they start.
+    NodeState.PENDING: {NodeState.IMPLEMENTING, NodeState.FAILED},
     NodeState.IMPLEMENTING: {NodeState.LINTING, NodeState.FAILED},
     NodeState.LINTING: {NodeState.TESTBENCHING, NodeState.TB_LINTING, NodeState.SIMULATING, NodeState.DEBUGGING, NodeState.DONE, NodeState.FAILED},
     NodeState.TESTBENCHING: {NodeState.TB_LINTING, NodeState.FAILED},

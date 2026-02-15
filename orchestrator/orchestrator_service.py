@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -144,12 +145,14 @@ class DemoOrchestrator:
             pending_nodes = set(node_ids)
             active_nodes = set()
             done_nodes = set()
+            succeeded_nodes = set()
             max_debug_retries = int(os.getenv("DEBUG_MAX_RETRIES", "2"))
             attempt_by_node: dict[str, int] = {}
             debug_attempts_by_node: dict[str, dict[str, int]] = {}
             tb_generated_by_node: dict[str, bool] = {}
             post_lint_next_kind: dict[str, str] = {}
             pending_debug: dict[str, dict[str, Any]] = {}
+            attempt_history_by_node: dict[str, dict[int, dict[str, Any]]] = {}
             obs_run_dir = get_run_artifacts_dir()
 
             def _dump_model(payload: Any) -> Any:
@@ -179,6 +182,173 @@ class DemoOrchestrator:
                 if suffix.isdigit():
                     return kind, int(suffix)
                 return kind, None
+
+            def _short_log_excerpt(text: str, limit: int = 280) -> str:
+                stripped = (text or "").strip()
+                if len(stripped) <= limit:
+                    return stripped
+                return stripped[:limit].rstrip() + " ..."
+
+            def _extract_fail_line(text: str) -> str | None:
+                for raw in (text or "").splitlines():
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    upper = line.upper()
+                    if "FAIL" in upper or "ERROR" in upper:
+                        return line
+                return None
+
+            def _normalize_failure_line(line: str) -> str:
+                norm = line.lower()
+                norm = re.sub(r"\bcycle\s*=\s*\d+", "cycle=?", norm)
+                norm = re.sub(r"\btime\s*=\s*\d+", "time=?", norm)
+                norm = re.sub(r"\battempt\s*=\s*\d+", "attempt=?", norm)
+                norm = re.sub(r"\d+", "?", norm)
+                norm = re.sub(r"\s+", " ", norm).strip()
+                return norm
+
+            def _failure_signature(kind: str, log_output: str) -> str | None:
+                fail_line = _extract_fail_line(log_output)
+                if not fail_line:
+                    return None
+                normalized = _normalize_failure_line(fail_line)
+                digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
+                return f"{kind}:{digest}"
+
+            def _attempt_entry(node_id: str, attempt: int) -> dict[str, Any]:
+                history = attempt_history_by_node.setdefault(node_id, {})
+                if attempt in history:
+                    return history[attempt]
+                entry = {
+                    "attempt": attempt,
+                    "outcome": "in_progress",
+                    "failure_signature": None,
+                    "failure_line": None,
+                    "touched_files": [],
+                    "artifact_hashes": {},
+                    "patch_summary": None,
+                    "status_by_stage": {},
+                    "latest_stage": None,
+                    "last_log_excerpt": "",
+                }
+                history[attempt] = entry
+                return entry
+
+            def _record_attempt_history(
+                *,
+                node_id: str,
+                kind: str,
+                stage_attempt: int | None,
+                result: ResultMessage,
+            ) -> None:
+                attempt = stage_attempt or attempt_by_node.get(node_id, 1)
+                entry = _attempt_entry(node_id, attempt)
+                status_text = result.status.value.lower()
+                entry["status_by_stage"][kind] = status_text
+                entry["latest_stage"] = kind
+                entry["last_log_excerpt"] = _short_log_excerpt(result.log_output or "")
+
+                if result.status is not TaskStatus.SUCCESS:
+                    entry["outcome"] = f"{kind}_failed"
+                elif kind == "sim":
+                    entry["outcome"] = "sim_passed"
+                elif kind == "acceptance":
+                    entry["outcome"] = "accepted"
+
+                if kind == "sim" and result.status is not TaskStatus.SUCCESS:
+                    signature = _failure_signature(kind, result.log_output or "")
+                    fail_line = _extract_fail_line(result.log_output or "")
+                    entry["failure_signature"] = signature
+                    entry["failure_line"] = fail_line
+                    entry["outcome"] = "sim_failed"
+
+                if kind == "debug":
+                    parsed = _maybe_json(result.reflections or "")
+                    if isinstance(parsed, dict):
+                        touched = parsed.get("touched_files")
+                        if isinstance(touched, list):
+                            entry["touched_files"] = [str(item) for item in touched if str(item).strip()]
+                        summary = parsed.get("summary")
+                        if isinstance(summary, str) and summary.strip():
+                            entry["patch_summary"] = summary.strip()
+                        hashes: dict[str, Any] = {}
+                        rtl_sha = parsed.get("rtl_sha256")
+                        tb_sha = parsed.get("tb_sha256")
+                        if isinstance(rtl_sha, str) and rtl_sha:
+                            hashes["rtl_sha256"] = rtl_sha
+                        if isinstance(tb_sha, str) and tb_sha:
+                            hashes["tb_sha256"] = tb_sha
+                        if hashes:
+                            entry["artifact_hashes"] = hashes
+                        if result.status is TaskStatus.SUCCESS:
+                            entry["outcome"] = "debug_patched"
+
+            def _attempt_history_context(node_id: str, attempt: int | None, max_items: int = 3) -> list[dict[str, Any]]:
+                by_attempt = attempt_history_by_node.get(node_id, {})
+                if not by_attempt:
+                    return []
+                attempt_cap = attempt if attempt is not None else max(by_attempt.keys())
+                selected_attempts = [a for a in sorted(by_attempt.keys()) if a <= attempt_cap]
+                selected_attempts = selected_attempts[-max_items:]
+                payload: list[dict[str, Any]] = []
+                for idx in selected_attempts:
+                    item = by_attempt.get(idx, {})
+                    payload.append(
+                        {
+                            "attempt": idx,
+                            "outcome": item.get("outcome"),
+                            "failure_signature": item.get("failure_signature"),
+                            "failure_line": item.get("failure_line"),
+                            "touched_files": item.get("touched_files", []),
+                            "artifact_hashes": item.get("artifact_hashes", {}),
+                            "patch_summary": item.get("patch_summary"),
+                            "status_by_stage": item.get("status_by_stage", {}),
+                        }
+                    )
+                return payload
+
+            def _stagnation_context(node_id: str, attempt: int | None) -> dict[str, Any]:
+                by_attempt = attempt_history_by_node.get(node_id, {})
+                if not by_attempt:
+                    return {"stuck": False}
+                attempt_cap = attempt if attempt is not None else max(by_attempt.keys())
+                signatures: list[tuple[int, str]] = []
+                for idx in sorted(by_attempt.keys()):
+                    if idx > attempt_cap:
+                        continue
+                    sig = by_attempt[idx].get("failure_signature")
+                    if isinstance(sig, str) and sig:
+                        signatures.append((idx, sig))
+                if len(signatures) < 2:
+                    return {"stuck": False}
+                last_attempt, last_sig = signatures[-1]
+                repeat = 1
+                repeated_attempts = [last_attempt]
+                for idx, sig in reversed(signatures[:-1]):
+                    if sig != last_sig:
+                        break
+                    repeat += 1
+                    repeated_attempts.append(idx)
+                repeated_attempts.reverse()
+                stuck = repeat >= 2
+                if not stuck:
+                    return {
+                        "stuck": False,
+                        "current_failure_signature": last_sig,
+                        "stuck_repeated_failures": repeat,
+                    }
+                reason = (
+                    f"Repeated failure signature {last_sig} across attempts "
+                    f"{','.join(str(v) for v in repeated_attempts)}."
+                )
+                return {
+                    "stuck": True,
+                    "stuck_reason": reason,
+                    "current_failure_signature": last_sig,
+                    "stuck_repeated_failures": repeat,
+                    "stuck_attempts": repeated_attempts,
+                }
 
             def _hash_file(path: Path) -> str:
                 if not path.exists():
@@ -233,6 +403,7 @@ class DemoOrchestrator:
                 attempt_by_node[node_id] = 1
                 debug_attempts_by_node[node_id] = {}
                 tb_generated_by_node[node_id] = False
+                attempt_history_by_node[node_id] = {}
                 self._advance(node_id, NodeState.IMPLEMENTING)
                 impl_task = self._publish_task(ch, EntityType.REASONING, AgentType.IMPLEMENTATION, node_id)
                 tasks[node_id] = {"impl": impl_task}
@@ -240,13 +411,28 @@ class DemoOrchestrator:
                 active_nodes.add(node_id)
 
             def start_ready_nodes() -> None:
-                ready = [n for n in pending_nodes if self.deps_map.get(n, set()) <= done_nodes]
+                # A node is ready only when all dependencies have succeeded (DONE), not merely terminated.
+                ready = [n for n in pending_nodes if self.deps_map.get(n, set()) <= succeeded_nodes]
                 for node_id in ready:
                     start_node(node_id)
 
             def fail_dependents(failed_node: str) -> None:
-                blocked = [n for n in list(pending_nodes) if failed_node in self.deps_map.get(n, set())]
-                for node_id in blocked:
+                # Propagate failure through the transitive dependent closure.
+                failed_closure = {failed_node}
+                blocked: set[str] = set()
+                changed = True
+                while changed:
+                    changed = False
+                    for node_id in list(pending_nodes):
+                        if node_id in blocked:
+                            continue
+                        deps = self.deps_map.get(node_id, set())
+                        if deps & failed_closure:
+                            blocked.add(node_id)
+                            failed_closure.add(node_id)
+                            changed = True
+
+                for node_id in sorted(blocked):
                     self._advance(node_id, NodeState.FAILED)
                     pending_nodes.discard(node_id)
                     done_nodes.add(node_id)
@@ -262,6 +448,7 @@ class DemoOrchestrator:
                 self._advance(node_id, NodeState.DONE)
                 active_nodes.discard(node_id)
                 done_nodes.add(node_id)
+                succeeded_nodes.add(node_id)
                 start_ready_nodes()
 
             start_ready_nodes()
@@ -302,6 +489,7 @@ class DemoOrchestrator:
                     )
                 if result.reflections:
                     self.task_memory.record_json(target_node, stage, "reflections.json", _maybe_json(result.reflections))
+                _record_attempt_history(node_id=target_node, kind=kind, stage_attempt=stage_attempt, result=result)
 
                 if result.status is not TaskStatus.SUCCESS:
                     _snapshot_failure_sources(target_node, stage, kind=kind)
@@ -347,13 +535,18 @@ class DemoOrchestrator:
                         _inc_debug_attempts(target_node, reason)
                         self._advance(target_node, NodeState.DEBUGGING)
                         debug_key = _stage_key("debug", attempt)
+                        debug_extra_ctx = {
+                            "debug_reason": reason,
+                            "attempt_history": _attempt_history_context(target_node, attempt),
+                        }
+                        debug_extra_ctx.update(_stagnation_context(target_node, attempt))
                         debug = self._publish_task(
                             ch,
                             EntityType.REASONING,
                             AgentType.DEBUG,
                             target_node,
                             attempt=attempt,
-                            extra_ctx={"debug_reason": reason},
+                            extra_ctx=debug_extra_ctx,
                         )
                         tasks[target_node][debug_key] = debug
                         continue
@@ -397,13 +590,18 @@ class DemoOrchestrator:
                         _inc_debug_attempts(target_node, reason)
                         self._advance(target_node, NodeState.DEBUGGING)
                         debug_key = _stage_key("debug", attempt)
+                        debug_extra_ctx = {
+                            "debug_reason": reason,
+                            "attempt_history": _attempt_history_context(target_node, attempt),
+                        }
+                        debug_extra_ctx.update(_stagnation_context(target_node, attempt))
                         debug = self._publish_task(
                             ch,
                             EntityType.REASONING,
                             AgentType.DEBUG,
                             target_node,
                             attempt=attempt,
-                            extra_ctx={"debug_reason": reason},
+                            extra_ctx=debug_extra_ctx,
                         )
                         tasks[target_node][debug_key] = debug
                         continue
@@ -512,12 +710,15 @@ class DemoOrchestrator:
                         continue
                     self._advance(target_node, NodeState.REFLECTING)
                     reflect_key = _stage_key("reflect", attempt)
+                    reflect_extra_ctx = {"attempt_history": _attempt_history_context(target_node, attempt)}
+                    reflect_extra_ctx.update(_stagnation_context(target_node, attempt))
                     reflect = self._publish_task(
                         ch,
                         EntityType.REASONING,
                         AgentType.REFLECTION,
                         target_node,
                         attempt=attempt,
+                        extra_ctx=reflect_extra_ctx,
                     )
                     tasks[target_node][reflect_key] = reflect
                 elif kind == "reflect":
@@ -546,13 +747,18 @@ class DemoOrchestrator:
                     _inc_debug_attempts(target_node, reason)
                     self._advance(target_node, NodeState.DEBUGGING)
                     debug_key = _stage_key("debug", attempt)
+                    debug_extra_ctx = {
+                        "debug_reason": reason,
+                        "attempt_history": _attempt_history_context(target_node, attempt),
+                    }
+                    debug_extra_ctx.update(_stagnation_context(target_node, attempt))
                     debug = self._publish_task(
                         ch,
                         EntityType.REASONING,
                         AgentType.DEBUG,
                         target_node,
                         attempt=attempt,
-                        extra_ctx={"debug_reason": reason},
+                        extra_ctx=debug_extra_ctx,
                     )
                     tasks[target_node][debug_key] = debug
                 elif kind == "debug":

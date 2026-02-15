@@ -91,6 +91,7 @@ class DistillWorker(threading.Thread):
             after = int(os.getenv("SIM_FAIL_WINDOW_AFTER", "5"))
             window = {"start_cycle": max(0, cycle - before), "end_cycle": cycle + after}
         fail_line_idx, fail_line = _extract_failure_line(sim_text)
+        failure_signal_snapshot = _extract_failure_signal_snapshot(fail_line)
         log_excerpt = _extract_log_excerpt(sim_text, fail_line_idx)
         signal_hints = _extract_signal_hints(sim_text, fail_line_idx)
         waveform_path = Path("artifacts/task_memory") / node_id / _stage_dir("sim", attempt) / "waveform.vcd"
@@ -105,6 +106,7 @@ class DistillWorker(threading.Thread):
                 cycle_window=window,
                 signal_hints=signal_hints,
             )
+        waveform_failure_snapshot = _extract_waveform_failure_snapshot(waveform_excerpt, signal_hints)
         distilled_path = Path("artifacts/task_memory") / node_id / _stage_dir("distill", attempt) / "distilled_dataset.json"
         distilled_path.parent.mkdir(parents=True, exist_ok=True)
         distilled_payload = {
@@ -115,11 +117,13 @@ class DistillWorker(threading.Thread):
             "failure_window": window,
             "failure_line_index": fail_line_idx,
             "failure_line": fail_line,
+            "failure_signal_snapshot": failure_signal_snapshot,
             "log_excerpt": log_excerpt,
             "log_length": original_size,
             "waveform_path": waveform_str,
             "signal_hints": signal_hints,
             "waveform_excerpt": waveform_excerpt,
+            "waveform_failure_snapshot": waveform_failure_snapshot,
         }
         distilled_path.write_text(json.dumps(distilled_payload, indent=2))
         distilled_size = len(distilled_path.read_bytes())
@@ -161,6 +165,7 @@ _FAIL_CYCLE_RE = re.compile(r"\bcycle\b\s*=?\s*(\d+)", re.IGNORECASE)
 _FAIL_TIME_RE = re.compile(r"\btime\b\s*=?\s*(\d+)", re.IGNORECASE)
 _FAIL_LINE_RE = re.compile(r"\b(FAIL|ERROR)\b", re.IGNORECASE)
 _SIGNAL_HINT_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=")
+_FAIL_KV_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z0-9_xXzZ']+)")
 
 _DEFAULT_SIGNAL_HINTS = {
     "clk",
@@ -209,6 +214,15 @@ def _extract_failure_line(text: str | None) -> tuple[int | None, str | None]:
         if _FAIL_LINE_RE.search(line):
             return idx, line
     return None, None
+
+
+def _extract_failure_signal_snapshot(fail_line: str | None) -> dict[str, str]:
+    if not fail_line:
+        return {}
+    snapshot: dict[str, str] = {}
+    for key, value in _FAIL_KV_RE.findall(fail_line):
+        snapshot[key] = value
+    return snapshot
 
 
 def _extract_log_excerpt(text: str | None, fail_idx: int | None) -> str:
@@ -328,6 +342,9 @@ def _distill_waveform_excerpt(
         changes: dict[str, deque] = {var_id: deque(maxlen=max_changes) for var_id in ordered_ids}
         initial_values: dict[str, str | None] = {var_id: None for var_id in ordered_ids}
         last_values: dict[str, str | None] = {var_id: None for var_id in ordered_ids}
+        value_at_failure: dict[str, str | None] = {var_id: None for var_id in ordered_ids}
+        pre_window_values: dict[str, str | None] = {var_id: None for var_id in ordered_ids}
+        pre_window_transition: dict[str, tuple[int, str] | None] = {var_id: None for var_id in ordered_ids}
         truncated: dict[str, bool] = {var_id: False for var_id in ordered_ids}
 
         current_time = None
@@ -371,7 +388,11 @@ def _distill_waveform_excerpt(
                     continue
 
                 last_values[var_id] = value
+                if failure_time is not None and current_time <= failure_time:
+                    value_at_failure[var_id] = value
                 if current_time < start_time:
+                    pre_window_values[var_id] = value
+                    pre_window_transition[var_id] = (current_time, value)
                     continue
                 if initial_values[var_id] is None:
                     initial_values[var_id] = value
@@ -387,6 +408,9 @@ def _distill_waveform_excerpt(
                     "name": id_to_name.get(var_id, var_id),
                     "id": var_id,
                     "initial_value": initial_values[var_id],
+                    "pre_window_value": pre_window_values[var_id],
+                    "pre_window_transition": pre_window_transition[var_id],
+                    "value_at_failure_time": value_at_failure[var_id],
                     "last_value": last_values[var_id],
                     "changes": list(changes[var_id]),
                     "truncated": truncated[var_id],
@@ -395,12 +419,39 @@ def _distill_waveform_excerpt(
 
         return {
             "time_window": {"start": start_time, "end": end_time},
+            "failure_time": failure_time,
             "selected_signals": selected_signals,
             "selected_signal_count": len(selected_signals),
-            "notes": "Signal changes limited to selected hints and defaults.",
+            "notes": "Includes pre-window transitions and value_at_failure_time to reduce stale-endpoint ambiguity.",
         }
     except Exception as exc:  # noqa: BLE001
         return {"error": f"waveform excerpt failed: {exc}"}
+
+
+def _extract_waveform_failure_snapshot(waveform_excerpt: dict | None, signal_hints: list[str]) -> dict[str, str]:
+    if not isinstance(waveform_excerpt, dict):
+        return {}
+    selected = waveform_excerpt.get("selected_signals")
+    if not isinstance(selected, list):
+        return {}
+    hints = {hint.lower() for hint in signal_hints}
+    snapshot: dict[str, str] = {}
+    for item in selected:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        leaf = name.split(".")[-1].split("[", 1)[0].lower()
+        if hints and leaf not in hints:
+            continue
+        value = item.get("value_at_failure_time")
+        if value is None:
+            value = item.get("last_value")
+        if value is None:
+            continue
+        snapshot[name] = str(value)
+    return snapshot
 
 
 def _distill_log(

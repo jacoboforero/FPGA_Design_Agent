@@ -87,6 +87,8 @@ class DebugWorker(AgentWorkerBase):
             "- For sim failures, do not assume the RTL is wrong: check for common testbench issues like stimulus timing races.\n"
             "  If the testbench drives inputs immediately after an @(posedge clk) (same timestep as the sampling edge),\n"
             "  it can race the DUT/reference model and cause deterministic mismatches. Prefer driving on negedge (or add a small #1 delay).\n"
+            "- If attempt_history is provided, avoid repeating a previously attempted patch strategy for the same failure_signature.\n"
+            "- If stuck=true or a failure signature repeats, your patch MUST change strategy materially and explain the delta in summary.\n"
             "- If waveform dumping uses a cycle window, do NOT treat DUMP_START=0 as \"disabled\"; some benches accidentally $dumpoff forever.\n"
             "- If the context includes child modules and connection wiring, preserve the integration structure; only fix wiring or glue logic as needed.\n"
             "- Your patch is accepted only if local deterministic validation passes (tb_lint for TB changes; lint for RTL changes).\n"

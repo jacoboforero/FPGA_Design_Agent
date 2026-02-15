@@ -364,6 +364,81 @@ def test_tb_lint_worker_semantic_failure_detects_stale_reference_compare(tmp_pat
     assert "TBSEM004" in result.log_output
 
 
+def test_tb_lint_worker_delay_semantic_ignores_comment_tokens_and_allows_two_delays(tmp_path, monkeypatch):
+    worker = TestbenchLintWorker(connection_params=None, stop_event=None)
+    worker.iverilog = "iverilog"
+    rtl_path = tmp_path / "demo.sv"
+    tb_path = tmp_path / "demo_tb.sv"
+    rtl_path.write_text(
+        "module demo(input clk, input rst_n, input en, output reg out);\n"
+        "always @(posedge clk or negedge rst_n) begin\n"
+        "  if (!rst_n) out <= 1'b0;\n"
+        "  else if (en) out <= ~out;\n"
+        "end\n"
+        "endmodule\n"
+    )
+    tb_path.write_text(
+        "`timescale 1ns/1ps\n"
+        "module tb_demo;\n"
+        "  reg clk;\n"
+        "  reg rst_n;\n"
+        "  reg en;\n"
+        "  reg exp_out;\n"
+        "  wire out;\n"
+        "  demo dut(.clk(clk), .rst_n(rst_n), .en(en), .out(out));\n"
+        "  always #5 clk = ~clk;\n"
+        "  initial begin clk = 1'b0; rst_n = 1'b0; en = 1'b0; #2 rst_n = 1'b1; #10 en = 1'b1; end\n"
+        "  always @(posedge clk or negedge rst_n) begin\n"
+        "    #1;\n"
+        "    if (!rst_n) begin\n"
+        "      exp_out <= 1'b0;\n"
+        "    end else begin\n"
+        "      if (en) exp_out = ~exp_out;\n"
+        "      // (c) wait #1 for settle\n"
+        "      #1;\n"
+        "      if (out !== exp_out) begin\n"
+        "        $display(\"FAIL\");\n"
+        "        $finish(1);\n"
+        "      end\n"
+        "      exp_out <= exp_out;\n"
+        "    end\n"
+        "  end\n"
+        "endmodule\n"
+    )
+
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("workers.tb_lint.worker.subprocess.run", fake_run)
+    task = TaskMessage(
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.TESTBENCH_LINTER,
+        context={
+            "rtl_path": str(rtl_path),
+            "tb_path": str(tb_path),
+            "clocking": [
+                {
+                    "clock_name": "clk",
+                    "clock_polarity": "POSEDGE",
+                    "reset_name": "rst_n",
+                    "reset_polarity": "ACTIVE_LOW",
+                }
+            ],
+            "interface": {
+                "signals": [
+                    {"name": "clk"},
+                    {"name": "rst_n"},
+                    {"name": "en"},
+                    {"name": "out"},
+                ]
+            },
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert "TBSEM006" not in result.log_output
+
+
 def test_tb_lint_worker_semantic_can_be_disabled(tmp_path, monkeypatch):
     monkeypatch.setenv("TB_LINT_SEMANTIC", "0")
     worker = TestbenchLintWorker(connection_params=None, stop_event=None)
