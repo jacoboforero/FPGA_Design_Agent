@@ -23,6 +23,7 @@ from agents.reflection.worker import ReflectionWorker
 from agents.debug.worker import DebugWorker
 from agents.spec_helper.worker import SpecHelperWorker
 from agents.planner.worker import PlannerWorker
+from agents.Finalizer.worker import FinalizerWorker
 
 # Workers
 from workers.lint.worker import LintWorker
@@ -81,6 +82,7 @@ def start_workers(params: pika.ConnectionParameters, stop_event: threading.Event
         ReflectionWorker(params, stop_event),
         DebugWorker(params, stop_event),
         SpecHelperWorker(params, stop_event),
+        FinalizerWorker(params, stop_event),
         LintWorker(params, stop_event),
         TestbenchLintWorker(params, stop_event),
         AcceptanceWorker(params, stop_event),

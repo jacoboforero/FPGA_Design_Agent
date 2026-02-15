@@ -8,6 +8,15 @@
         "generated_design",
         "verilog_rag"
       ]
+    },
+    {
+      "module_name": "counter3",
+      "summary": "counter3: Generated HDL module.",
+      "signature": "module counter3(input wire clk, input wire rst_n, input wire en, output reg [2:0] count, output reg rollover);",
+      "tags": [
+        "generated_design",
+        "verilog_rag"
+      ]
     }
   ]
 }

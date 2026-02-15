@@ -304,42 +304,15 @@ class FinalizerWorker(AgentWorkerBase):
         if not summary:
             summary = f"{module_name}: Final passing design archived for reuse."
 
-        # Manifest
-        manifest: Dict[str, Any] = {
-            "schema_version": "1.1",
-            "run_id": run_id,
-            "node_id": node_id,
-            "timestamp_utc": ts,
-            "attempt": attempt,
-            "dut_name": module_name,
-            "signature": signature,
-            "summary": summary,
-            "hashes": {"rtl_sha256": rtl_sha, "tb_sha256": tb_sha},
-            "bundle_root": str(bundle_root),
-            "ai_summary_path": str(bundle_root / "final_summary.json") if (bundle_root / "final_summary.json").exists() else None,
-            "artifacts": {
-                "rtl_path": str(bundle_root / "rtl.sv"),
-                "tb_path": str(bundle_root / "tb.sv"),
-                "logs": {
-                    "lint": str(logs_dir / "lint.log") if (logs_dir / "lint.log").exists() else None,
-                    "tb_lint": str(logs_dir / "tb_lint.log") if (logs_dir / "tb_lint.log").exists() else None,
-                    "sim": str(logs_dir / "sim.log") if (logs_dir / "sim.log").exists() else None,
-                },
-                "insights": {
-                    "distilled": str(insights_dir / "distilled_dataset.json") if (insights_dir / "distilled_dataset.json").exists() else None,
-                    "reflection": str(insights_dir / "reflection_insights.json") if (insights_dir / "reflection_insights.json").exists() else None,
-                },
-                "interface": str(bundle_root / "interface.json") if (bundle_root / "interface.json").exists() else None,
-                "verification": str(bundle_root / "verification.json") if (bundle_root / "verification.json").exists() else None,
-            },
-            "outcome": {"status": "SUCCESS"},
-            "notes": {"ai": ai_log},
-        }
-        (bundle_root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-
-        
+        # ----------------------------
+        # RAG Indexing (IMPORTANT FIX)
+        # ----------------------------
+        rag_memory_file = os.getenv("RAG_MEMORY_FILE", "verilog_rag_memory.json")
         rag_log = "RAG disabled or unavailable; skipping indexing."
-        if self.rag is not None:
+        inserted = None
+        rag_text = None
+
+        if self.rag is not None and os.getenv("USE_RAG", "0") == "1":
             rag_text = _build_rag_text(
                 module_name=module_name,
                 signature=signature,
@@ -353,41 +326,98 @@ class FinalizerWorker(AgentWorkerBase):
                 run_id=run_id,
             )
 
-            # Make sure update_memory() can detect a module header.
-            # Include signature + AI summary JSON + rag_text for better retrieval.
+            # KEY CHANGE:
+            # Include the FULL RTL so update_memory() can reliably detect:
+            #   module ... endmodule
             assistant_output_for_rag = (
                 f"{summary}\n"
-                f"{signature}\n"
-                f"{json.dumps(ai_summary, indent=2) if ai_summary else ''}\n"
-                f"{rag_text}\n"
+                f"{json.dumps(ai_summary, indent=2) if ai_summary else ''}\n\n"
+                f"{rtl_text}\n"
             )
             user_input_for_rag = f"ARCHIVE FINAL PASSING DESIGN node={node_id} run_id={run_id}"
 
-            inserted = self.rag.update_memory(user_input_for_rag, assistant_output_for_rag)
-            if inserted:
-                rag_log = f"RAG stored + indexed: {inserted}"
-            else:
-                rag_log = "RAG: design already present or no modules detected; manifest saved anyway."
-
-            # Helpful debug record in the bundle
             try:
-                extra_record = {
-                    "module_name": module_name,
-                    "signature": signature,
-                    "summary": summary,
-                    "run_id": run_id,
-                    "node_id": node_id,
-                    "attempt": attempt,
-                    "timestamp_utc": ts,
-                    "rtl_sha256": rtl_sha,
-                    "tb_sha256": tb_sha,
-                    "ai_summary": ai_summary,
-                    "rag_text": rag_text,
-                    "bundle_root": str(bundle_root),
-                }
-                (bundle_root / "rag_record.json").write_text(json.dumps(extra_record, indent=2), encoding="utf-8")
-            except Exception:
-                pass
+                inserted = self.rag.update_memory(user_input_for_rag, assistant_output_for_rag)
+            except Exception as e:
+                rag_log = f"RAG indexing error: {type(e).__name__}: {e}"
+            else:
+                if inserted:
+                    rag_log = f"RAG stored + indexed: {inserted}"
+                else:
+                    rag_log = "RAG: design already present or no modules detected; manifest saved anyway."
+        elif os.getenv("USE_RAG", "0") != "1":
+            rag_log = "RAG disabled (USE_RAG!=1); skipping indexing."
+
+        # ----------------------------
+        # Manifest (include BOTH AI + RAG notes)
+        # ----------------------------
+        manifest: Dict[str, Any] = {
+            "schema_version": "1.1",
+            "run_id": run_id,
+            "node_id": node_id,
+            "timestamp_utc": ts,
+            "attempt": attempt,
+            "dut_name": module_name,
+            "signature": signature,
+            "summary": summary,
+            "hashes": {"rtl_sha256": rtl_sha, "tb_sha256": tb_sha},
+            "bundle_root": str(bundle_root),
+            "ai_summary_path": str(bundle_root / "final_summary.json")
+            if (bundle_root / "final_summary.json").exists()
+            else None,
+            "artifacts": {
+                "rtl_path": str(bundle_root / "rtl.sv"),
+                "tb_path": str(bundle_root / "tb.sv"),
+                "logs": {
+                    "lint": str(logs_dir / "lint.log") if (logs_dir / "lint.log").exists() else None,
+                    "tb_lint": str(logs_dir / "tb_lint.log") if (logs_dir / "tb_lint.log").exists() else None,
+                    "sim": str(logs_dir / "sim.log") if (logs_dir / "sim.log").exists() else None,
+                },
+                "insights": {
+                    "distilled": str(insights_dir / "distilled_dataset.json")
+                    if (insights_dir / "distilled_dataset.json").exists()
+                    else None,
+                    "reflection": str(insights_dir / "reflection_insights.json")
+                    if (insights_dir / "reflection_insights.json").exists()
+                    else None,
+                },
+                "interface": str(bundle_root / "interface.json") if (bundle_root / "interface.json").exists() else None,
+                "verification": str(bundle_root / "verification.json")
+                if (bundle_root / "verification.json").exists()
+                else None,
+            },
+            "outcome": {"status": "SUCCESS"},
+            "notes": {
+                "ai": ai_log,
+                "rag": rag_log,
+                "rag_memory_file": rag_memory_file,
+            },
+        }
+        (bundle_root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+        # Always write a rag_record.json so you can debug per-run
+        try:
+            extra_record = {
+                "module_name": module_name,
+                "signature": signature,
+                "summary": summary,
+                "run_id": run_id,
+                "node_id": node_id,
+                "attempt": attempt,
+                "timestamp_utc": ts,
+                "rtl_sha256": rtl_sha,
+                "tb_sha256": tb_sha,
+                "ai_log": ai_log,
+                "rag_log": rag_log,
+                "rag_memory_file_env": rag_memory_file,
+                "inserted": inserted,
+                "ai_summary": ai_summary,
+                "rag_text": rag_text,
+                "bundle_root": str(bundle_root),
+            }
+            (bundle_root / "rag_record.json").write_text(json.dumps(extra_record, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
         emit_runtime_event(
             runtime=self.runtime_name,
@@ -411,6 +441,7 @@ class FinalizerWorker(AgentWorkerBase):
                     "tb_sha256": tb_sha,
                     "ai": ai_log,
                     "rag": rag_log,
+                    "rag_memory_file": rag_memory_file,
                 },
                 indent=2,
             ),

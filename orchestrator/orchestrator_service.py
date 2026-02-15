@@ -456,6 +456,16 @@ class DemoOrchestrator:
                     )
                     tasks[target_node][accept_key] = accept_task
                 elif kind == "acceptance":
+                    attempt = stage_attempt or attempt_by_node.get(target_node, 1)
+                    finalize_task = self._publish_task(
+                        ch,
+                        EntityType.REASONING,
+                        AgentType.FINALIZE,
+                        target_node,
+                        attempt=attempt,
+                    )
+                    tasks[target_node]["finalize"] = finalize_task
+                elif kind == "finalize":
                     _finish_done(target_node)
                 elif kind == "distill":
                     attempt = stage_attempt

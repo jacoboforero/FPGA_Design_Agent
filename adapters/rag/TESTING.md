@@ -280,3 +280,4 @@ If tests are failing:
 4. Check that `USE_RAG=1` is set
 5. Verify the knowledge base file exists
 
+

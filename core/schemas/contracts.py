@@ -51,6 +51,7 @@ class AgentType(Enum):
     INTEGRATION = "IntegrationAgent"
     REFLECTION = "ReflectionAgent"
     SPECIFICATION_HELPER = "SpecificationHelperAgent"
+    FINALIZE = "FinalizeAgent"
 
 class WorkerType(Enum):
     """Specifies which deterministic worker should execute the task."""
