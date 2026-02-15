@@ -68,6 +68,11 @@ Open the repo in a Dev Container to use the same pinned toolchain automatically.
 - Tool overrides: `VERILATOR_PATH`, `IVERILOG_PATH`, `VVP_PATH`
 - Sim failure window: `SIM_FAIL_WINDOW_BEFORE`, `SIM_FAIL_WINDOW_AFTER` (cycles around detected failure)
 
+## Migration / Breaking changes
+- `adapters.llm.llm_gateway` has been **renamed** to `adapters.llm.gateway_factory`. Update imports to `from adapters.llm.gateway_factory import init_llm_gateway` where necessary.
+- The centralized `gateway_config` / `USE_GATEWAY_CONFIG` mode has been **removed** — call `init_llm_gateway()` (env-var initialization) instead.
+- No CI changes are required unless your CI referenced the removed `gateway_config` module or the old import path.
+
 ## Testing
 - Unit/schema: `pytest tests/core/schemas -q`
 - Workers/planner smoke: `pytest tests/workers/test_* tests/core/test_planner.py`
