@@ -1,15 +1,14 @@
 """
-Unit tests for adapters/llm/llm_gateway.py
+Unit tests for adapters/llm/gateway_factory.py
 
 Tests the LLM gateway initialization functions:
 - init_llm_gateway (main entry point)
-- _init_with_config (centralized config mode)
 - _init_legacy (backward compatible mode)
-- init_llm_gateway_with_fallback
+- init_llm_gateway_with_fallback (deprecated wrapper)
 """
 
 import pytest
-from adapters.llm.llm_gateway import init_llm_gateway
+from adapters.llm.gateway_factory import init_llm_gateway
 
 
 # ============================================================================

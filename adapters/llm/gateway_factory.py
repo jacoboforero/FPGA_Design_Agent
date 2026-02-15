@@ -1,9 +1,12 @@
 """
-Common LLM gateway initialization for agents.
+adapters.llm.gateway_factory — LLM gateway factory
 
-This module provides the gateway factory used throughout the agent system.
-Uses legacy environment-variable based configuration only (tiered/agent-aware
-gateway selection has been removed).
+Provides the runtime factory used by agents to initialize LLM gateways from
+environment variables. This module contains `init_llm_gateway()` (primary
+factory) and `init_llm_gateway_with_fallback()` (deprecated wrapper).
+
+Note: centralized/tiered `gateway_config` support has been removed — legacy
+env-var initialization is used exclusively.
 """
 
 import os
@@ -44,18 +47,14 @@ def init_llm_gateway(agent_type: Optional[str] = None) -> Optional[LLMGateway]:
 
     
     Examples:
-        # Legacy mode (simple, recommended for most users):
+        # Legacy mode (simple, recommended):
         export USE_LLM=1
         export LLM_PROVIDER=openai
         export LLM_MODEL=gpt-4o
         export OPENAI_API_KEY=sk-...
         gateway = init_llm_gateway()
-        
-        # Config mode (advanced, tier-based):
-        export USE_LLM=1
-        export USE_GATEWAY_CONFIG=1
-        export ANTHROPIC_API_KEY=sk-ant-...
-        gateway = init_llm_gateway("planner")  # Auto-selects by tier
+
+        # Note: centralized/tiered gateway_config has been removed.
     """
     use_llm = os.getenv("USE_LLM", "0") == "1"
     

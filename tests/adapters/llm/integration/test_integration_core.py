@@ -13,7 +13,7 @@ see ASPIRATIONAL_TESTS.md for documentation and future implementation strategies
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from adapters.llm.llm_gateway import init_llm_gateway
+from adapters.llm.gateway_factory import init_llm_gateway
 from adapters.llm.gateway import Message, MessageRole, ModelResponse
 
 
