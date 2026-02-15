@@ -104,7 +104,6 @@ def clean_env(monkeypatch):
         "LLM_PROVIDER", "LLM_MODEL", "USE_LLM",
         "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY",
         "COHERE_API_KEY", "GOOGLE_API_KEY",
-        "USE_GATEWAY_CONFIG", "GATEWAY_TIER",
         "LLM_PROVIDER_planner", "LLM_PROVIDER_implementation",
         "LLM_MODEL_planner", "LLM_MODEL_implementation",
     ]
@@ -143,15 +142,7 @@ def with_groq_env(clean_env, monkeypatch):
     return monkeypatch
 
 
-@pytest.fixture
-def with_config_mode_env(clean_env, monkeypatch):
-    """Set up config mode with tier-based selection."""
-    monkeypatch.setenv("USE_GATEWAY_CONFIG", "1")
-    monkeypatch.setenv("GATEWAY_TIER", "BALANCED")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
-    monkeypatch.setenv("GROQ_API_KEY", "gsk-test-key")
-    return monkeypatch
+# `with_config_mode_env` fixture removed — centralized gateway_config no longer supported.
 
 
 @pytest.fixture

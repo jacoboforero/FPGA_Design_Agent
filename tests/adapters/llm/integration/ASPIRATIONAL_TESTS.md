@@ -19,20 +19,15 @@ These tests document desired integration behaviors that require more sophisticat
 - Missing API key returns None
 - Invalid provider returns None
 
-**Config Mode:**
-- Config mode with tier creates correct adapter
-- Config mode with agent type creates appropriate adapter  
-- Gateway config requires explicit USE_GATEWAY_CONFIG=1 flag
+**Config Mode:** (removed) — centralized `gateway_config` feature has been removed; use legacy environment-variable initialization via `init_llm_gateway()`.
 
 **Config Mode Precedence:**
 - Legacy mode is default (even with GATEWAY_TIER set)
-- Config mode overrides legacy when USE_GATEWAY_CONFIG=1 is explicit
+- Centralized config-mode behavior has been removed; legacy env-vars apply.
 - USE_LLM=0 disables LLM regardless of other config
 
 **Fallback Initialization:**
-- Fallback requires config mode to be enabled
-- Fallback with config mode works correctly
-- Fallback returns None if primary gateway creation fails
+- Tiered fallback chains and config-mode fallback have been removed (legacy init only).
 
 ---
 
@@ -95,14 +90,14 @@ These tests document desired integration behaviors that require more sophisticat
 - USE_LLM=1 enables LLM
 
 **Config Mode:**
-- USE_GATEWAY_CONFIG=1 enables config mode
+- Centralized gateway_config removed; legacy env-vars are used
 - GATEWAY_TIER env var selects adapter
 - Invalid tier returns None
-- Config mode requires explicit USE_GATEWAY_CONFIG=1
+- Config mode removed (no USE_GATEWAY_CONFIG flag)
 
 **Precedence Order:**
 - Legacy mode takes precedence over config (when both set)
-- Config mode takes precedence when USE_GATEWAY_CONFIG=1 explicit
+- Centralized config-mode has been removed; legacy env-vars apply
 - Per-agent override takes precedence over default provider
 - Per-agent override takes precedence over default model
 

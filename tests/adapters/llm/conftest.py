@@ -289,7 +289,6 @@ def disabled_llm_env(monkeypatch):
 def legacy_openai_env(monkeypatch):
     """Environment for legacy OpenAI mode."""
     monkeypatch.setenv("USE_LLM", "1")
-    monkeypatch.setenv("USE_GATEWAY_CONFIG", "0")
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_MODEL", "gpt-4o")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-12345")
@@ -297,9 +296,8 @@ def legacy_openai_env(monkeypatch):
 
 @pytest.fixture
 def config_with_tier_override(monkeypatch):
-    """Environment with tier override."""
+    """Environment with tier override (legacy mode only)."""
     monkeypatch.setenv("USE_LLM", "1")
-    monkeypatch.setenv("USE_GATEWAY_CONFIG", "1")
     monkeypatch.setenv("GATEWAY_TIER", "budget")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-12345")
 
@@ -308,7 +306,6 @@ def config_with_tier_override(monkeypatch):
 def missing_api_keys_env(monkeypatch):
     """Environment with LLM enabled but no API keys."""
     monkeypatch.setenv("USE_LLM", "1")
-    monkeypatch.setenv("USE_GATEWAY_CONFIG", "1")
     # Clear API keys
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

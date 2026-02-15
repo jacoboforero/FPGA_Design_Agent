@@ -2,8 +2,8 @@
 Common LLM gateway initialization for agents.
 
 This module provides the gateway factory used throughout the agent system.
-Defaults to simple environment-based configuration for backward compatibility.
-Supports optional centralized tier-based configuration for advanced use cases.
+Uses legacy environment-variable based configuration only (tiered/agent-aware
+gateway selection has been removed).
 """
 
 import os
@@ -19,40 +19,29 @@ def init_llm_gateway(agent_type: Optional[str] = None) -> Optional[LLMGateway]:
     """
     Initialize an LLM gateway.
     
-    This function supports two modes:
-    1. Legacy mode (default): Simple environment-based provider/model selection
-    2. Config mode (USE_GATEWAY_CONFIG=1): Tier-based agent-aware selection
+    Initialize an LLM gateway using legacy environment-variable configuration.
     
     Args:
-        agent_type: Agent identifier (e.g., "planner", "implementation")
-                   Used to look up agent-specific model overrides in legacy mode.
-                   Ignored if not provided; may be used in future per-agent config.
+        agent_type: Agent identifier (e.g., "planner", "implementation"). Used only
+                    for per-agent environment overrides (if present).
     
     Returns:
-        LLMGateway instance or None if LLMs are disabled or keys missing
+        LLMGateway instance or None if LLMs are disabled or keys missing.
     
-    Environment Variables (Legacy Mode - default):
-        USE_LLM: Set to "1" to enable LLM usage (default: "0")
-        
-        # Provider and model selection (simple):
+    Environment Variables (legacy):
+        USE_LLM: Set to "1" to enable LLM usage (default: "0").
+
         LLM_PROVIDER: Provider to use (openai|anthropic|google|groq|qwen3-local)
-                     (default: "openai")
-        LLM_MODEL: Model name to use (default varies by provider)
-        
-        # Per-agent overrides (optional, future feature):
-        LLM_PROVIDER_{agent_type}: Provider for specific agent (e.g., LLM_PROVIDER_planner=anthropic)
-        LLM_MODEL_{agent_type}: Model for specific agent (e.g., LLM_MODEL_planner=claude-opus)
-        
-        # API keys (required for each provider):
-        OPENAI_API_KEY: OpenAI API key
-        ANTHROPIC_API_KEY: Anthropic API key
-        GOOGLE_API_KEY: Google API key
-        GROQ_API_KEY: Groq API key
+                     (default: "openai").
+        LLM_MODEL: Model name to use (default varies by provider).
+
+        Per-agent overrides (optional):
+        LLM_PROVIDER_{agent_type}, LLM_MODEL_{agent_type}.
+
+        API keys required per provider: OPENAI_API_KEY, ANTHROPIC_API_KEY,
+        GOOGLE_API_KEY, GROQ_API_KEY.
     
-    Environment Variables (Config Mode - opt-in):
-        USE_LLM: Set to "1" to enable LLM usage
-        USE_GATEWAY_CONFIG: Set to "1" to use tier-based selection (default: "0")
-        GATEWAY_TIER: Override tier (local|fast|budget|balanced|powerful)
+
     
     Examples:
         # Legacy mode (simple, recommended for most users):
@@ -74,40 +63,13 @@ def init_llm_gateway(agent_type: Optional[str] = None) -> Optional[LLMGateway]:
         logger.info("LLMs disabled (USE_LLM != 1)")
         return None
     
-    # Check if using advanced centralized config mode
-    use_config = os.getenv("USE_GATEWAY_CONFIG", "0") == "1"
-    
-    if use_config:
-        return _init_with_config(agent_type)
-    else:
-        return _init_legacy(agent_type)
+    # Legacy-only initialization (tiered gateway_config removed).
+    return _init_legacy(agent_type)
 
 
-def _init_with_config(agent_type: Optional[str]) -> Optional[LLMGateway]:
-    """
-    Initialize using centralized gateway_config (opt-in, advanced mode).
-    
-    Only used if USE_GATEWAY_CONFIG=1 is set. Provides tier-based agent-aware
-    gateway selection. See gateway_config.py for details.
-    """
-    try:
-        from adapters.llm.gateway_config import get_gateway_for_agent
-        
-        agent_type = agent_type or "balanced"
-        gateway = get_gateway_for_agent(agent_type)
-        
-        if gateway is None:
-            logger.warning(
-                f"Failed to initialize gateway for '{agent_type}'. "
-                "Check that required API keys are set."
-            )
-        
-        return gateway
-        
-    except ImportError as e:
-        logger.error(f"Cannot import gateway_config: {e}")
-        logger.info("Falling back to legacy initialization")
-        return _init_legacy(agent_type)
+# Centralized `gateway_config` support has been removed — legacy
+# environment-variable based initialization is used exclusively.
+# (The former `_init_with_config` implementation was removed.)
 
 
 def _init_legacy(agent_type: Optional[str]) -> Optional[LLMGateway]:
@@ -201,45 +163,11 @@ def _init_legacy(agent_type: Optional[str]) -> Optional[LLMGateway]:
 
 def init_llm_gateway_with_fallback(agent_type: str) -> Optional[LLMGateway]:
     """
-    Initialize an LLM gateway with fallback support (config mode only).
-    
-    Only works when USE_GATEWAY_CONFIG=1. Returns the primary gateway for an agent,
-    but also enables fallback chains if primary gateway fails.
-    
-    Args:
-        agent_type: Agent identifier (e.g., "planner", "implementation")
-        
-    Returns:
-        Primary gateway or None if none available
+    Backwards-compatible wrapper: fallback chains and centralized config were removed.
+    This now delegates to init_llm_gateway() (legacy initialization).
     """
-    use_llm = os.getenv("USE_LLM", "0") == "1"
-    if not use_llm:
-        return None
-    
-    use_config = os.getenv("USE_GATEWAY_CONFIG", "0") == "1"
-    if not use_config:
-        logger.warning(
-            "Fallback mode requires USE_GATEWAY_CONFIG=1. "
-            "Falling back to standard initialization."
-        )
-        return init_llm_gateway(agent_type)
-    
-    try:
-        from adapters.llm.gateway_config import get_fallback_chain
-        
-        chain = get_fallback_chain(agent_type)
-        
-        if not chain:
-            logger.warning(f"No gateways available for '{agent_type}'")
-            return None
-        
-        logger.info(
-            f"Initialized gateway for '{agent_type}' with {len(chain)} fallback(s): "
-            f"{' -> '.join(f'{g.provider}/{g.model_name}' for g in chain)}"
-        )
-        
-        return chain[0]  # Return primary
-        
-    except ImportError as e:
-        logger.error(f"Cannot import gateway_config: {e}")
-        return init_llm_gateway(agent_type)
+    logger.warning(
+        "init_llm_gateway_with_fallback deprecated — centralized gateway_config/"
+        "fallback removed; using legacy init."
+    )
+    return init_llm_gateway(agent_type)

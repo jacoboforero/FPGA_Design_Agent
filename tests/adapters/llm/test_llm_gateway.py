@@ -9,10 +9,7 @@ Tests the LLM gateway initialization functions:
 """
 
 import pytest
-from adapters.llm.llm_gateway import (
-    init_llm_gateway,
-    init_llm_gateway_with_fallback,
-)
+from adapters.llm.llm_gateway import init_llm_gateway
 
 
 # ============================================================================
@@ -27,23 +24,7 @@ class TestInitLLMGateway:
         result = init_llm_gateway()
         assert result is None
     
-    def test_init_llm_config_mode(self, valid_gateway_env, monkeypatch):
-        """Initialize using gateway_config mode."""
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "1")
-        
-        gateway = init_llm_gateway("implementation")
-        
-        # Should return a gateway
-        assert gateway is not None
-    
-    def test_init_llm_config_mode_default_agent(self, valid_gateway_env, monkeypatch):
-        """Initialize config mode with default agent."""
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "1")
-        
-        gateway = init_llm_gateway(agent_type=None)
-        
-        # Should use "balanced" as default
-        assert gateway is not None
+
     
     def test_init_llm_legacy_mode(self, legacy_openai_env):
         """Initialize using legacy mode."""
@@ -63,7 +44,6 @@ class TestInitLLMGateway:
     def test_init_llm_missing_api_key_returns_none(self, monkeypatch):
         """Returns None when required API key missing."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "0")
         monkeypatch.setenv("LLM_PROVIDER", "openai")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         
@@ -74,7 +54,6 @@ class TestInitLLMGateway:
     def test_init_llm_invalid_provider_returns_none(self, monkeypatch):
         """Returns None for invalid provider."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "0")
         monkeypatch.setenv("LLM_PROVIDER", "invalid_provider")
         
         gateway = init_llm_gateway()
@@ -100,7 +79,6 @@ class TestLegacyInitialization:
     def test_legacy_openai_with_model_override(self, monkeypatch):
         """Legacy OpenAI with model override."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "0")
         monkeypatch.setenv("LLM_PROVIDER", "openai")
         monkeypatch.setenv("LLM_MODEL", "gpt-4.1-nano")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
@@ -113,7 +91,6 @@ class TestLegacyInitialization:
     def test_legacy_anthropic_initialization(self, monkeypatch):
         """Legacy mode with Anthropic provider."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "0")
         monkeypatch.setenv("LLM_PROVIDER", "anthropic")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
         
@@ -125,7 +102,6 @@ class TestLegacyInitialization:
     def test_legacy_google_initialization(self, monkeypatch):
         """Legacy mode with Google provider."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "0")
         monkeypatch.setenv("LLM_PROVIDER", "google")
         monkeypatch.setenv("GOOGLE_API_KEY", "test-google-key")
         
@@ -137,7 +113,6 @@ class TestLegacyInitialization:
     def test_legacy_groq_initialization(self, monkeypatch):
         """Legacy mode with Groq provider."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "0")
         monkeypatch.setenv("LLM_PROVIDER", "groq")
         monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
         
@@ -149,7 +124,6 @@ class TestLegacyInitialization:
     def test_legacy_qwen_local_initialization(self, monkeypatch):
         """Legacy mode with local Qwen/Ollama."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "0")
         monkeypatch.setenv("LLM_PROVIDER", "qwen3-local")
         
         gateway = init_llm_gateway()
@@ -160,7 +134,6 @@ class TestLegacyInitialization:
     def test_legacy_ollama_alias(self, monkeypatch):
         """Legacy mode accepts 'ollama' as provider alias."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "0")
         monkeypatch.setenv("LLM_PROVIDER", "ollama")
         
         gateway = init_llm_gateway()
@@ -171,7 +144,6 @@ class TestLegacyInitialization:
     def test_legacy_local_alias(self, monkeypatch):
         """Legacy mode accepts 'local' as provider alias."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "0")
         monkeypatch.setenv("LLM_PROVIDER", "local")
         
         gateway = init_llm_gateway()
@@ -182,7 +154,6 @@ class TestLegacyInitialization:
     def test_legacy_case_insensitive_provider(self, monkeypatch):
         """Legacy mode is case-insensitive for provider."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "0")
         monkeypatch.setenv("LLM_PROVIDER", "OPENAI")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         
@@ -196,50 +167,7 @@ class TestLegacyInitialization:
 # Fallback Initialization Tests
 # ============================================================================
 
-class TestInitLLMGatewayWithFallback:
-    """Test fallback-aware gateway initialization."""
-    
-    def test_fallback_requires_config_mode(self, legacy_openai_env, monkeypatch):
-        """Fallback mode requires USE_GATEWAY_CONFIG=1."""
-        # Legacy mode should fallback to standard init
-        monkeypatch.setenv("USE_gateway_CONFIG", "0")
-        
-        gateway = init_llm_gateway_with_fallback("planner")
-        
-        # Should still work (falls back to standard init)
-        assert gateway is not None
-    
-    def test_fallback_initialization_config_mode(self, valid_gateway_env, monkeypatch):
-        """Fallback initialization with config mode enabled."""
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "1")
-        
-        gateway = init_llm_gateway_with_fallback("implementation")
-        
-        assert gateway is not None
-    
-    def test_fallback_returns_primary_gateway(self, valid_gateway_env, monkeypatch):
-        """Fallback init returns the primary gateway."""
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "1")
-        
-        gateway = init_llm_gateway_with_fallback("planner")
-        
-        # Should be the primary (first in chain)
-        assert gateway is not None
-    
-    def test_fallback_with_llm_disabled(self, disabled_llm_env):
-        """Fallback returns None when LLMs disabled."""
-        result = init_llm_gateway_with_fallback("implementation")
-        
-        assert result is None
-    
-    def test_fallback_with_missing_gateways(self, missing_api_keys_env, monkeypatch):
-        """Fallback handles case when no gateways available."""
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "1")
-        
-        # With no API keys, might return None or local gateway
-        result = init_llm_gateway_with_fallback("planner")
-        
-        # Result depends on local gateway availability
+# Fallback/config-mode related tests removed — feature deprecated/removed.
 
 
 # ============================================================================
@@ -249,20 +177,10 @@ class TestInitLLMGatewayWithFallback:
 class TestEnvironmentVariableCombinations:
     """Test various environment variable combinations."""
     
-    def test_config_mode_takes_precedence(self, valid_gateway_env, monkeypatch):
-        """USE_GATEWAY_CONFIG=1 takes precedence over USE_GATEWAY_CONFIG=0."""
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")  # Should be ignored
-        
-        gateway = init_llm_gateway("implementation")
-        
-        # Should use config mode, not legacy mode
-        assert gateway is not None
+
     
     def test_default_to_legacy_mode(self, legacy_openai_env, monkeypatch):
-        """Default to legacy mode when USE_GATEWAY_CONFIG not set."""
-        monkeypatch.delenv("USE_GATEWAY_CONFIG", raising=False)
-        
+        """Default to legacy mode (config mode removed)."""
         gateway = init_llm_gateway()
         
         assert gateway is not None
@@ -271,7 +189,6 @@ class TestEnvironmentVariableCombinations:
     def test_special_characters_in_api_key(self, monkeypatch):
         """Handle API keys with special characters."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "0")
         monkeypatch.setenv("LLM_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-with-!@#$%^&*()_+-=[]{}|;:',.<>?/~`")
         
@@ -290,8 +207,6 @@ class TestErrorHandlingAndEdgeCases:
     
     def test_init_with_none_agent_type(self, valid_gateway_env, monkeypatch):
         """Handles None agent_type gracefully."""
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "1")
-        
         gateway = init_llm_gateway(agent_type=None)
         
         # Should use default
@@ -299,8 +214,6 @@ class TestErrorHandlingAndEdgeCases:
     
     def test_init_with_empty_string_agent_type(self, valid_gateway_env, monkeypatch):
         """Handles empty string agent_type."""
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "1")
-        
         gateway = init_llm_gateway(agent_type="")
         
         # Should handle gracefully
@@ -315,16 +228,7 @@ class TestErrorHandlingAndEdgeCases:
         assert gateway1 is not None
         assert gateway2 is not None
     
-    def test_init_with_malformed_tier(self, valid_gateway_env, monkeypatch):
-        """Handles malformed GATEWAY_TIER gracefully."""
-        from adapters.llm.gateway_config import GatewayConfig
-        
-        monkeypatch.setenv("USE_GATEWAY_CONFIG", "1")
-        monkeypatch.setenv("GATEWAY_TIER", "invalid_tier")
-        
-        # GatewayConfig raises ValueError in __init__ for invalid tier
-        with pytest.raises(ValueError):
-            GatewayConfig()
+
 
 
 # ============================================================================
