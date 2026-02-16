@@ -257,13 +257,13 @@ class TestPerAgentOverrideValidation:
         monkeypatch.setenv("LLM_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         
-        # Per-agent override without API key
-        monkeypatch.setenv("LLM_PROVIDER_planner", "anthropic")
+        # Per-agent override without API key (prefix-style)
+        monkeypatch.setenv("PLANNER_LLM_PROVIDER", "anthropic")
         # No ANTHROPIC_API_KEY
-        
+
         # Default should still work
         gateway_default = init_llm_gateway()
-        
+
         # Per-agent should fail gracefully
         gateway_planner = init_llm_gateway(agent_type="planner")
         assert gateway_planner is None
@@ -297,12 +297,12 @@ class TestAgentTypeHandling:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         
-        # Set per-agent override
-        monkeypatch.setenv("LLM_PROVIDER_planner", "anthropic")
-        
+        # Set per-agent override (prefix-style)
+        monkeypatch.setenv("PLANNER_LLM_PROVIDER", "anthropic")
+
         # With agent_type, should attempt per-agent override
         gateway = init_llm_gateway(agent_type="planner")
-        
+
         # Gateway will be None due to mock issues, but behavior is validated
 
 

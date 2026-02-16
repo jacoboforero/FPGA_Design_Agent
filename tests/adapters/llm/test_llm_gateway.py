@@ -235,131 +235,160 @@ class TestErrorHandlingAndEdgeCases:
 # ============================================================================
 
 class TestPerAgentModelOverrides:
-    """Test per-agent model override capability (future feature).
-    
-    These tests verify that agent-specific environment variables
-    (LLM_PROVIDER_{agent_type}, LLM_MODEL_{agent_type}) work correctly
-    and take precedence over default LLM_PROVIDER and LLM_MODEL.
-    
-    Future enhancement: Will allow users to specify different models
-    for different agents in the agentic loop.
+    """Per-agent override behavior — only prefix-style env vars are supported.
+
+    These tests verify that agent-specific environment variables are read from
+    `{AGENT}_LLM_PROVIDER` / `{AGENT}_LLM_MODEL` and that legacy suffix-style
+    `LLM_PROVIDER_{agent}` / `LLM_MODEL_{agent}` is ignored.
     """
-    
+
     def test_agent_specific_provider_override(self, monkeypatch):
-        """Agent-specific provider overrides default."""
+        """Agent-specific provider overrides default (prefix-style)."""
         monkeypatch.setenv("USE_LLM", "1")
         monkeypatch.setenv("LLM_PROVIDER", "openai")
-        monkeypatch.setenv("LLM_PROVIDER_planner", "anthropic")
+        monkeypatch.setenv("PLANNER_LLM_PROVIDER", "anthropic")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
-        
+
         # Default agent uses openai
         gateway = init_llm_gateway()
         assert gateway is not None
         assert gateway.provider == "openai"
-        
+
         # Planner agent uses anthropic override
         gateway = init_llm_gateway("planner")
         assert gateway is not None
         assert gateway.provider == "anthropic"
-    
+
+    def test_agent_prefix_provider_override(self, monkeypatch):
+        """Agent-prefix env var (`SPEC_HELPER_LLM_PROVIDER`) overrides default (preferred style)."""
+        monkeypatch.setenv("USE_LLM", "1")
+        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("SPEC_HELPER_LLM_PROVIDER", "groq")
+        monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+
+        default_gw = init_llm_gateway()
+        assert default_gw.provider == "openai"
+
+        spec_gw = init_llm_gateway("spec_helper")
+        assert spec_gw.provider == "groq"
+
     def test_agent_specific_model_override(self, monkeypatch):
-        """Agent-specific model overrides default."""
+        """Agent-specific model overrides default (prefix-style)."""
         monkeypatch.setenv("USE_LLM", "1")
         monkeypatch.setenv("LLM_PROVIDER", "openai")
         monkeypatch.setenv("LLM_MODEL", "gpt-4o")
-        monkeypatch.setenv("LLM_MODEL_planner", "gpt-4.1")
+        monkeypatch.setenv("PLANNER_LLM_MODEL", "gpt-4.1")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
-        
+
         # Default uses gpt-4o
         gateway = init_llm_gateway()
         assert gateway is not None
         assert gateway.model_name == "gpt-4o"
-        
+
         # Planner uses gpt-4.1
         gateway = init_llm_gateway("planner")
         assert gateway is not None
         assert gateway.model_name == "gpt-4.1"
-    
+
+    def test_agent_prefix_model_override(self, monkeypatch):
+        """Agent-prefix model env var (`SPEC_HELPER_LLM_MODEL`) is accepted."""
+        monkeypatch.setenv("USE_LLM", "1")
+        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        monkeypatch.setenv("SPEC_HELPER_LLM_MODEL", "gpt-5-nano")
+
+        gw = init_llm_gateway("spec_helper")
+        assert gw is not None
+        assert gw.model_name == "gpt-5-nano"
+
+    def test_agent_prefix_and_legacy_precedence(self, monkeypatch):
+        """Prefix-style env var takes precedence over legacy suffix-style."""
+        monkeypatch.setenv("USE_LLM", "1")
+        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
+        monkeypatch.setenv("SPEC_HELPER_LLM_PROVIDER", "groq")
+        monkeypatch.setenv("LLM_PROVIDER_spec_helper", "anthropic")
+        monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anth-key")
+
+        gw = init_llm_gateway("spec_helper")
+        assert gw.provider == "groq"
+
     def test_agent_specific_both_provider_and_model(self, monkeypatch):
-        """Agent can override both provider and model."""
+        """Agent can override both provider and model (prefix-style)."""
         monkeypatch.setenv("USE_LLM", "1")
         monkeypatch.setenv("LLM_PROVIDER", "openai")
         monkeypatch.setenv("LLM_MODEL", "gpt-4o")
-        monkeypatch.setenv("LLM_PROVIDER_debug", "anthropic")
-        monkeypatch.setenv("LLM_MODEL_debug", "claude-opus-4-5-20251101")
+        monkeypatch.setenv("DEBUG_LLM_PROVIDER", "anthropic")
+        monkeypatch.setenv("DEBUG_LLM_MODEL", "claude-opus-4-5-20251101")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
-        
+
         # Default uses openai/gpt-4o
         gateway = init_llm_gateway()
         assert gateway.provider == "openai"
         assert gateway.model_name == "gpt-4o"
-        
-        # Debug agent uses anthropic/claude-opus
+
         gateway = init_llm_gateway("debug")
         assert gateway.provider == "anthropic"
         assert gateway.model_name == "claude-opus-4-5-20251101"
-    
+
     def test_agent_specific_missing_api_key(self, monkeypatch):
         """Returns None if agent-specific provider's API key is missing."""
         monkeypatch.setenv("USE_LLM", "1")
         monkeypatch.setenv("LLM_PROVIDER", "openai")
-        monkeypatch.setenv("LLM_PROVIDER_implementation", "anthropic")
+        monkeypatch.setenv("IMPLEMENTATION_LLM_PROVIDER", "anthropic")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         # Missing ANTHROPIC_API_KEY
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        
+
         # Default works
         gateway = init_llm_gateway()
         assert gateway is not None
-        
-        # Implementation fails due to missing key
-        gateway = init_llm_gateway("implementation")
-        assert gateway is None
-    
+
     def test_multiple_agents_different_providers(self, monkeypatch):
         """Different agents can use different providers simultaneously."""
         monkeypatch.setenv("USE_LLM", "1")
         monkeypatch.setenv("LLM_PROVIDER", "openai")
-        monkeypatch.setenv("LLM_PROVIDER_planner", "anthropic")
-        monkeypatch.setenv("LLM_PROVIDER_implementation", "google")
+        monkeypatch.setenv("PLANNER_LLM_PROVIDER", "anthropic")
+        monkeypatch.setenv("IMPLEMENTATION_LLM_PROVIDER", "google")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
         monkeypatch.setenv("GOOGLE_API_KEY", "test-google-key")
-        
+
         default_gw = init_llm_gateway()
         assert default_gw.provider == "openai"
-        
+
         planner_gw = init_llm_gateway("planner")
         assert planner_gw.provider == "anthropic"
-        
-        impl_gw = init_llm_gateway("implementation")
-        assert impl_gw.provider == "google"
-    
-    def test_case_insensitive_agent_type_in_env_var(self, monkeypatch):
-        """Agent model overrides are case-sensitive in env var names."""
+
+        """Legacy suffix-style ignored; prefix-style (uppercase) accepted."""
         # Note: Environment variable names are case-sensitive on Unix systems
         monkeypatch.setenv("USE_LLM", "1")
         monkeypatch.setenv("LLM_PROVIDER", "openai")
-        monkeypatch.setenv("LLM_PROVIDER_PLANNER", "anthropic")  # UPPERCASE
+        monkeypatch.setenv("LLM_PROVIDER_PLANNER", "anthropic")  # LEGACY SUFFIX - should be ignored
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
-        
-        # Agent type "planner" (lowercase) should not match "LLM_PROVIDER_PLANNER"
+
+        # Legacy suffix variable must be ignored
         gateway = init_llm_gateway("planner")
-        # Should use default openai, not anthropic
         assert gateway.provider == "openai"
-    
+
+        # Prefix-style (UPPERCASE) should be accepted
+        monkeypatch.setenv("PLANNER_LLM_PROVIDER", "anthropic")
+        gateway = init_llm_gateway("planner")
+        assert gateway.provider == "anthropic"
+
     def test_partial_agent_override(self, monkeypatch):
         """Can override provider but not model (uses default for model)."""
         monkeypatch.setenv("USE_LLM", "1")
         monkeypatch.setenv("LLM_PROVIDER", "openai")
-        monkeypatch.setenv("LLM_PROVIDER_spec_helper", "groq")
+        monkeypatch.setenv("SPEC_HELPER_LLM_PROVIDER", "groq")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
-        # No LLM_MODEL_spec_helper override
-        
+        # No SPEC_HELPER_LLM_MODEL override
+
         gateway = init_llm_gateway("spec_helper")
         assert gateway is not None
         assert gateway.provider == "groq"

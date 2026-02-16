@@ -28,3 +28,13 @@ All agents run inside the agent-worker runtime and are selected by `AgentType`. 
 - All work is brokered; agents never call each other directly.
 - On unrecoverable inputs (schema/interface mismatch), reject to DLQ. Retry only once for transient LLM/tool errors.
 - Keep context size modest to avoid blowing token windows; prefer concise summaries over full logs unless debugging.
+
+### Per-agent LLM selection
+- Canonical env var format (required): `{AGENT}_LLM_PROVIDER` and `{AGENT}_LLM_MODEL` (e.g., `SPEC_HELPER_LLM_MODEL`). This groups settings by agent when scanning `.env` files.
+- Legacy suffix-style (`LLM_PROVIDER_{agent}` / `LLM_MODEL_{agent}`) has been removed and is ignored.
+- Supported agent names: `planner`, `implementation`, `testbench`, `debug`, `reflection`, `spec_helper`.
+- Example mapping for the requested setup:
+  - `DEBUG_LLM_PROVIDER=openai` and `DEBUG_LLM_MODEL=gpt-5.2`
+  - `IMPLEMENTATION_LLM_PROVIDER=openai` and `IMPLEMENTATION_LLM_MODEL=gpt-5.2`
+  - `PLANNER_LLM_PROVIDER=qwen3-local`
+  - `REFLECTION_LLM_PROVIDER=anthropic` and `REFLECTION_LLM_MODEL=claude-haiku-4-5-...`

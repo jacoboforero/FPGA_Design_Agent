@@ -64,7 +64,7 @@ spec_helper_gateway = None
 def init_spec_helper_gateway():
     """Initialize shared LLM gateway for the spec helper chat."""
     global spec_helper_gateway
-    spec_helper_gateway = init_llm_gateway()
+    spec_helper_gateway = init_llm_gateway("spec_helper")
     return spec_helper_gateway
 
 

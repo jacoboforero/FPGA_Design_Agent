@@ -104,8 +104,8 @@ def clean_env(monkeypatch):
         "LLM_PROVIDER", "LLM_MODEL", "USE_LLM",
         "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY",
         "COHERE_API_KEY", "GOOGLE_API_KEY",
-        "LLM_PROVIDER_planner", "LLM_PROVIDER_implementation",
-        "LLM_MODEL_planner", "LLM_MODEL_implementation",
+        "PLANNER_LLM_PROVIDER", "IMPLEMENTATION_LLM_PROVIDER",
+        "PLANNER_LLM_MODEL", "IMPLEMENTATION_LLM_MODEL",
     ]
     for var in llm_vars:
         monkeypatch.delenv(var, raising=False)
@@ -165,9 +165,9 @@ def with_google_env(clean_env, monkeypatch):
 
 @pytest.fixture
 def with_per_agent_env(clean_env, monkeypatch):
-    """Set up per-agent model overrides."""
+    """Set up per-agent model overrides (prefix-style)."""
     monkeypatch.setenv("LLM_PROVIDER", "openai")
-    monkeypatch.setenv("LLM_PROVIDER_implementation", "groq")
+    monkeypatch.setenv("IMPLEMENTATION_LLM_PROVIDER", "groq")
     monkeypatch.setenv("LLM_MODEL", "gpt-4o")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
     monkeypatch.setenv("GROQ_API_KEY", "gsk-test-key")

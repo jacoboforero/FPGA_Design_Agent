@@ -876,7 +876,7 @@ def _write_lock(module_names: List[str], top_module: str, spec_id: UUID) -> None
 
 
 def _require_gateway() -> object:
-    gateway = init_llm_gateway()
+    gateway = init_llm_gateway("spec_helper")
     if not gateway:
         raise RuntimeError("Spec helper requires LLMs. Set USE_LLM=1 and provider keys.")
     return gateway

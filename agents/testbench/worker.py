@@ -27,7 +27,7 @@ class TestbenchWorker(AgentWorkerBase):
 
     def __init__(self, connection_params, stop_event):
         super().__init__(connection_params, stop_event)
-        self.gateway = init_llm_gateway()
+        self.gateway = init_llm_gateway("testbench")
 
     def handle_task(self, task: TaskMessage) -> ResultMessage:
         ctx = task.context

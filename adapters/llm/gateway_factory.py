@@ -31,15 +31,15 @@ def init_llm_gateway(agent_type: Optional[str] = None) -> Optional[LLMGateway]:
     Returns:
         LLMGateway instance or None if LLMs are disabled or keys missing.
     
-    Environment Variables (legacy):
+    Environment Variables:
         USE_LLM: Set to "1" to enable LLM usage (default: "0").
 
         LLM_PROVIDER: Provider to use (openai|anthropic|google|groq|qwen3-local)
                      (default: "openai").
         LLM_MODEL: Model name to use (default varies by provider).
 
-        Per-agent overrides (optional):
-        LLM_PROVIDER_{agent_type}, LLM_MODEL_{agent_type}.
+        Per-agent overrides (optional, **prefix-style only**):
+        {AGENT}_LLM_PROVIDER, {AGENT}_LLM_MODEL (e.g. SPEC_HELPER_LLM_MODEL)
 
         API keys required per provider: OPENAI_API_KEY, ANTHROPIC_API_KEY,
         GOOGLE_API_KEY, GROQ_API_KEY.
@@ -79,27 +79,34 @@ def _init_legacy(agent_type: Optional[str]) -> Optional[LLMGateway]:
     - LLM_PROVIDER: Provider name (default: "openai")
     - LLM_MODEL: Model name (default varies by provider)
     
-    Per-agent overrides (optional, for future use):
-    - LLM_PROVIDER_{agent_type}: Override provider for specific agent
-    - LLM_MODEL_{agent_type}: Override model for specific agent
-    
+    Per-agent overrides (optional):
+    - {AGENT}_LLM_PROVIDER: Override provider for specific agent (e.g. PLANNER_LLM_PROVIDER)
+    - {AGENT}_LLM_MODEL: Override model for specific agent (e.g. PLANNER_LLM_MODEL)
+
     Example:
         LLM_PROVIDER=openai
         LLM_MODEL=gpt-4o
-        LLM_PROVIDER_planner=anthropic
-        LLM_MODEL_planner=claude-opus
-        
+        PLANNER_LLM_PROVIDER=anthropic
+        PLANNER_LLM_MODEL=claude-opus
+
         init_llm_gateway()  # Uses openai/gpt-4o
         init_llm_gateway("planner")  # Uses anthropic/claude-opus
     """
-    # Check for agent-specific overrides first
+    # Check for agent-specific overrides first (supports both legacy suffix-style and new prefix-style)
     provider = None
     model = None
-    
+
     if agent_type:
-        provider = os.getenv(f"LLM_PROVIDER_{agent_type}").lower() if os.getenv(f"LLM_PROVIDER_{agent_type}") else None
-        model = os.getenv(f"LLM_MODEL_{agent_type}")
-    
+        agent_upper = agent_type.upper()
+        agent_lower = agent_type.lower()
+
+        # Only support prefix-style agent-specific env vars:
+        # {AGENT}_LLM_PROVIDER / {AGENT}_LLM_MODEL
+        provider = os.getenv(f"{agent_upper}_LLM_PROVIDER") or os.getenv(f"{agent_lower}_LLM_PROVIDER")
+        model = os.getenv(f"{agent_upper}_LLM_MODEL") or os.getenv(f"{agent_lower}_LLM_MODEL")
+
+        provider = provider.lower() if provider else None
+
     # Fall back to defaults
     if not provider:
         provider = os.getenv("LLM_PROVIDER", "openai").lower()
