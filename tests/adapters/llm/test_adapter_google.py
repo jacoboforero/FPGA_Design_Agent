@@ -21,6 +21,13 @@ from adapters.llm.gateway import (
 )
 
 
+def _patch_genai_client(mocker):
+    client = MagicMock()
+    client.aio = MagicMock()
+    client_patch = mocker.patch("adapters.llm.adapter_google.genai.Client", return_value=client)
+    return client_patch, client
+
+
 # ============================================================================
 # GoogleGeminiGateway Initialization Tests
 # ============================================================================
@@ -30,8 +37,7 @@ class TestGoogleGeminiGatewayInit:
     
     def test_init_with_defaults(self, mocker):
         """Initialize with just API key."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -39,8 +45,7 @@ class TestGoogleGeminiGatewayInit:
     
     def test_init_with_custom_model(self, mocker):
         """Initialize with custom model."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(
             api_key="AIzaSyExample",
@@ -51,21 +56,19 @@ class TestGoogleGeminiGatewayInit:
     
     def test_init_configures_api_key(self, mocker):
         """Initialization configures API key."""
-        mock_configure = mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        client_patch, _ = _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
-        mock_configure.assert_called_once_with(api_key="AIzaSyExample")
+        client_patch.assert_called_once_with(api_key="AIzaSyExample")
     
-    def test_init_creates_model(self, mocker):
-        """Initialization creates GenerativeModel."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mock_model_class = mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+    def test_init_creates_client(self, mocker):
+        """Initialization creates GenAI client."""
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
-        mock_model_class.assert_called_once_with("gemini-2.0-flash")
+        assert gateway is not None
 
 
 # ============================================================================
@@ -77,8 +80,7 @@ class TestGoogleGeminiGatewayProperties:
     
     def test_model_name_property(self, mocker):
         """model_name property returns configured model."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(
             api_key="AIzaSyExample",
@@ -89,8 +91,7 @@ class TestGoogleGeminiGatewayProperties:
     
     def test_provider_property(self, mocker):
         """provider property returns 'google'."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -98,8 +99,7 @@ class TestGoogleGeminiGatewayProperties:
     
     def test_supports_files(self, mocker):
         """supports_files is True for Gemini models."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -115,8 +115,9 @@ class TestGoogleGeminiMessageConversion:
     
     def test_convert_simple_user_message(self, mocker):
         """Convert simple user message to Gemini format."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        mock_client = MagicMock()
+        mock_client.aio = MagicMock()
+        mocker.patch("adapters.llm.adapter_google.genai.Client", return_value=mock_client)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -130,8 +131,9 @@ class TestGoogleGeminiMessageConversion:
     
     def test_convert_with_system_instruction(self, mocker):
         """System message extracted as system_instruction."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        mock_client = MagicMock()
+        mock_client.aio = MagicMock()
+        mocker.patch("adapters.llm.adapter_google.genai.Client", return_value=mock_client)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -148,8 +150,9 @@ class TestGoogleGeminiMessageConversion:
     
     def test_convert_multi_turn(self, mocker):
         """Convert multi-turn conversation."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        mock_client = MagicMock()
+        mock_client.aio = MagicMock()
+        mocker.patch("adapters.llm.adapter_google.genai.Client", return_value=mock_client)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -170,8 +173,7 @@ class TestGoogleGeminiMessageConversion:
     
     def test_convert_empty_message_list(self, mocker):
         """Convert empty message list."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -190,8 +192,7 @@ class TestGoogleGeminiConfigValidation:
     
     def test_validate_temperature_in_range(self, mocker):
         """Valid temperature [0, 2] passes."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -202,8 +203,7 @@ class TestGoogleGeminiConfigValidation:
     
     def test_validate_top_p_in_range(self, mocker):
         """Valid top_p [0, 1] passes."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -213,8 +213,7 @@ class TestGoogleGeminiConfigValidation:
     
     def test_validate_top_k_supported(self, mocker):
         """top_k is supported by Gemini."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -232,8 +231,7 @@ class TestGoogleGeminiResponseConversion:
     
     def test_convert_successful_response(self, mocker):
         """Convert successful Gemini API response."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(
             api_key="AIzaSyExample",
@@ -258,8 +256,7 @@ class TestGoogleGeminiResponseConversion:
     
     def test_convert_response_empty_content(self, mocker):
         """Convert response with empty string content."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -290,8 +287,7 @@ class TestGoogleGeminiCostEstimation:
     
     def test_estimate_cost_gemini_2_pro(self, mocker):
         """Estimate cost for gemini-2.0-pro."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -312,8 +308,7 @@ class TestGoogleGeminiCostEstimation:
     
     def test_estimate_cost_gemini_flash(self, mocker):
         """Estimate cost for gemini-2.0-flash."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -334,8 +329,7 @@ class TestGoogleGeminiCostEstimation:
     
     def test_estimate_cost_gemini_1_pro(self, mocker):
         """Estimate cost for gemini-1.5-pro."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -364,20 +358,16 @@ class TestGoogleGeminiGenerate:
     @pytest.mark.asyncio
     async def test_generate_with_config(self, mocker):
         """Generate response with custom config."""
-        mock_model = AsyncMock()
         mock_response = MagicMock()
         mock_response.text = "Generated code"
         mock_response.candidates = [MagicMock(finish_reason="STOP")]
         mock_response.usage_metadata.prompt_token_count = 50
         mock_response.usage_metadata.candidates_token_count = 100
         mock_response.to_dict = MagicMock(return_value={})
-        mock_model.generate_content_async = AsyncMock(return_value=mock_response)
-        
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch(
-            "adapters.llm.adapter_google.genai.GenerativeModel",
-            return_value=mock_model
-        )
+        mock_client = MagicMock()
+        mock_client.aio = MagicMock()
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+        mocker.patch("adapters.llm.adapter_google.genai.Client", return_value=mock_client)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -392,16 +382,10 @@ class TestGoogleGeminiGenerate:
     @pytest.mark.asyncio
     async def test_generate_handles_errors(self, mocker):
         """Generate handles API errors gracefully."""
-        mock_model = AsyncMock()
-        mock_model.generate_content_async = AsyncMock(
-            side_effect=Exception("API error")
-        )
-        
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch(
-            "adapters.llm.adapter_google.genai.GenerativeModel",
-            return_value=mock_model
-        )
+        mock_client = MagicMock()
+        mock_client.aio = MagicMock()
+        mock_client.aio.models.generate_content = AsyncMock(side_effect=Exception("API error"))
+        mocker.patch("adapters.llm.adapter_google.genai.Client", return_value=mock_client)
         
         gateway = GoogleGeminiGateway(api_key="AIzaSyExample")
         
@@ -419,19 +403,15 @@ class TestGoogleGeminiErrorHandling:
     """Test Google Gemini error handling."""
     
     def test_missing_api_key_environment(self, mocker):
-        """Missing API key is handled by genai.configure."""
-        mock_configure = mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        """Client is created when API key is provided."""
+        client_patch, _ = _patch_genai_client(mocker)
         
-        # Should pass None to configure if not provided
         gateway = GoogleGeminiGateway(api_key="test-key")
-        
-        mock_configure.assert_called_once_with(api_key="test-key")
+        client_patch.assert_called_once_with(api_key="test-key")
     
     def test_invalid_model_raises_error_on_api_call(self, mocker):
         """Invalid model name raises error on API call."""
-        mocker.patch("adapters.llm.adapter_google.genai.configure")
-        mocker.patch("adapters.llm.adapter_google.genai.GenerativeModel")
+        _patch_genai_client(mocker)
         
         # Should initialize even with potentially invalid name
         gateway = GoogleGeminiGateway(

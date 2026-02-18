@@ -101,7 +101,7 @@ def message_multi_turn():
 def clean_env(monkeypatch):
     """Clean LLM-related environment variables before test."""
     llm_vars = [
-        "LLM_PROVIDER", "LLM_MODEL", "USE_LLM",
+        "DEFAULT_LLM_PROVIDER", "DEFAULT_LLM_MODEL", "USE_LLM",
         "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY",
         "COHERE_API_KEY", "GOOGLE_API_KEY",
         "PLANNER_LLM_PROVIDER", "IMPLEMENTATION_LLM_PROVIDER",
@@ -118,8 +118,8 @@ def clean_env(monkeypatch):
 @pytest.fixture
 def with_openai_env(clean_env, monkeypatch):
     """Set up minimal OpenAI environment."""
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
-    monkeypatch.setenv("LLM_MODEL", "gpt-4o")
+    monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("DEFAULT_LLM_MODEL", "gpt-4o")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-12345")
     return monkeypatch
 
@@ -127,8 +127,8 @@ def with_openai_env(clean_env, monkeypatch):
 @pytest.fixture
 def with_anthropic_env(clean_env, monkeypatch):
     """Set up minimal Anthropic environment."""
-    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-    monkeypatch.setenv("LLM_MODEL", "claude-3-opus-20240229")
+    monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("DEFAULT_LLM_MODEL", "claude-3-opus-20240229")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
     return monkeypatch
 
@@ -136,8 +136,8 @@ def with_anthropic_env(clean_env, monkeypatch):
 @pytest.fixture
 def with_groq_env(clean_env, monkeypatch):
     """Set up minimal Groq environment."""
-    monkeypatch.setenv("LLM_PROVIDER", "groq")
-    monkeypatch.setenv("LLM_MODEL", "llama-3.1-8b-instant")
+    monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "groq")
+    monkeypatch.setenv("DEFAULT_LLM_MODEL", "llama-3.1-8b-instant")
     monkeypatch.setenv("GROQ_API_KEY", "gsk-test-key")
     return monkeypatch
 
@@ -148,8 +148,8 @@ def with_groq_env(clean_env, monkeypatch):
 @pytest.fixture
 def with_cohere_env(clean_env, monkeypatch):
     """Set up minimal Cohere environment."""
-    monkeypatch.setenv("LLM_PROVIDER", "cohere")
-    monkeypatch.setenv("LLM_MODEL", "command-r-plus")
+    monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "cohere")
+    monkeypatch.setenv("DEFAULT_LLM_MODEL", "command-r-plus")
     monkeypatch.setenv("COHERE_API_KEY", "cohere-test-key")
     return monkeypatch
 
@@ -157,8 +157,8 @@ def with_cohere_env(clean_env, monkeypatch):
 @pytest.fixture
 def with_google_env(clean_env, monkeypatch):
     """Set up minimal Google environment."""
-    monkeypatch.setenv("LLM_PROVIDER", "google")
-    monkeypatch.setenv("LLM_MODEL", "gemini-1.5-pro")
+    monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "google")
+    monkeypatch.setenv("DEFAULT_LLM_MODEL", "gemini-1.5-pro")
     monkeypatch.setenv("GOOGLE_API_KEY", "google-test-key")
     return monkeypatch
 
@@ -166,9 +166,9 @@ def with_google_env(clean_env, monkeypatch):
 @pytest.fixture
 def with_per_agent_env(clean_env, monkeypatch):
     """Set up per-agent model overrides (prefix-style)."""
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
     monkeypatch.setenv("IMPLEMENTATION_LLM_PROVIDER", "groq")
-    monkeypatch.setenv("LLM_MODEL", "gpt-4o")
+    monkeypatch.setenv("DEFAULT_LLM_MODEL", "gpt-4o")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
     monkeypatch.setenv("GROQ_API_KEY", "gsk-test-key")
     return monkeypatch

@@ -26,8 +26,8 @@ def init_llm_gateway(agent_type: str | None = None) -> Optional[object]:
     """Initialize an LLM gateway if env vars are set; otherwise return None.
 
     This function delegates to the adapter-level factory which supports
-    per-agent environment-variable overrides (LLM_PROVIDER_{agent_type},
-    LLM_MODEL_{agent_type}). The `agent_type` parameter should be a
+    per-agent environment-variable overrides ({AGENT}_LLM_PROVIDER,
+    {AGENT}_LLM_MODEL). The `agent_type` parameter should be a
     short, lowercase identifier such as "planner", "implementation",
     "debug", "spec_helper", "reflection" or "testbench".
     """
@@ -40,10 +40,10 @@ def init_llm_gateway(agent_type: str | None = None) -> Optional[object]:
         if os.getenv("USE_LLM") != "1":
             return None
 
-        provider = os.getenv("LLM_PROVIDER", "openai").lower()
+        provider = os.getenv("DEFAULT_LLM_PROVIDER", "openai").lower()
         if provider == "groq" and GroqGateway:
             api_key = os.getenv("GROQ_API_KEY")
-            model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+            model = os.getenv("DEFAULT_LLM_MODEL", "llama-3.1-8b-instant")
             if not api_key:
                 return None
             try:
@@ -53,7 +53,7 @@ def init_llm_gateway(agent_type: str | None = None) -> Optional[object]:
 
         if OpenAIGateway:
             api_key = os.getenv("OPENAI_API_KEY")
-            model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+            model = os.getenv("DEFAULT_LLM_MODEL", "gpt-4.1-mini")
             if not api_key:
                 return None
             try:

@@ -29,7 +29,7 @@ class TestMissingConfiguration:
     def test_missing_openai_api_key_returns_none(self, clean_env, monkeypatch, mocker):
         """OpenAI requires OPENAI_API_KEY."""
         mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         # No OPENAI_API_KEY
         
         gateway = init_llm_gateway()
@@ -38,7 +38,7 @@ class TestMissingConfiguration:
     def test_missing_anthropic_api_key_returns_none(self, clean_env, monkeypatch, mocker):
         """Anthropic requires ANTHROPIC_API_KEY."""
         mocker.patch("adapters.llm.adapter_anthropic.anthropic.AsyncAnthropic")
-        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "anthropic")
         # No ANTHROPIC_API_KEY
         
         gateway = init_llm_gateway()
@@ -47,17 +47,17 @@ class TestMissingConfiguration:
     def test_missing_groq_api_key_returns_none(self, clean_env, monkeypatch, mocker):
         """Groq requires GROQ_API_KEY."""
         mocker.patch("adapters.llm.adapter_groq.AsyncOpenAI")
-        monkeypatch.setenv("LLM_PROVIDER", "groq")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "groq")
         # No GROQ_API_KEY
         
         gateway = init_llm_gateway()
         assert gateway is None
 
     def test_missing_provider_env_var_returns_none(self, clean_env, monkeypatch, mocker):
-        """LLM_PROVIDER is required in legacy mode."""
+        """DEFAULT_LLM_PROVIDER is required in legacy mode."""
         mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        # No LLM_PROVIDER
+        # No DEFAULT_LLM_PROVIDER
         
         gateway = init_llm_gateway()
         assert gateway is None
@@ -69,7 +69,7 @@ class TestInvalidConfiguration:
     def test_invalid_provider_returns_none(self, clean_env, monkeypatch, mocker):
         """Unknown provider name returns None."""
         mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
-        monkeypatch.setenv("LLM_PROVIDER", "nonexistent-provider")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "nonexistent-provider")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         
         gateway = init_llm_gateway()
@@ -78,7 +78,7 @@ class TestInvalidConfiguration:
     def test_empty_provider_returns_none(self, clean_env, monkeypatch, mocker):
         """Empty provider name returns None."""
         mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
-        monkeypatch.setenv("LLM_PROVIDER", "")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         
         gateway = init_llm_gateway()
@@ -87,7 +87,7 @@ class TestInvalidConfiguration:
     def test_case_insensitive_provider_handling(self, clean_env, monkeypatch, mocker):
         """Providers handled case-insensitively."""
         mock_openai = mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
-        monkeypatch.setenv("LLM_PROVIDER", "OpenAI")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "OpenAI")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         
         gateway = init_llm_gateway()
@@ -106,7 +106,7 @@ class TestAdapterInitializationErrors:
             "adapters.llm.adapter_openai.AsyncOpenAI",
             side_effect=Exception("Failed to initialize")
         )
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         
         gateway = init_llm_gateway()
@@ -118,7 +118,7 @@ class TestAdapterInitializationErrors:
             "adapters.llm.adapter_anthropic.anthropic.AsyncAnthropic",
             side_effect=ValueError("Invalid API key")
         )
-        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "anthropic")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "invalid-key")
         
         gateway = init_llm_gateway()
@@ -137,7 +137,7 @@ class TestEnvironmentVariableParsing:
         """USE_LLM=0 disables LLM."""
         mock_openai = mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
         monkeypatch.setenv("USE_LLM", "0")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         
         gateway = init_llm_gateway()
@@ -148,7 +148,7 @@ class TestEnvironmentVariableParsing:
         """USE_LLM=1 allows initialization when config present."""
         mock_openai = mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         
         gateway = init_llm_gateway()
@@ -162,7 +162,7 @@ class TestEnvironmentVariableParsing:
         """USE_LLM=0 returns None regardless of other config."""
         mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
         monkeypatch.setenv("USE_LLM", "0")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         
         gateway = init_llm_gateway()
@@ -221,7 +221,7 @@ class TestErrorMessages:
     def test_invalid_provider_error_is_handled(self, clean_env, monkeypatch, mocker):
         """Invalid provider handled gracefully without crash."""
         mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
-        monkeypatch.setenv("LLM_PROVIDER", "nonexistent")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "nonexistent")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         
         # Should not raise, should return None
@@ -231,7 +231,7 @@ class TestErrorMessages:
     def test_missing_api_key_doesnt_crash(self, clean_env, monkeypatch, mocker):
         """Missing API key handled gracefully without crash."""
         mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         # No OPENAI_API_KEY
         
         # Should not raise, should return None
@@ -254,7 +254,7 @@ class TestPerAgentOverrideValidation:
         mock_openai = mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
         mocker.patch("adapters.llm.adapter_anthropic.anthropic.AsyncAnthropic")
         
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         
         # Per-agent override without API key (prefix-style)
@@ -278,7 +278,7 @@ class TestAgentTypeHandling:
     def test_agent_type_none_uses_defaults(self, clean_env, monkeypatch, mocker):
         """agent_type=None uses default configuration."""
         mock_openai = mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         
         # No agent_type specified
@@ -293,7 +293,7 @@ class TestAgentTypeHandling:
         mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
         mocker.patch("adapters.llm.adapter_anthropic.anthropic.AsyncAnthropic")
         
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         

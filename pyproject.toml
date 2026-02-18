@@ -19,6 +19,7 @@ agentops = { version = "^0.3.26", optional = true, python = "<3.14" }
 openai = { version = "^1.0.0", optional = true }
 anthropic = "^0.40.0"
 google-generativeai = "^0.8.0"
+google-genai = "^1.0.0"
 cohere = "^5.11.0"
 
 [tool.poetry.extras]

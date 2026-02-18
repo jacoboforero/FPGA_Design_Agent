@@ -89,7 +89,21 @@ class AnthropicGateway(LLMGateway):
             api_params["top_k"] = config.top_k
         if config.stop_sequences:
             api_params["stop_sequences"] = config.stop_sequences
-        
+
+        # Pass through typed provider features where applicable (no-op if provider ignores them)
+        if getattr(config, "functions", None) is not None:
+            api_params["functions"] = config.functions
+        if getattr(config, "function_call", None) is not None:
+            api_params["function_call"] = config.function_call
+        if getattr(config, "n", None) is not None:
+            api_params["n"] = config.n
+        if getattr(config, "logprobs", None) is not None:
+            api_params["logprobs"] = config.logprobs
+        if getattr(config, "user", None) is not None:
+            api_params["user"] = config.user
+        if getattr(config, "stream", None) is not None:
+            api_params["stream"] = config.stream
+
         # Add provider-specific parameters
         api_params.update(config.provider_specific)
         
@@ -267,7 +281,15 @@ class AnthropicGateway(LLMGateway):
             provider="anthropic",
         )
         cost = self.estimate_cost(temp_response)
-        
+
+        # Try to surface structured extras from raw response
+        raw = anthropic_response.model_dump() if hasattr(anthropic_response, 'model_dump') else {}
+        function_call = None
+        choices = raw.get("choices") if isinstance(raw, dict) else None
+        # Anthropic may include tool invocation metadata under different keys
+        if isinstance(raw, dict):
+            function_call = raw.get("tool_call") or raw.get("function_call")
+
         return ModelResponse(
             content=content,
             input_tokens=input_tokens,
@@ -277,7 +299,9 @@ class AnthropicGateway(LLMGateway):
             provider="anthropic",
             finish_reason=anthropic_response.stop_reason,
             estimated_cost_usd=cost,
-            raw_response=anthropic_response.model_dump() if hasattr(anthropic_response, 'model_dump') else {},
+            raw_response=raw,
+            choices=choices,
+            function_call=function_call,
         )
     
     async def close(self):

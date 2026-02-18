@@ -4,8 +4,7 @@ Google Gemini implementation of the LLM Gateway interface.
 Supports Gemini 1.5 and Gemini 2.0 model families.
 """
 
-from typing import Optional, List
-import google.generativeai as genai
+from typing import Optional, List, Tuple
 from adapters.llm.gateway import (
     LLMGateway,
     Message,
@@ -13,6 +12,23 @@ from adapters.llm.gateway import (
     ModelResponse,
     GenerationConfig,
 )
+
+
+def get_genai():
+    """Import the supported Google GenAI SDK.
+
+    Raises a clear error if the supported package is missing.
+    """
+    try:
+        from google import genai as genai_mod  # type: ignore
+        return genai_mod
+    except Exception as exc:
+        raise RuntimeError(
+            "Google GenAI SDK not available. Install `google-genai` to use the Google adapter."
+        ) from exc
+
+
+genai = get_genai()
 
 
 class GoogleGeminiGateway(LLMGateway):
@@ -51,9 +67,9 @@ class GoogleGeminiGateway(LLMGateway):
             api_key: Google AI Studio API key
             model: Model identifier (e.g., "gemini-2.0-flash")
         """
-        genai.configure(api_key=api_key)
+        self._client = genai.Client(api_key=api_key)
+        self._client_aio = self._client.aio
         self._model_name = model
-        self._model = genai.GenerativeModel(model)
     
     async def generate(
         self,
@@ -79,34 +95,34 @@ class GoogleGeminiGateway(LLMGateway):
             generation_config["max_output_tokens"] = config.max_tokens
         if config.stop_sequences:
             generation_config["stop_sequences"] = config.stop_sequences
-        
+
+        # Pass through typed generation fields where appropriate
+        if getattr(config, "functions", None) is not None:
+            generation_config["functions"] = config.functions
+        if getattr(config, "function_call", None) is not None:
+            generation_config["function_call"] = config.function_call
+        if getattr(config, "n", None) is not None:
+            generation_config["n"] = config.n
+        if getattr(config, "logprobs", None) is not None:
+            generation_config["logprobs"] = config.logprobs
+        if getattr(config, "user", None) is not None:
+            generation_config["user"] = config.user
+        if getattr(config, "stream", None) is not None:
+            generation_config["stream"] = config.stream
+
         # Add provider-specific parameters
         generation_config.update(config.provider_specific)
         
         try:
-            # Create model with system instruction if present
             if system_instruction:
-                model = genai.GenerativeModel(
-                    self._model_name,
-                    system_instruction=system_instruction,
-                )
-            else:
-                model = self._model
-            
-            # Start chat or generate
-            if len(gemini_messages) > 1:
-                # Multi-turn conversation
-                chat = model.start_chat(history=gemini_messages[:-1])
-                response = await chat.send_message_async(
-                    gemini_messages[-1]["parts"],
-                    generation_config=generation_config,
-                )
-            else:
-                # Single message
-                response = await model.generate_content_async(
-                    gemini_messages[0]["parts"],
-                    generation_config=generation_config,
-                )
+                generation_config = dict(generation_config)
+                generation_config["system_instruction"] = system_instruction
+
+            response = await self._client_aio.models.generate_content(
+                model=self._model_name,
+                contents=gemini_messages,
+                config=generation_config if generation_config else None,
+            )
             
             # Convert to our standard format
             model_response = self._convert_response(response)
@@ -184,7 +200,7 @@ class GoogleGeminiGateway(LLMGateway):
         
         return input_cost + output_cost
     
-    def _convert_messages(self, messages: List[Message]) -> tuple[List[dict], Optional[str]]:
+    def _convert_messages(self, messages: List[Message]) -> Tuple[List[dict], Optional[str]]:
         """
         Convert messages to Gemini format.
         
@@ -271,6 +287,13 @@ class GoogleGeminiGateway(LLMGateway):
             if hasattr(candidate, 'finish_reason'):
                 finish_reason = str(candidate.finish_reason)
         
+        raw = gemini_response.to_dict() if hasattr(gemini_response, 'to_dict') else {}
+        function_call = None
+        choices = raw.get("candidates") if isinstance(raw, dict) else None
+        if isinstance(raw, dict):
+            # Gemini may expose tool invocation metadata under 'tool_invocation' / 'function_call'
+            function_call = raw.get("tool_invocation") or raw.get("function_call")
+
         return ModelResponse(
             content=content,
             input_tokens=input_tokens,
@@ -280,5 +303,7 @@ class GoogleGeminiGateway(LLMGateway):
             provider="google",
             finish_reason=finish_reason,
             estimated_cost_usd=cost,
-            raw_response=gemini_response.to_dict() if hasattr(gemini_response, 'to_dict') else {},
+            raw_response=raw,
+            choices=choices,
+            function_call=function_call,
         )

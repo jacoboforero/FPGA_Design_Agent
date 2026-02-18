@@ -90,8 +90,8 @@ class AgentOpsTracker:
             return
 
         tags = default_tags or []
-        llm_provider = os.getenv("LLM_PROVIDER")
-        llm_model = os.getenv("OPENAI_MODEL") or os.getenv("GROQ_MODEL")
+        llm_provider = os.getenv("DEFAULT_LLM_PROVIDER")
+        llm_model = os.getenv("DEFAULT_LLM_MODEL")
         if llm_provider:
             tags.append(f"provider:{llm_provider}")
         if llm_model:

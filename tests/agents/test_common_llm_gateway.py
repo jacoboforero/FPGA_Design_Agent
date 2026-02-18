@@ -7,7 +7,7 @@ def test_init_llm_gateway_delegates_and_respects_agent_override(monkeypatch):
     """agents.common.llm_gateway.init_llm_gateway should delegate to adapter factory
     and honor per-agent environment overrides (prefix-style only)."""
     monkeypatch.setenv("USE_LLM", "1")
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
 
     # Default (no agent_type) -> openai
@@ -27,7 +27,7 @@ def test_init_llm_gateway_delegates_and_respects_agent_override(monkeypatch):
 def test_worker_initializes_with_agent_specific_gateway(monkeypatch):
     """Agent worker constructors should receive the agent-specific gateway."""
     monkeypatch.setenv("USE_LLM", "1")
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
 
     # Spec helper override -> groq (prefix-style)

@@ -472,7 +472,149 @@ class TestOpenAICostEstimation:
         # gpt-4o-mini: input=$0.15/M, output=$0.60/M
         # Expected: 0.15 + 0.60 = $0.75
         assert cost == pytest.approx(0.75, rel=0.01)
-    
+
+    def test_estimate_cost_gpt5_1(self, mocker):
+        """Estimate cost for gpt-5.1."""
+        mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
+
+        gateway = OpenAIGateway(api_key="sk-test-key")
+
+        response = ModelResponse(
+            content="test",
+            input_tokens=1_000_000,  # 1M tokens
+            output_tokens=1_000_000,
+            total_tokens=2_000_000,
+            model_name="gpt-5.1",
+            provider="openai",
+        )
+
+        cost = gateway.estimate_cost(response)
+
+        # gpt-5.1: input=$1.25/M, output=$10/M
+        # Expected: (1 * 1.25) + (1 * 10) = $11.25
+        assert cost == pytest.approx(11.25, rel=0.01)
+
+    def test_estimate_cost_gpt5_2(self, mocker):
+        """Estimate cost for gpt-5.2."""
+        mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
+
+        gateway = OpenAIGateway(api_key="sk-test-key")
+
+        response = ModelResponse(
+            content="test",
+            input_tokens=1_000_000,  # 1M tokens
+            output_tokens=1_000_000,
+            total_tokens=2_000_000,
+            model_name="gpt-5.2",
+            provider="openai",
+        )
+
+        cost = gateway.estimate_cost(response)
+
+        # gpt-5.2: input=$1.50/M, output=$12/M
+        # Expected: (1 * 1.50) + (1 * 12) = $13.50
+        assert cost == pytest.approx(13.50, rel=0.01)
+
+    def test_estimate_cost_gpt5_3_codex(self, mocker):
+        """Estimate cost for `gpt-5.3-codex`."""
+        mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
+
+        gateway = OpenAIGateway(api_key="sk-test-key")
+
+        response = ModelResponse(
+            content="test",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            total_tokens=2_000_000,
+            model_name="gpt-5.3-codex",
+            provider="openai",
+        )
+
+        cost = gateway.estimate_cost(response)
+
+        # gpt-5.3-codex: input=$1.75/M, output=$14.00/M -> 1.75 + 14.00 = $15.75
+        assert cost == pytest.approx(15.75, rel=0.01)
+
+    def test_estimate_cost_gpt5_3_codex_spark(self, mocker):
+        """Estimate cost for `gpt-5.3-codex-spark`."""
+        mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
+
+        gateway = OpenAIGateway(api_key="sk-test-key")
+
+        response = ModelResponse(
+            content="test",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            total_tokens=2_000_000,
+            model_name="gpt-5.3-codex-spark",
+            provider="openai",
+        )
+
+        cost = gateway.estimate_cost(response)
+
+        # gpt-5.3-codex-spark: input=$0.75/M, output=$5.00/M -> 0.75 + 5.00 = $5.75
+        assert cost == pytest.approx(5.75, rel=0.01)
+
+    def test_estimate_cost_gpt5_2_codex(self, mocker):
+        """Estimate cost for `gpt-5.2-codex`."""
+        mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
+
+        gateway = OpenAIGateway(api_key="sk-test-key")
+
+        response = ModelResponse(
+            content="test",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            total_tokens=2_000_000,
+            model_name="gpt-5.2-codex",
+            provider="openai",
+        )
+
+        cost = gateway.estimate_cost(response)
+
+        # gpt-5.2-codex: input=$1.50/M, output=$12/M -> 1.5 + 12 = $13.50
+        assert cost == pytest.approx(13.50, rel=0.01)
+
+    def test_estimate_cost_gpt5_codex_mini(self, mocker):
+        """Estimate cost for `gpt-5-codex-mini`."""
+        mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
+
+        gateway = OpenAIGateway(api_key="sk-test-key")
+
+        response = ModelResponse(
+            content="test",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            total_tokens=2_000_000,
+            model_name="gpt-5-codex-mini",
+            provider="openai",
+        )
+
+        cost = gateway.estimate_cost(response)
+
+        # gpt-5-codex-mini: input=$0.25/M, output=$2.00/M -> 0.25 + 2.00 = $2.25
+        assert cost == pytest.approx(2.25, rel=0.01)
+
+    def test_estimate_cost_gpt5_1_codex_max(self, mocker):
+        """Estimate cost for `gpt-5.1-codex-max`."""
+        mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
+
+        gateway = OpenAIGateway(api_key="sk-test-key")
+
+        response = ModelResponse(
+            content="test",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            total_tokens=2_000_000,
+            model_name="gpt-5.1-codex-max",
+            provider="openai",
+        )
+
+        cost = gateway.estimate_cost(response)
+
+        # gpt-5.1-codex-max: input=$2.00/M, output=$16.00/M -> 2.00 + 16.00 = $18.00
+        assert cost == pytest.approx(18.00, rel=0.01)
+
     def test_estimate_cost_gpt4_1(self, mocker):
         """Estimate cost for gpt-4.1."""
         mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI")
@@ -639,6 +781,46 @@ class TestOpenAIGenerate:
         call_kwargs = mock_client.chat.completions.create.call_args[1]
         assert call_kwargs["logprobs"] == 10
         assert call_kwargs["top_logprobs"] == 3
+
+    @pytest.mark.asyncio
+    async def test_generate_with_functions_and_function_call(self, mocker):
+        """Typed fields (`functions`, `function_call`) are passed through and parsed."""
+        mock_client = AsyncMock()
+        mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI", return_value=mock_client)
+
+        # Build a mock response containing a function_call
+        msg = MagicMock()
+        msg.content = ""
+        msg.function_call = {"name": "do_thing", "arguments": "{\"x\":1}"}
+        choice = MagicMock()
+        choice.message = msg
+        choice.finish_reason = "function_call"
+
+        mock_response = MagicMock()
+        mock_response.choices = [choice]
+        mock_response.model = "gpt-4o"
+        mock_response.usage.prompt_tokens = 5
+        mock_response.usage.completion_tokens = 0
+        mock_response.usage.total_tokens = 5
+        mock_response.model_dump = MagicMock(return_value={"choices": [{"message": {"function_call": {"name": "do_thing", "arguments": "{\"x\":1}"}}}]})
+
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        gateway = OpenAIGateway(api_key="sk-test-key")
+
+        cfg = GenerationConfig(functions=[{"name": "do_thing", "parameters": {"type": "object"}}], function_call="auto")
+        messages = [Message(role=MessageRole.USER, content="call function")]
+
+        resp = await gateway.generate(messages, cfg)
+
+        # Verify parameters were passed to the provider
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["functions"] == cfg.functions
+        assert call_kwargs["function_call"] == "auto"
+
+        # Response should expose function_call and choices
+        assert resp.function_call == {"name": "do_thing", "arguments": "{\"x\":1}"}
+        assert resp.choices is not None
     
     @pytest.mark.asyncio
     async def test_generate_handles_rate_limit(self, mocker):
@@ -721,7 +903,60 @@ class TestOpenAIGenerate:
         
         with pytest.raises(RuntimeError, match="API error"):
             await gateway.generate(messages)
+    @pytest.mark.asyncio
+    async def test_generate_with_codex_model_uses_completions_api(self, mocker):
+        """Models containing `codex` are routed to the Completions (Codex) API."""
+        mock_client = AsyncMock()
+        mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI", return_value=mock_client)
 
+        # Mock completions-style response
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].text = "def add(a, b):\n    return a + b"
+        mock_response.choices[0].finish_reason = "stop"
+        mock_response.model = "gpt-5.3-codex"
+        mock_response.usage.prompt_tokens = 5
+        mock_response.usage.completion_tokens = 10
+        mock_response.usage.total_tokens = 15
+
+        mock_client.completions.create = AsyncMock(return_value=mock_response)
+
+        gateway = OpenAIGateway(api_key="sk-test-key", model="gpt-5.3-codex")
+
+        messages = [Message(role=MessageRole.USER, content="Write a Python add function")]
+        resp = await gateway.generate(messages)
+
+        # Ensure completions endpoint was used and response parsed
+        mock_client.completions.create.assert_called_once()
+        assert "def add" in resp.content
+        assert resp.model_name == "gpt-5.3-codex"
+
+    @pytest.mark.asyncio
+    async def test_generate_with_use_completions_api_flag(self, mocker):
+        """Explicit `use_completions_api` forces Completions API even for non-code model."""
+        mock_client = AsyncMock()
+        mocker.patch("adapters.llm.adapter_openai.AsyncOpenAI", return_value=mock_client)
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].text = "// C-style stub"
+        mock_response.choices[0].finish_reason = "stop"
+        mock_response.model = "gpt-5-nano"
+        mock_response.usage.prompt_tokens = 3
+        mock_response.usage.completion_tokens = 7
+        mock_response.usage.total_tokens = 10
+
+        mock_client.completions.create = AsyncMock(return_value=mock_response)
+
+        gateway = OpenAIGateway(api_key="sk-test-key", model="gpt-5-nano")
+
+        cfg = GenerationConfig(use_completions_api=True)
+        messages = [Message(role=MessageRole.USER, content="Generate C stub")]
+        resp = await gateway.generate(messages, cfg)
+
+        mock_client.completions.create.assert_called_once()
+        assert "C-style" in resp.content
+        assert resp.model_name == "gpt-5-nano"
 
 # ============================================================================
 # Close Method Tests

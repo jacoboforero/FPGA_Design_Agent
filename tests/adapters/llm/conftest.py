@@ -289,8 +289,8 @@ def disabled_llm_env(monkeypatch):
 def legacy_openai_env(monkeypatch):
     """Environment for legacy OpenAI mode."""
     monkeypatch.setenv("USE_LLM", "1")
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
-    monkeypatch.setenv("LLM_MODEL", "gpt-4o")
+    monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("DEFAULT_LLM_MODEL", "gpt-4o")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-12345")
 
 

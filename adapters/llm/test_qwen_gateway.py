@@ -13,13 +13,13 @@ import pytest
 
 pytest.skip("Manual integration script; skip during automated test runs.", allow_module_level=True)
 
-from gateway import Message, MessageRole, GenerationConfig
-from adapter_qwen34b import Qwen34BLocalGateway
+from adapters.llm.gateway import Message, MessageRole, GenerationConfig
+from adapters.llm.adapter_qwen import QwenLocalGateway
 
 
 async def main():
     print("Initializing Qwen3:4b gateway...")
-    gateway = Qwen34BLocalGateway(ollama_base_url="http://localhost:11434")
+    gateway = QwenLocalGateway(ollama_base_url="http://localhost:11434")
     
     print(f"Model: {gateway.model_name}")
     print(f"Provider: {gateway.provider}")

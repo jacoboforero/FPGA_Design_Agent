@@ -36,14 +36,14 @@ class TestInitLLMGateway:
         """Initialize legacy mode (agent_type ignored in legacy)."""
         gateway = init_llm_gateway(agent_type="planner")
         
-        # Legacy mode uses LLM_PROVIDER, not agent_type
+        # Legacy mode uses DEFAULT_LLM_PROVIDER, not agent_type
         assert gateway is not None
         assert gateway.provider == "openai"
     
     def test_init_llm_missing_api_key_returns_none(self, monkeypatch):
         """Returns None when required API key missing."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         
         gateway = init_llm_gateway()
@@ -53,7 +53,7 @@ class TestInitLLMGateway:
     def test_init_llm_invalid_provider_returns_none(self, monkeypatch):
         """Returns None for invalid provider."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "invalid_provider")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "invalid_provider")
         
         gateway = init_llm_gateway()
         
@@ -65,7 +65,7 @@ class TestInitLLMGateway:
 # ============================================================================
 
 class TestLegacyInitialization:
-    """Test legacy LLM_PROVIDER mode initialization."""
+    """Test legacy DEFAULT_LLM_PROVIDER mode initialization."""
     
     def test_legacy_openai_initialization(self, legacy_openai_env):
         """Legacy mode with OpenAI provider."""
@@ -78,8 +78,8 @@ class TestLegacyInitialization:
     def test_legacy_openai_with_model_override(self, monkeypatch):
         """Legacy OpenAI with model override."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
-        monkeypatch.setenv("LLM_MODEL", "gpt-4.1-nano")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_MODEL", "gpt-4.1-nano")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         
         gateway = init_llm_gateway()
@@ -90,7 +90,7 @@ class TestLegacyInitialization:
     def test_legacy_anthropic_initialization(self, monkeypatch):
         """Legacy mode with Anthropic provider."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "anthropic")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
         
         gateway = init_llm_gateway()
@@ -101,7 +101,7 @@ class TestLegacyInitialization:
     def test_legacy_google_initialization(self, monkeypatch):
         """Legacy mode with Google provider."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "google")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "google")
         monkeypatch.setenv("GOOGLE_API_KEY", "test-google-key")
         
         gateway = init_llm_gateway()
@@ -112,7 +112,7 @@ class TestLegacyInitialization:
     def test_legacy_groq_initialization(self, monkeypatch):
         """Legacy mode with Groq provider."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "groq")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "groq")
         monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
         
         gateway = init_llm_gateway()
@@ -123,37 +123,35 @@ class TestLegacyInitialization:
     def test_legacy_qwen_local_initialization(self, monkeypatch):
         """Legacy mode with local Qwen/Ollama."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "qwen3-local")
-        
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "qwen-local")
+
         gateway = init_llm_gateway()
-        
+
         assert gateway is not None
-        assert gateway.provider == "qwen3-local"
+        assert gateway.provider == "qwen-local"
     
     def test_legacy_ollama_alias(self, monkeypatch):
-        """Legacy mode accepts 'ollama' as provider alias."""
+        """Legacy mode rejects unknown providers (no aliases)."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "ollama")
-        
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "ollama")
+
         gateway = init_llm_gateway()
-        
-        assert gateway is not None
-        assert gateway.provider == "qwen3-local"
+
+        assert gateway is None
     
     def test_legacy_local_alias(self, monkeypatch):
-        """Legacy mode accepts 'local' as provider alias."""
+        """Legacy mode rejects unknown providers (no aliases)."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "local")
-        
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "local")
+
         gateway = init_llm_gateway()
-        
-        assert gateway is not None
-        assert gateway.provider == "qwen3-local"
+
+        assert gateway is None
     
     def test_legacy_case_insensitive_provider(self, monkeypatch):
         """Legacy mode is case-insensitive for provider."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "OPENAI")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "OPENAI")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         
         gateway = init_llm_gateway()
@@ -188,7 +186,7 @@ class TestEnvironmentVariableCombinations:
     def test_special_characters_in_api_key(self, monkeypatch):
         """Handle API keys with special characters."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-with-!@#$%^&*()_+-=[]{}|;:',.<>?/~`")
         
         gateway = init_llm_gateway()
@@ -245,7 +243,7 @@ class TestPerAgentModelOverrides:
     def test_agent_specific_provider_override(self, monkeypatch):
         """Agent-specific provider overrides default (prefix-style)."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("PLANNER_LLM_PROVIDER", "anthropic")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
@@ -263,7 +261,8 @@ class TestPerAgentModelOverrides:
     def test_agent_prefix_provider_override(self, monkeypatch):
         """Agent-prefix env var (`SPEC_HELPER_LLM_PROVIDER`) overrides default (preferred style)."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         monkeypatch.setenv("SPEC_HELPER_LLM_PROVIDER", "groq")
         monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
 
@@ -276,8 +275,8 @@ class TestPerAgentModelOverrides:
     def test_agent_specific_model_override(self, monkeypatch):
         """Agent-specific model overrides default (prefix-style)."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
-        monkeypatch.setenv("LLM_MODEL", "gpt-4o")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_MODEL", "gpt-4o")
         monkeypatch.setenv("PLANNER_LLM_MODEL", "gpt-4.1")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
 
@@ -294,7 +293,7 @@ class TestPerAgentModelOverrides:
     def test_agent_prefix_model_override(self, monkeypatch):
         """Agent-prefix model env var (`SPEC_HELPER_LLM_MODEL`) is accepted."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         monkeypatch.setenv("SPEC_HELPER_LLM_MODEL", "gpt-5-nano")
 
@@ -305,7 +304,7 @@ class TestPerAgentModelOverrides:
     def test_agent_prefix_and_legacy_precedence(self, monkeypatch):
         """Prefix-style env var takes precedence over legacy suffix-style."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         monkeypatch.setenv("SPEC_HELPER_LLM_PROVIDER", "groq")
         monkeypatch.setenv("LLM_PROVIDER_spec_helper", "anthropic")
@@ -315,11 +314,23 @@ class TestPerAgentModelOverrides:
         gw = init_llm_gateway("spec_helper")
         assert gw.provider == "groq"
 
+    def test_agent_prefix_case_insensitive_lookup(self, monkeypatch):
+        """Agent-prefix env var lookup should be resilient to case differences."""
+        monkeypatch.setenv("USE_LLM", "1")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
+        # set a lowercase env var name (some shells/tools may do this)
+        monkeypatch.setenv("spec_helper_llm_provider", "groq")
+        monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+
+        gw = init_llm_gateway("spec_helper")
+        assert gw is not None
+        assert gw.provider == "groq"
+
     def test_agent_specific_both_provider_and_model(self, monkeypatch):
         """Agent can override both provider and model (prefix-style)."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
-        monkeypatch.setenv("LLM_MODEL", "gpt-4o")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_MODEL", "gpt-4o")
         monkeypatch.setenv("DEBUG_LLM_PROVIDER", "anthropic")
         monkeypatch.setenv("DEBUG_LLM_MODEL", "claude-opus-4-5-20251101")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
@@ -337,7 +348,7 @@ class TestPerAgentModelOverrides:
     def test_agent_specific_missing_api_key(self, monkeypatch):
         """Returns None if agent-specific provider's API key is missing."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("IMPLEMENTATION_LLM_PROVIDER", "anthropic")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         # Missing ANTHROPIC_API_KEY
@@ -350,7 +361,7 @@ class TestPerAgentModelOverrides:
     def test_multiple_agents_different_providers(self, monkeypatch):
         """Different agents can use different providers simultaneously."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("PLANNER_LLM_PROVIDER", "anthropic")
         monkeypatch.setenv("IMPLEMENTATION_LLM_PROVIDER", "google")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
@@ -365,8 +376,11 @@ class TestPerAgentModelOverrides:
 
         """Legacy suffix-style ignored; prefix-style (uppercase) accepted."""
         # Note: Environment variable names are case-sensitive on Unix systems
+        # Ensure any prior prefix-style override is removed for this sub-check
+        monkeypatch.delenv("PLANNER_LLM_PROVIDER", raising=False)
+
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("LLM_PROVIDER_PLANNER", "anthropic")  # LEGACY SUFFIX - should be ignored
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
@@ -383,7 +397,7 @@ class TestPerAgentModelOverrides:
     def test_partial_agent_override(self, monkeypatch):
         """Can override provider but not model (uses default for model)."""
         monkeypatch.setenv("USE_LLM", "1")
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("DEFAULT_LLM_PROVIDER", "openai")
         monkeypatch.setenv("SPEC_HELPER_LLM_PROVIDER", "groq")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
         monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")

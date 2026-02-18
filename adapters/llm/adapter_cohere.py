@@ -82,7 +82,21 @@ class CohereGateway(LLMGateway):
             api_params["max_tokens"] = config.max_tokens
         if config.stop_sequences:
             api_params["stop_sequences"] = config.stop_sequences
-        
+
+        # Pass through typed generation fields (may be ignored by Cohere)
+        if getattr(config, "functions", None) is not None:
+            api_params["functions"] = config.functions
+        if getattr(config, "function_call", None) is not None:
+            api_params["function_call"] = config.function_call
+        if getattr(config, "n", None) is not None:
+            api_params["n"] = config.n
+        if getattr(config, "logprobs", None) is not None:
+            api_params["logprobs"] = config.logprobs
+        if getattr(config, "user", None) is not None:
+            api_params["user"] = config.user
+        if getattr(config, "stream", None) is not None:
+            api_params["stream"] = config.stream
+
         # Add provider-specific parameters
         api_params.update(config.provider_specific)
         
@@ -249,7 +263,13 @@ class CohereGateway(LLMGateway):
         
         # Cohere's finish reason
         finish_reason = getattr(cohere_response, 'finish_reason', 'COMPLETE')
-        
+
+        raw = cohere_response.__dict__ if hasattr(cohere_response, '__dict__') else {}
+        function_call = None
+        choices = raw.get("choices") if isinstance(raw, dict) else None
+        if isinstance(raw, dict):
+            function_call = raw.get("function_call") or raw.get("tool_call")
+
         return ModelResponse(
             content=content,
             input_tokens=input_tokens,
@@ -259,7 +279,9 @@ class CohereGateway(LLMGateway):
             provider="cohere",
             finish_reason=finish_reason,
             estimated_cost_usd=cost,
-            raw_response=cohere_response.__dict__ if hasattr(cohere_response, '__dict__') else {},
+            raw_response=raw,
+            choices=choices,
+            function_call=function_call,
         )
     
     async def close(self):

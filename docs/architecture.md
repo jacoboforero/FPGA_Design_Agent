@@ -34,6 +34,6 @@ See [queues-and-workers.md](./queues-and-workers.md) for more on DLQ expectation
 
 ## Config highlights
 - Broker URL: `RABBITMQ_URL`
-- LLM: `USE_LLM`, `LLM_PROVIDER`, model/env keys
+- LLM: `USE_LLM`, `DEFAULT_LLM_PROVIDER`, `DEFAULT_LLM_MODEL`
 - Tool overrides: `VERILATOR_PATH`, `IVERILOG_PATH`, `VVP_PATH`
 - Timeouts are set in the runtimes (see code) and can be tuned per worker if needed.

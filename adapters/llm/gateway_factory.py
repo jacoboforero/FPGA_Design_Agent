@@ -34,9 +34,9 @@ def init_llm_gateway(agent_type: Optional[str] = None) -> Optional[LLMGateway]:
     Environment Variables:
         USE_LLM: Set to "1" to enable LLM usage (default: "0").
 
-        LLM_PROVIDER: Provider to use (openai|anthropic|google|groq|qwen3-local)
+        DEFAULT_LLM_PROVIDER: Provider to use (openai|anthropic|google|groq|qwen-local)
                      (default: "openai").
-        LLM_MODEL: Model name to use (default varies by provider).
+        DEFAULT_LLM_MODEL: Model name to use (default varies by provider).
 
         Per-agent overrides (optional, **prefix-style only**):
         {AGENT}_LLM_PROVIDER, {AGENT}_LLM_MODEL (e.g. SPEC_HELPER_LLM_MODEL)
@@ -49,8 +49,8 @@ def init_llm_gateway(agent_type: Optional[str] = None) -> Optional[LLMGateway]:
     Examples:
         # Legacy mode (simple, recommended):
         export USE_LLM=1
-        export LLM_PROVIDER=openai
-        export LLM_MODEL=gpt-4o
+        export DEFAULT_LLM_PROVIDER=openai
+        export DEFAULT_LLM_MODEL=gpt-4o
         export OPENAI_API_KEY=sk-...
         gateway = init_llm_gateway()
 
@@ -76,16 +76,16 @@ def _init_legacy(agent_type: Optional[str]) -> Optional[LLMGateway]:
     Legacy initialization using environment variables.
     
     Environment variables (simple):
-    - LLM_PROVIDER: Provider name (default: "openai")
-    - LLM_MODEL: Model name (default varies by provider)
+    - DEFAULT_LLM_PROVIDER: Provider name (default: "openai")
+    - DEFAULT_LLM_MODEL: Model name (default varies by provider)
     
     Per-agent overrides (optional):
     - {AGENT}_LLM_PROVIDER: Override provider for specific agent (e.g. PLANNER_LLM_PROVIDER)
     - {AGENT}_LLM_MODEL: Override model for specific agent (e.g. PLANNER_LLM_MODEL)
 
     Example:
-        LLM_PROVIDER=openai
-        LLM_MODEL=gpt-4o
+        DEFAULT_LLM_PROVIDER=openai
+        DEFAULT_LLM_MODEL=gpt-4o
         PLANNER_LLM_PROVIDER=anthropic
         PLANNER_LLM_MODEL=claude-opus
 
@@ -100,18 +100,48 @@ def _init_legacy(agent_type: Optional[str]) -> Optional[LLMGateway]:
         agent_upper = agent_type.upper()
         agent_lower = agent_type.lower()
 
-        # Only support prefix-style agent-specific env vars:
-        # {AGENT}_LLM_PROVIDER / {AGENT}_LLM_MODEL
-        provider = os.getenv(f"{agent_upper}_LLM_PROVIDER") or os.getenv(f"{agent_lower}_LLM_PROVIDER")
-        model = os.getenv(f"{agent_upper}_LLM_MODEL") or os.getenv(f"{agent_lower}_LLM_MODEL")
+        # Candidate keys for prefix-style env vars (handle common variants)
+        provider_keys = [
+            f"{agent_upper}_LLM_PROVIDER",
+            f"{agent_lower}_LLM_PROVIDER",
+            f"{agent_upper.replace('-', '_')}_LLM_PROVIDER",
+            f"{agent_lower.replace('-', '_')}_LLM_PROVIDER",
+        ]
+        model_keys = [
+            f"{agent_upper}_LLM_MODEL",
+            f"{agent_lower}_LLM_MODEL",
+            f"{agent_upper.replace('-', '_')}_LLM_MODEL",
+            f"{agent_lower.replace('-', '_')}_LLM_MODEL",
+        ]
 
-        provider = provider.lower() if provider else None
+        # Prefer exact-case matches first (fast-path)
+        provider = next((os.getenv(k) for k in provider_keys if os.getenv(k)), None)
+        model = next((os.getenv(k) for k in model_keys if os.getenv(k)), None)
 
-    # Fall back to defaults
+        # If not found, do a case-insensitive search across environment keys
+        if not provider:
+            target = f"{agent_lower}_llm_provider"
+            for k, v in os.environ.items():
+                if k.lower() == target:
+                    provider = v
+                    break
+        if not model:
+            target_model = f"{agent_lower}_llm_model"
+            for k, v in os.environ.items():
+                if k.lower() == target_model:
+                    model = v
+                    break
+
+        # Normalize and trim values to be resilient to whitespace/case
+        provider = provider.strip().lower() if isinstance(provider, str) and provider.strip() else None
+        model = model.strip() if isinstance(model, str) and model.strip() else None
+
+    # Fall back to defaults (normalize whitespace/case)
     if not provider:
-        provider = os.getenv("LLM_PROVIDER", "openai").lower()
+        provider = (os.getenv("DEFAULT_LLM_PROVIDER", "openai") or "openai").strip().lower()
     if not model:
-        model = os.getenv("LLM_MODEL")
+        model = os.getenv("DEFAULT_LLM_MODEL")
+        model = model.strip() if isinstance(model, str) and model.strip() else None
     
     try:
         if provider == "openai":
@@ -150,13 +180,16 @@ def _init_legacy(agent_type: Optional[str]) -> Optional[LLMGateway]:
             model = model or "llama-3.1-8b-instant"
             return GroqGateway(api_key=api_key, model=model)
         
-        elif provider in ("qwen3-local", "ollama", "local"):
-            from adapters.llm.adapter_qwen34b import Qwen34BLocalGateway
+        elif provider in ("qwen-local",):
+            from adapters.llm.adapter_qwen import QwenLocalGateway
+
             ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-            return Qwen34BLocalGateway(ollama_base_url=ollama_url)
+            # Allow selecting the local Qwen model via DEFAULT_LLM_MODEL (per-agent overrides supported)
+            selected_model = model or "qwen3:4b"
+            return QwenLocalGateway(model=selected_model, ollama_base_url=ollama_url)
         
         else:
-            logger.error(f"Unknown LLM_PROVIDER: {provider}")
+            logger.error(f"Unknown DEFAULT_LLM_PROVIDER: {provider}")
             return None
             
     except ImportError as e:

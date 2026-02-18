@@ -19,8 +19,8 @@ Set environment (e.g., in `.env`):
 AGENTOPS_API_KEY=...            # required to send to AgentOps
 AGENTOPS_ENABLE=1               # allow init even if API key is set elsewhere
 AGENTOPS_RUN_NAME=my-run        # optional trace/run name
-LLM_PROVIDER=openai|groq        # optional tag helper
-OPENAI_MODEL=... / GROQ_MODEL=...  # optional tag helper
+DEFAULT_LLM_PROVIDER=openai|groq        # optional tag helper
+DEFAULT_LLM_MODEL=...                   # optional tag helper
 ```
 
 ## CLI knobs
@@ -34,7 +34,7 @@ OPENAI_MODEL=... / GROQ_MODEL=...  # optional tag helper
 - `artifacts/observability/runs/<run_name>/<run_id>/task_memory/`: mirrored copy of `artifacts/task_memory/` stage folders (including per-attempt debug prompts and raw LLM outputs), persisted across CLI runs.
 
 ## Swap/compare models
-1) Set `LLM_PROVIDER`/`OPENAI_MODEL` or switch to Groq vars.
+1) Set `DEFAULT_LLM_PROVIDER`/`DEFAULT_LLM_MODEL` or switch to Groq vars.
 2) Re-run `apps/cli/run_suite.py` (or your workflow) with a new `--run-name`.
 3) Compare `cost_summary.json` files or AgentOps dashboard traces between runs.
 

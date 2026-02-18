@@ -64,7 +64,7 @@ Open the repo in a Dev Container to use the same pinned toolchain automatically.
 
 ## Environment knobs
 - Broker: `RABBITMQ_URL` (default `amqp://user:password@localhost:5672/`)
-- LLM: `USE_LLM`, `LLM_PROVIDER` (`openai`/`groq`), `OPENAI_MODEL` (default `gpt-4.1-mini`) or `GROQ_MODEL`
+- LLM: `USE_LLM`, `DEFAULT_LLM_PROVIDER`, `DEFAULT_LLM_MODEL`
 - Tool overrides: `VERILATOR_PATH`, `IVERILOG_PATH`, `VVP_PATH`
 - Sim failure window: `SIM_FAIL_WINDOW_BEFORE`, `SIM_FAIL_WINDOW_AFTER` (cycles around detected failure)
 

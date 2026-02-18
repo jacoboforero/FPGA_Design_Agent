@@ -60,8 +60,8 @@ These tests document desired integration behaviors that require more sophisticat
 ### 3. Adapter Switching & Per-Agent Configuration (20 scenarios)
 
 **Per-Agent Overrides:**
-- LLM_PROVIDER_{agent_type} overrides default provider
-- LLM_MODEL_{agent_type} overrides default model
+- DEFAULT_LLM_PROVIDER used as default provider
+- DEFAULT_LLM_MODEL used as default model
 - Per-agent override ignored without agent_type parameter
 - Multiple agent types can use different providers simultaneously
 - Per-agent override requires valid API key
@@ -84,8 +84,8 @@ These tests document desired integration behaviors that require more sophisticat
 ### 4. Environment Variable Precedence (17 scenarios)
 
 **Legacy Mode:**
-- LLM_PROVIDER env var used in legacy mode
-- LLM_MODEL env var used in legacy mode
+- DEFAULT_LLM_PROVIDER env var used in legacy mode
+- DEFAULT_LLM_MODEL env var used in legacy mode
 - USE_LLM=0 disables LLM
 - USE_LLM=1 enables LLM
 
@@ -113,7 +113,7 @@ These tests document desired integration behaviors that require more sophisticat
 - Agent-type config doesn't affect other agents
 
 **Defaults:**
-- Default model used when LLM_MODEL not specified
+- Default model used when DEFAULT_LLM_MODEL not specified
 - Default tier used when GATEWAY_TIER not specified
 
 ---
@@ -124,7 +124,7 @@ These tests document desired integration behaviors that require more sophisticat
 - Missing OpenAI API key returns None
 - Missing Anthropic API key returns None
 - Missing Groq API key returns None
-- Missing LLM_PROVIDER env var returns None
+- Missing DEFAULT_LLM_PROVIDER env var returns None
 
 **Invalid Configuration:**
 - Invalid provider returns None
