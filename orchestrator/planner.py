@@ -51,8 +51,12 @@ def _module_spec_paths(spec_dir: Path, module_name: str) -> Dict[str, Path]:
 
 def _extract_module_nodes(l4: L4Specification, default_module: str) -> List[str]:
     if l4.block_diagram:
-        nodes = [node.node_id for node in l4.block_diagram]
-        return nodes or [default_module]
+        nodes = [node.node_id for node in l4.block_diagram if not node.uses_standard_component]
+        if not nodes:
+            return [default_module]
+        if default_module in nodes:
+            return [default_module] + [node for node in nodes if node != default_module]
+        return [default_module] + nodes
     return [default_module]
 
 
@@ -61,16 +65,19 @@ def _build_deps_map(
     l4: L4Specification,
 ) -> Dict[str, List[str]]:
     deps_map = {module: set() for module in module_nodes}
+    module_set = set(module_nodes)
+    all_nodes = {node.node_id for node in l4.block_diagram}
     for dep in l4.dependencies:
         parent = dep.parent_id
         child = dep.child_id
         if parent and child:
-            # Parent depends on child so leaf nodes run first.
-            deps_map.setdefault(parent, set()).add(child)
-    for child, parents in deps_map.items():
-        missing = [p for p in parents if p not in module_nodes]
-        if missing:
-            raise RuntimeError(f"Unknown DAG deps for {child}: {missing}")
+            unknown = [name for name in (parent, child) if name not in all_nodes]
+            if unknown:
+                raise RuntimeError(f"Unknown DAG dependency endpoint(s): {unknown}")
+            # Interpret L4 edges as: child_id depends on parent_id.
+            # Example: parent=submodule, child=top means top runs after submodule.
+            if parent in module_set and child in module_set:
+                deps_map.setdefault(child, set()).add(parent)
     return {child: sorted(parents) for child, parents in deps_map.items()}
 
 
@@ -108,6 +115,68 @@ def _filter_connections(connections, scope: set[str]) -> List[dict]:
     return filtered
 
 
+def _node_metadata_map(l4: L4Specification) -> Dict[str, Dict[str, str]]:
+    meta: Dict[str, Dict[str, str]] = {}
+    for node in l4.block_diagram:
+        meta[node.node_id] = {
+            "node_type": node.node_type or "",
+            "description": node.description or "",
+            "notes": node.notes or "",
+        }
+    return meta
+
+
+def _infer_contract_style(*, module: str, top_module: str, node_type: str, description: str, notes: str) -> str:
+    if module == top_module:
+        return "integration"
+    text = f"{node_type} {description} {notes}".lower()
+    if any(token in text for token in ("comparator", "compare", "combinational", "mux", "decoder", "encoder")):
+        return "combinational"
+    if any(token in text for token in ("counter", "register", "sequential", "flop", "fifo", "ram", "fsm", "state")):
+        return "sequential"
+    return "unknown"
+
+
+def _build_module_contract(
+    *,
+    module: str,
+    top_module: str,
+    node_meta: Dict[str, str],
+    interface_signals: List[Dict[str, Any]],
+    children: List[str],
+) -> Dict[str, Any]:
+    node_type = node_meta.get("node_type", "")
+    description = node_meta.get("description", "")
+    notes = node_meta.get("notes", "")
+    style = _infer_contract_style(
+        module=module,
+        top_module=top_module,
+        node_type=node_type,
+        description=description,
+        notes=notes,
+    )
+    contract: Dict[str, Any] = {
+        "node_type": node_type or "module",
+        "style": style,
+        "description": description,
+    }
+    if style == "combinational":
+        contract["forbid_edge_always"] = True
+        contract["allow_internal_state"] = False
+    if style in {"sequential", "integration"}:
+        contract["allow_internal_state"] = True
+    if style == "integration" and children:
+        debug_outputs = [
+            sig["name"]
+            for sig in interface_signals
+            if str(sig.get("direction", "")).upper() == "OUTPUT" and str(sig.get("name", "")).endswith("_dbg")
+        ]
+        if debug_outputs:
+            contract["prefer_debug_passthrough"] = True
+            contract["debug_outputs"] = debug_outputs
+    return contract
+
+
 def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> None:
     spec_dir = spec_dir.resolve()
     out_dir = out_dir.resolve()
@@ -127,13 +196,14 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
     l5 = L5Specification.model_validate_json((spec_dir / "L5_acceptance.json").read_text())
 
     module_nodes = _extract_module_nodes(l4, top_module)
+    node_meta_map = _node_metadata_map(l4)
     if lock_modules:
         missing = [node for node in module_nodes if node not in lock_modules]
         extra = [node for node in lock_modules if node not in module_nodes]
         if missing:
-            raise RuntimeError(f"Lock modules missing from block diagram: {missing}")
+            raise RuntimeError(f"Lock missing required block-diagram modules: {missing}")
         if extra:
-            raise RuntimeError(f"Lock modules not present in block diagram: {extra}")
+            raise RuntimeError(f"Lock contains modules not generated from block diagram: {extra}")
     if len(set(module_nodes)) != len(module_nodes):
         raise RuntimeError(f"Duplicate module ids in block diagram: {module_nodes}")
 
@@ -225,6 +295,13 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
 
         scope = {module} | set(dep_order)
         node_connections = _filter_connections(l4.connections, scope)
+        node_contract = _build_module_contract(
+            module=module,
+            top_module=top_module,
+            node_meta=node_meta_map.get(module, {}),
+            interface_signals=interface_signals,
+            children=children,
+        )
 
         nodes[module] = {
             "rtl_file": rtl_file,
@@ -237,9 +314,10 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
             "demo_behavior": demo_behavior,
             "verification": verification,
             "acceptance": acceptance,
-            "verification_scope": "full" if module == top_module else "lite",
+            "verification_scope": "full",
             "children": children,
             "connections": node_connections,
+            "module_contract": node_contract,
         }
 
     design_context = {

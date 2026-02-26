@@ -1,0 +1,201 @@
+Module: pwm_led_top
+Title: Multi-module PWM LED controller (counter + duty register + comparator)
+
+L1
+Role summary: Top-level PWM LED controller that composes a free-running counter, a duty-cycle register, and a comparator to generate pwm_out.
+Key rules:
+- pwm_counter8 increments by 1 each rising edge of clk and wraps naturally from 255 to 0.
+- duty_reg8 captures wr_data on rising edge when wr_en=1; otherwise it holds previous duty value.
+- pwm_compare8 drives pwm_out=1 when count<duty, else pwm_out=0.
+- pwm_led_top wires child modules without altering their functional behavior.
+- Reset behavior is deterministic and immediate for sequential state: counter=0, duty=0, pwm_out=0.
+Performance intent: One state update per clock cycle; PWM output updates every cycle from current count/duty.
+Reset semantics: Active-low async reset clears all sequential state in pwm_counter8 and duty_reg8; comparator output reflects cleared values.
+Corner cases:
+- duty=0 forces pwm_out low for all counts.
+- duty=255 yields high output for 255 out of 256 count values.
+- wr_en may toggle every cycle; duty updates only on sampled rising edges.
+- wr_en asserted while reset active has no effect until reset deasserts.
+Open questions:
+- none
+
+L2
+Clocking:
+- clock_name: clk
+  clock_polarity: POSEDGE
+  reset_name: rst_n
+  reset_polarity: ACTIVE_LOW
+  reset_is_async: true
+  description: single synchronous domain for all child modules
+Signals:
+- name: clk
+  direction: INPUT
+  width_expr: 1
+  semantics: clock
+- name: rst_n
+  direction: INPUT
+  width_expr: 1
+  semantics: async active-low reset
+- name: wr_en
+  direction: INPUT
+  width_expr: 1
+  semantics: duty register write enable
+- name: wr_data
+  direction: INPUT
+  width_expr: 8
+  semantics: duty register write data
+- name: pwm_out
+  direction: OUTPUT
+  width_expr: 1
+  semantics: PWM output signal
+- name: count_dbg
+  direction: OUTPUT
+  width_expr: 8
+  semantics: debug exposure of counter value
+- name: duty_dbg
+  direction: OUTPUT
+  width_expr: 8
+  semantics: debug exposure of duty value
+Handshake semantics:
+- name: none
+  rules: none
+Transaction unit: one duty register write transaction per rising edge when wr_en=1.
+Configuration parameters:
+- name: COUNTER_WIDTH
+  default_value: 8
+  description: bit width for counter and duty datapath
+
+L3
+Test goals:
+- Reset clears counter and duty deterministically.
+- Duty write path updates duty_dbg only when wr_en=1.
+- PWM compare rule count<duty is correct each cycle.
+- PWM extremes and representative mid-scale duty ratios behave correctly.
+Oracle strategy: Cycle-accurate reference model for count, duty, and pwm_out with asynchronous reset handling.
+Stimulus strategy: Directed write sequences and sustained run windows to measure high-count ratios for duty settings.
+Pass/fail criteria:
+- count_dbg matches reference count each sampled cycle.
+- duty_dbg matches reference duty each sampled cycle.
+- pwm_out equals (count_dbg<duty_dbg) each sampled cycle.
+Coverage targets:
+- coverage_id: branch
+  description: branch coverage for reset, write-enable, hold, and compare behavior
+  metric_type: branch
+  goal: 0.85
+  notes: none
+- coverage_id: toggle
+  description: toggle coverage for counter bits, duty bits, and pwm_out
+  metric_type: toggle
+  goal: 0.75
+  notes: none
+Reset constraints:
+min_cycles_after_reset: 1
+ordering_notes: begin functional checking one sampled cycle after reset deassertion.
+Scenarios:
+- scenario_id: reset_behavior
+  description: asynchronous reset clears sequential state
+  stimulus: assert rst_n low for 2 cycles, deassert mid-cycle once
+  oracle: count_dbg=0 and duty_dbg=0 while reset active; pwm_out=0
+  pass_fail_criteria: no nonzero state during reset
+  illegal: false
+- scenario_id: duty_write_and_hold
+  description: duty updates only on wr_en
+  stimulus: write duty values 0x20 then 0x80 with wr_en pulses; include hold intervals
+  oracle: duty_dbg changes only on write cycles
+  pass_fail_criteria: no unintended duty changes during hold
+  illegal: false
+- scenario_id: pwm_extremes
+  description: verify extreme duty behavior
+  stimulus: set duty=0 and run 64 cycles; set duty=255 and run 256 cycles
+  oracle: pwm_out always 0 for duty=0; high for 255/256 cycles for duty=255
+  pass_fail_criteria: high-count ratios match expected values
+  illegal: false
+- scenario_id: pwm_midscale
+  description: verify representative mid-scale ratios
+  stimulus: set duty=64 then duty=128 then duty=192, each for 256 cycles
+  oracle: high counts are 64, 128, and 192 respectively over full period
+  pass_fail_criteria: ratio error is zero over full 256-cycle windows
+  illegal: false
+
+L4
+Block diagram:
+- node_id: pwm_led_top
+  description: top-level wrapper that integrates counter, duty register, and comparator
+  node_type: top_level
+  interface_refs: [pwm_led_top_if]
+  uses_standard_component: false
+  notes: exposes debug outputs for count and duty
+- node_id: pwm_counter8
+  description: 8-bit free-running synchronous counter with async active-low reset
+  node_type: sequential_counter
+  interface_refs: [pwm_counter8_if]
+  uses_standard_component: false
+  notes: increments every clock, wraps at 255
+- node_id: duty_reg8
+  description: 8-bit duty-cycle register with write enable and async active-low reset
+  node_type: register
+  interface_refs: [duty_reg8_if]
+  uses_standard_component: false
+  notes: captures wr_data when wr_en=1
+- node_id: pwm_compare8
+  description: combinational comparator generating pwm_out from count and duty
+  node_type: comparator
+  interface_refs: [pwm_compare8_if]
+  uses_standard_component: false
+  notes: pwm_out=(count<duty)
+Dependencies:
+- parent_id: pwm_counter8
+  child_id: pwm_led_top
+  dependency_type: structural
+- parent_id: duty_reg8
+  child_id: pwm_led_top
+  dependency_type: structural
+- parent_id: pwm_compare8
+  child_id: pwm_led_top
+  dependency_type: structural
+Clock domains:
+- name: clk
+  frequency_hz: 100000000
+  notes: single synchronous domain, no CDC
+Resource strategy: one 8-bit counter register, one 8-bit duty register, one 8-bit comparator, simple top-level wiring.
+Latency budget: one-cycle state updates for sequential modules; combinational comparator output valid within same cycle.
+Assertion plan:
+sva:
+- if !rst_n then count_dbg==0 and duty_dbg==0
+- if wr_en==0 then duty_dbg holds value across sampled edge
+- pwm_out == (count_dbg < duty_dbg)
+scoreboard_assertions:
+- reference model for count/duty/pwm matches DUT every cycle
+
+L5
+Required artifacts:
+- name: rtl
+  description: synthesizable RTL for pwm_led_top and child modules
+  mandatory: true
+- name: testbench
+  description: self-checking top-level testbench for multi-module integration
+  mandatory: true
+- name: lint_report
+  description: verilator lint log
+  mandatory: true
+- name: sim_log
+  description: simulation transcript
+  mandatory: true
+- name: coverage_report
+  description: branch/toggle coverage summary
+  mandatory: true
+Acceptance metrics:
+- metric_id: branch
+  description: branch coverage >= 0.85
+  operator: ">="
+  target_value: "0.85"
+  metric_source: coverage_report
+- metric_id: toggle
+  description: toggle coverage >= 0.75
+  operator: ">="
+  target_value: "0.75"
+  metric_source: coverage_report
+Exclusions:
+- no fractional PWM dithering
+- no clock-enable or prescaler in this design
+Synthesis target: fpga_generic

@@ -113,12 +113,6 @@ def _run_execution(
                 done.add(node_id)
                 continue
 
-            if ctx.get("verification_scope") != "full":
-                print(f"[exec] node={node_id} verification_scope=lite; skipping tb/sim")
-                pending.remove(node_id)
-                done.add(node_id)
-                continue
-
             result = _run_stage(
                 workers["tb"],
                 _make_task(EntityType.REASONING, AgentType.TESTBENCH, ctx),
@@ -294,6 +288,32 @@ def _stub_lint_and_sim(monkeypatch, sim_fail_sequence: list[bool] | None = None,
 
 
 def _build_workers():
+    class IncrementalDebugGateway:
+        def __init__(self):
+            self.calls = 0
+
+        async def generate(self, messages, config):
+            self.calls += 1
+            return FakeResponse(
+                content=json.dumps(
+                    {
+                        "summary": "ok",
+                        "touched_files": ["tb"],
+                        "rtl_lines": None,
+                        "tb_lines": [
+                            "module tb_demo;",
+                            "  initial begin",
+                            f'    $display("patched{self.calls}");',
+                            "    $finish;",
+                            "  end",
+                            "endmodule",
+                        ],
+                        "risks": [],
+                        "next_steps": ["step"],
+                    }
+                )
+            )
+
     impl = ImplementationWorker(connection_params=None, stop_event=None)
     impl.gateway = FakeGateway(FakeResponse(content="module demo; endmodule\n"))
 
@@ -316,20 +336,7 @@ def _build_workers():
     )
 
     dbg = DebugWorker(connection_params=None, stop_event=None)
-    dbg.gateway = FakeGateway(
-        FakeResponse(
-            content=json.dumps(
-                {
-                    "summary": "ok",
-                    "touched_files": ["tb"],
-                    "rtl_lines": None,
-                    "tb_lines": ["module tb_demo;", "  initial $finish;", "endmodule"],
-                    "risks": [],
-                    "next_steps": ["step"],
-                }
-            )
-        )
-    )
+    dbg.gateway = IncrementalDebugGateway()
 
     lint = LintWorker(connection_params=None, stop_event=None)
     lint.verilator = "verilator"
@@ -380,9 +387,10 @@ def test_execution_pipeline_success(tmp_path, monkeypatch):
     for node_id in ("axi_lite_regs", "event_fifo"):
         assert (task_memory_root / node_id / "impl" / "log.txt").exists()
         assert (task_memory_root / node_id / "lint_attempt1" / "log.txt").exists()
-        assert not (task_memory_root / node_id / "tb" / "log.txt").exists()
-        assert not (task_memory_root / node_id / "tb_lint_attempt1" / "log.txt").exists()
-        assert not (task_memory_root / node_id / "sim_attempt1" / "log.txt").exists()
+        assert (task_memory_root / node_id / "tb" / "log.txt").exists()
+        assert (task_memory_root / node_id / "tb_lint_attempt1" / "log.txt").exists()
+        assert (task_memory_root / node_id / "sim_attempt1" / "log.txt").exists()
+        assert (task_memory_root / node_id / "acceptance_attempt1" / "log.txt").exists()
 
 
 def test_execution_pipeline_failure_triggers_distill(tmp_path, monkeypatch):
@@ -445,13 +453,17 @@ def test_execution_pipeline_tb_lint_failure_triggers_debug(tmp_path, monkeypatch
     task_memory = TaskMemory(task_memory_root)
     results = _run_execution(ctx_builder, dag, workers, task_memory)
 
-    assert results["event_logger_top"]["tb_lint_attempt1"].status is TaskStatus.FAILURE
-    assert results["event_logger_top"]["debug_attempt1"].status is TaskStatus.SUCCESS
-    assert results["event_logger_top"]["tb_lint_attempt2"].status is TaskStatus.SUCCESS
-    assert results["event_logger_top"]["sim_attempt2"].status is TaskStatus.SUCCESS
-    assert results["event_logger_top"]["acceptance_attempt2"].status is TaskStatus.SUCCESS
-    assert (task_memory_root / "event_logger_top" / "tb_lint_attempt1" / "log.txt").exists()
-    assert (task_memory_root / "event_logger_top" / "debug_attempt1" / "log.txt").exists()
+    child_nodes = ("axi_lite_regs", "event_fifo")
+    failed_tb_lint_node = next(
+        node_id for node_id in child_nodes if results[node_id]["tb_lint_attempt1"].status is TaskStatus.FAILURE
+    )
+
+    assert results[failed_tb_lint_node]["debug_attempt1"].status is TaskStatus.SUCCESS
+    assert results[failed_tb_lint_node]["tb_lint_attempt2"].status is TaskStatus.SUCCESS
+    assert results[failed_tb_lint_node]["sim_attempt2"].status is TaskStatus.SUCCESS
+    assert results[failed_tb_lint_node]["acceptance_attempt2"].status is TaskStatus.SUCCESS
+    assert (task_memory_root / failed_tb_lint_node / "tb_lint_attempt1" / "log.txt").exists()
+    assert (task_memory_root / failed_tb_lint_node / "debug_attempt1" / "log.txt").exists()
 
 
 def test_execution_pipeline_tb_lint_and_sim_failures_have_separate_debug_budgets(tmp_path, monkeypatch):
@@ -477,13 +489,17 @@ def test_execution_pipeline_tb_lint_and_sim_failures_have_separate_debug_budgets
     task_memory = TaskMemory(task_memory_root)
     results = _run_execution(ctx_builder, dag, workers, task_memory)
 
-    assert results["event_logger_top"]["tb_lint_attempt1"].status is TaskStatus.FAILURE
-    assert results["event_logger_top"]["debug_attempt1"].status is TaskStatus.SUCCESS
-    assert results["event_logger_top"]["tb_lint_attempt2"].status is TaskStatus.SUCCESS
+    child_nodes = ("axi_lite_regs", "event_fifo")
+    failed_tb_lint_node = next(
+        node_id for node_id in child_nodes if results[node_id]["tb_lint_attempt1"].status is TaskStatus.FAILURE
+    )
 
-    assert results["event_logger_top"]["sim_attempt2"].status is TaskStatus.FAILURE
-    assert results["event_logger_top"]["debug_attempt2"].status is TaskStatus.SUCCESS
-    assert results["event_logger_top"]["sim_attempt3"].status is TaskStatus.FAILURE
-    assert results["event_logger_top"]["debug_attempt3"].status is TaskStatus.SUCCESS
-    assert results["event_logger_top"]["sim_attempt4"].status is TaskStatus.SUCCESS
-    assert results["event_logger_top"]["acceptance_attempt4"].status is TaskStatus.SUCCESS
+    assert results[failed_tb_lint_node]["debug_attempt1"].status is TaskStatus.SUCCESS
+    assert results[failed_tb_lint_node]["tb_lint_attempt2"].status is TaskStatus.SUCCESS
+
+    assert results[failed_tb_lint_node]["sim_attempt2"].status is TaskStatus.FAILURE
+    assert results[failed_tb_lint_node]["debug_attempt2"].status is TaskStatus.SUCCESS
+    assert results[failed_tb_lint_node]["sim_attempt3"].status is TaskStatus.FAILURE
+    assert results[failed_tb_lint_node]["debug_attempt3"].status is TaskStatus.SUCCESS
+    assert results[failed_tb_lint_node]["sim_attempt4"].status is TaskStatus.SUCCESS
+    assert results[failed_tb_lint_node]["acceptance_attempt4"].status is TaskStatus.SUCCESS

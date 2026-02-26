@@ -16,6 +16,8 @@ from core.runtime.retry import RetryableError, TaskInputError, get_retry_count, 
 
 TASK_EXCHANGE = "tasks_exchange"
 RESULTS_ROUTING_KEY = "RESULTS"
+_SIM_FAIL_RE = re.compile(r"\b(FAIL|FAILURE|ERROR|FATAL|ASSERT|ASSERTION)\b", re.IGNORECASE)
+_SIM_PASS_RE = re.compile(r"\b(PASS|PASSED)\b", re.IGNORECASE)
 
 
 class AcceptanceWorker(threading.Thread):
@@ -221,9 +223,9 @@ def _sim_passed(node_id: str, attempt: int | None) -> bool:
     if not path.exists():
         return False
     text = path.read_text()
-    if "FAIL" in text or "ERROR" in text:
+    if _SIM_FAIL_RE.search(text):
         return False
-    if "PASS" in text or "Simulation passed." in text:
+    if _SIM_PASS_RE.search(text) or "Simulation passed." in text:
         return True
     # If sim ran without explicit PASS markers, treat it as passed unless a failure marker was seen.
     return True

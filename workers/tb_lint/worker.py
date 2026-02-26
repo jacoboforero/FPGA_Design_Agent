@@ -21,6 +21,8 @@ TASK_EXCHANGE = "tasks_exchange"
 RESULTS_ROUTING_KEY = "RESULTS"
 
 _PROC_START_RE = re.compile(r"(?im)^\s*(always\s*@\s*\(([^)]*)\)|initial)(?:\s|$)")
+_COMPARE_IF_RE = re.compile(r"if\s*\(([^)]*(?:!==|!=)[^)]*)\)", flags=re.IGNORECASE | re.DOTALL)
+_IDENT_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b")
 _RESET_GATING_HINTS = (
     "seen_reset",
     "post_reset",
@@ -132,8 +134,18 @@ class TestbenchLintWorker(threading.Thread):
             semantic_strict = os.getenv("TB_LINT_SEMANTIC_STRICT", "1") != "0"
             semantic_issues: list[str] = []
             if semantic_enabled:
+                iface = task.context.get("interface") if isinstance(task.context.get("interface"), dict) else {}
+                iface_signals = iface.get("signals") if isinstance(iface, dict) else []
+                signal_names: list[str] = []
+                if isinstance(iface_signals, list):
+                    for item in iface_signals:
+                        if not isinstance(item, dict):
+                            continue
+                        name = item.get("name")
+                        if name:
+                            signal_names.append(str(name))
                 clocking_raw = task.context.get("clocking")
-                clocking = clocking_raw if isinstance(clocking_raw, dict) else {}
+                clocking = _normalize_clocking_context(clocking_raw, signal_names)
                 clock_name = str(clocking.get("clock_name", "clk") or "clk")
                 reset_name_raw = clocking.get("reset_name")
                 reset_name = str(reset_name_raw).strip() if reset_name_raw else None
@@ -144,6 +156,7 @@ class TestbenchLintWorker(threading.Thread):
                     clock_name=clock_name,
                     reset_name=reset_name,
                     reset_active_low=reset_active_low,
+                    signal_names=signal_names,
                 )
                 if semantic_issues and semantic_strict:
                     compile_log = (completed.stdout or completed.stderr or "").strip()
@@ -202,6 +215,7 @@ def _run_tb_semantic_lint(
     clock_name: str,
     reset_name: str | None,
     reset_active_low: bool,
+    signal_names: list[str],
 ) -> list[str]:
     issues: list[str] = []
     regions = list(_iter_procedural_regions(tb_text))
@@ -211,6 +225,10 @@ def _run_tb_semantic_lint(
         issues.extend(_check_checker_reset_gating(regions, tb_text, reset_name, reset_active_low))
         issues.extend(_check_stale_reference_compare(regions))
         issues.extend(_check_reset_assertion(tb_text, reset_name, reset_active_low))
+        issues.extend(_check_checker_delay_dependency(regions))
+        issues.extend(_check_mixed_time_and_edge_stimulus(regions, clock_name))
+        issues.extend(_check_prev_sampled_control_usage(regions))
+        issues.extend(_check_fail_print_consistency(regions, signal_names))
     # Keep deterministic ordering for stable logs/narrative.
     return sorted(set(issues))
 
@@ -324,6 +342,159 @@ def _check_reset_assertion(tb_text: str, reset_name: str | None, reset_active_lo
         return []
     level = "low" if reset_active_low else "high"
     return [f"TBSEM005 L1: reset '{reset_name}' is never explicitly driven {level} in the testbench."]
+
+
+def _check_checker_delay_dependency(regions: list[dict]) -> list[str]:
+    issues: list[str] = []
+    delay_re = re.compile(r"#\s*\d+")
+    for region in regions:
+        text = _strip_verilog_comments(region["text"])
+        lowered = text.lower()
+        if "$finish(1" not in lowered and "fail" not in lowered:
+            continue
+        if "!=" not in text and "!==" not in text:
+            continue
+        delays = delay_re.findall(text)
+        if len(delays) > 2:
+            issues.append(
+                f"TBSEM006 L{region['line']}: checker compare path depends on excessive delay controls ({', '.join(delays[:4])}). Prefer edge-aligned ordering over chained # delays."
+            )
+    return issues
+
+
+def _check_mixed_time_and_edge_stimulus(regions: list[dict], clock_name: str) -> list[str]:
+    checker_regions = [r for r in regions if ("$finish(1" in r["text"].lower() or "fail" in r["text"].lower()) and "!=" in r["text"]]
+    if not checker_regions:
+        return []
+    has_edge_checker = any(
+        "posedge" in (r["sensitivity"] or "") or "negedge" in (r["sensitivity"] or "")
+        for r in checker_regions
+    )
+    if not has_edge_checker:
+        return []
+    time_stim_regions = []
+    for region in regions:
+        text = region["text"]
+        lowered = text.lower()
+        if "initial" not in lowered:
+            continue
+        if "@(" in text:
+            continue
+        if len(re.findall(r"#\s*\d+", text)) < 3:
+            continue
+        if not re.search(r"\b[A-Za-z_][A-Za-z0-9_]*\b\s*(?:<=|=)\s*", text):
+            continue
+        if clock_name and re.search(rf"\b{re.escape(clock_name)}\b\s*(?:<=|=)\s*", text):
+            # Ignore pure clock generation blocks.
+            assign_count = len(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b\s*(?:<=|=)\s*", text))
+            if assign_count <= 1:
+                continue
+        time_stim_regions.append(region["line"])
+    if not time_stim_regions:
+        return []
+    return [
+        f"TBSEM007 L{time_stim_regions[0]}: testbench mixes delay-based stimulus in initial blocks with edge-based checker logic. Drive stimulus on explicit clock edges for deterministic sampling."
+    ]
+
+
+def _check_prev_sampled_control_usage(regions: list[dict]) -> list[str]:
+    issues: list[str] = []
+    for region in regions:
+        text = region["text"]
+        lowered = text.lower()
+        if "$finish(1" not in lowered and "fail" not in lowered:
+            continue
+        if "prev_" not in text:
+            continue
+        if "!=" not in text and "!==" not in text:
+            continue
+        if re.search(r"#\s*\d+", text):
+            issues.append(
+                f"TBSEM008 L{region['line']}: checker uses sampled prev_* controls with delay controls. This often indicates stale-control comparisons across cycles."
+            )
+    return issues
+
+
+def _check_fail_print_consistency(regions: list[dict], signal_names: list[str]) -> list[str]:
+    issues: list[str] = []
+    signal_set = {name for name in signal_names if isinstance(name, str)}
+    for region in regions:
+        text = region["text"]
+        lowered = text.lower()
+        if "$display" not in lowered:
+            continue
+        if "$finish(1" not in lowered and "fail" not in lowered:
+            continue
+        cmp_match = _COMPARE_IF_RE.search(text)
+        if not cmp_match:
+            continue
+        cmp_expr = cmp_match.group(1)
+        cmp_ids = {name for name in _IDENT_RE.findall(cmp_expr) if name in signal_set}
+        display_ids = _extract_display_identifiers(text)
+        if not display_ids:
+            continue
+        missing = sorted(name for name in cmp_ids if name not in display_ids)
+        prev_only_print = any(name.startswith("prev_") for name in display_ids) and not any(name.startswith("prev_") for name in cmp_ids)
+        if missing:
+            issues.append(
+                f"TBSEM009 L{region['line']}: FAIL print omits compared DUT/expected signal(s): {', '.join(missing)}."
+            )
+        if prev_only_print:
+            issues.append(
+                f"TBSEM010 L{region['line']}: FAIL print relies on prev_* sampled controls while compare expression is current-cycle. Include compare-context controls/signals explicitly."
+            )
+    return issues
+
+
+def _extract_display_identifiers(text: str) -> set[str]:
+    ids: set[str] = set()
+    display_re = re.compile(r"\$display\s*\((.*?)\);", flags=re.DOTALL)
+    for match in display_re.finditer(text):
+        body = match.group(1)
+        if not body:
+            continue
+        # Drop format string prefix if present.
+        body = re.sub(r'^\s*"[^"]*"\s*,?', "", body, count=1, flags=re.DOTALL)
+        for ident in _IDENT_RE.findall(body):
+            if ident in {"display", "time", "finish"}:
+                continue
+            ids.add(ident)
+    return ids
+
+
+def _normalize_clocking_context(raw_clocking, signal_names: list[str]) -> dict:
+    item = {}
+    if isinstance(raw_clocking, dict):
+        item = raw_clocking
+    elif isinstance(raw_clocking, list):
+        for entry in raw_clocking:
+            if isinstance(entry, dict):
+                item = entry
+                break
+    reset_name = item.get("reset_name")
+    if not reset_name:
+        lowered = {str(name).lower(): str(name) for name in signal_names if isinstance(name, str)}
+        for candidate in ("rst_n", "reset_n", "rst", "reset"):
+            if candidate in lowered:
+                reset_name = lowered[candidate]
+                break
+    reset_polarity = item.get("reset_polarity")
+    if not reset_polarity:
+        reset_polarity = "ACTIVE_LOW" if str(reset_name or "").lower().endswith("_n") else "ACTIVE_HIGH"
+    return {
+        "clock_name": item.get("clock_name") or "clk",
+        "clock_polarity": item.get("clock_polarity") or "POSEDGE",
+        "reset_name": reset_name,
+        "reset_polarity": reset_polarity,
+        "reset_is_async": item.get("reset_is_async"),
+    }
+
+
+def _strip_verilog_comments(text: str) -> str:
+    # Remove // line comments and /* ... */ blocks before pattern scans.
+    no_block = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    no_line = re.sub(r"//.*", "", no_block)
+    return no_line
 
 
 def _first_literal_assignment(tb_text: str, signal_name: str) -> int | None:

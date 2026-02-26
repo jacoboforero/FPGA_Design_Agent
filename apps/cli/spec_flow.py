@@ -875,6 +875,307 @@ def _write_lock(module_names: List[str], top_module: str, spec_id: UUID) -> None
     (SPEC_DIR / "lock.json").write_text(json.dumps(lock, indent=2))
 
 
+def _ordered_unique_names(values: List[str]) -> List[str]:
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for raw in values:
+        name = _sanitize_name(str(raw or "").strip())
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        ordered.append(name)
+    return ordered
+
+
+def _canonical_modules_from_top_checklist(checklist: Dict[str, Any], top_module: str) -> List[str]:
+    l4 = checklist.get("L4") if isinstance(checklist, dict) else None
+    block_diagram = l4.get("block_diagram") if isinstance(l4, dict) else None
+    block_modules: List[str] = []
+    if isinstance(block_diagram, list):
+        for item in block_diagram:
+            if not isinstance(item, dict):
+                continue
+            node_id = _sanitize_name(str(item.get("node_id", "")).strip())
+            if not node_id:
+                continue
+            is_standard = bool(_as_bool(item.get("uses_standard_component")) or False)
+            if is_standard:
+                continue
+            block_modules.append(node_id)
+
+    canonical = _ordered_unique_names(block_modules)
+    top_module = _sanitize_name(top_module)
+    if not canonical:
+        return [top_module]
+    if top_module in canonical:
+        return [top_module] + [name for name in canonical if name != top_module]
+    return [top_module] + canonical
+
+
+def _validate_module_inventory(
+    *,
+    module_names: List[str],
+    top_module: str,
+    top_checklist: Dict[str, Any],
+) -> List[str]:
+    declared = _ordered_unique_names(module_names)
+    canonical = _canonical_modules_from_top_checklist(top_checklist, top_module)
+    missing = [name for name in canonical if name not in declared]
+    extra = [name for name in declared if name not in canonical]
+    if missing or extra:
+        details: List[str] = []
+        if missing:
+            details.append(f"missing Module section(s): {', '.join(missing)}")
+        if extra:
+            details.append(f"extra Module section(s): {', '.join(extra)}")
+        raise RuntimeError(
+            "Spec/module mismatch between Module blocks and L4.block_diagram non-standard nodes; "
+            + "; ".join(details)
+            + ". Add one Module section per generated node, or mark library nodes uses_standard_component=true."
+        )
+    return canonical
+
+
+def _ensure_single_module_contract(checklist: Dict[str, Any], module_name: str) -> None:
+    canonical = _canonical_modules_from_top_checklist(checklist, module_name)
+    extras = [name for name in canonical if name != _sanitize_name(module_name)]
+    if extras:
+        raise RuntimeError(
+            "Spec defines additional generated modules in L4.block_diagram "
+            f"({', '.join(extras)}) but only one Module section was provided. "
+            "Use one Module: section per generated module, or mark library nodes uses_standard_component=true."
+        )
+
+
+def _node_meta_from_top_checklist(checklist: Dict[str, Any], node_id: str) -> Dict[str, Any]:
+    l4 = checklist.get("L4") if isinstance(checklist, dict) else None
+    block_diagram = l4.get("block_diagram") if isinstance(l4, dict) else None
+    if not isinstance(block_diagram, list):
+        return {}
+    for item in block_diagram:
+        if not isinstance(item, dict):
+            continue
+        if _sanitize_name(str(item.get("node_id", "")).strip()) == _sanitize_name(node_id):
+            return item
+    return {}
+
+
+def _normalize_node_type(node_meta: Dict[str, Any]) -> str:
+    if not isinstance(node_meta, dict):
+        return ""
+    return str(node_meta.get("node_type", "")).strip().lower()
+
+
+def _child_style_from_node_meta(node_meta: Dict[str, Any]) -> str:
+    text = " ".join(
+        [
+            _normalize_node_type(node_meta),
+            str(node_meta.get("description", "")).strip().lower() if isinstance(node_meta, dict) else "",
+            str(node_meta.get("notes", "")).strip().lower() if isinstance(node_meta, dict) else "",
+        ]
+    )
+    if any(token in text for token in ("comparator", "compare", "combinational", "mux", "decoder", "encoder")):
+        return "combinational"
+    if any(token in text for token in ("counter", "register", "sequential", "flop", "fsm", "state")):
+        return "sequential"
+    return "unknown"
+
+
+def _width_from_top_signal(by_name: Dict[str, Dict[str, Any]], name: str, default: str = "1") -> str:
+    item = by_name.get(name, {})
+    value = str(item.get("width_expr", default)).strip() if isinstance(item, dict) else default
+    return value or default
+
+
+def _infer_child_signals_from_connections(top_checklist: Dict[str, Any], node_id: str) -> List[Dict[str, Any]]:
+    l4 = top_checklist.get("L4") if isinstance(top_checklist, dict) else None
+    connections = l4.get("connections") if isinstance(l4, dict) else None
+    if not isinstance(connections, list):
+        return []
+    ports: Dict[str, str] = {}
+    for conn in connections:
+        if not isinstance(conn, dict):
+            continue
+        src = conn.get("src") if isinstance(conn.get("src"), dict) else {}
+        dst = conn.get("dst") if isinstance(conn.get("dst"), dict) else {}
+        src_node = _sanitize_name(str(src.get("node_id", "")).strip()) if src else ""
+        dst_node = _sanitize_name(str(dst.get("node_id", "")).strip()) if dst else ""
+        if src_node == node_id:
+            port = str(src.get("port", "")).strip()
+            if port:
+                ports.setdefault(port, "OUTPUT")
+        if dst_node == node_id:
+            port = str(dst.get("port", "")).strip()
+            if port:
+                ports.setdefault(port, "INPUT")
+    l2 = top_checklist.get("L2") if isinstance(top_checklist, dict) else None
+    top_signals = l2.get("signals") if isinstance(l2, dict) else None
+    by_name: Dict[str, Dict[str, Any]] = {}
+    if isinstance(top_signals, list):
+        for sig in top_signals:
+            if not isinstance(sig, dict):
+                continue
+            sig_name = str(sig.get("name", "")).strip()
+            if sig_name:
+                by_name[sig_name] = sig
+    out: List[Dict[str, Any]] = []
+    for name, direction in ports.items():
+        out.append(
+            {
+                "name": name,
+                "direction": direction,
+                "width_expr": _width_from_top_signal(by_name, name, "1"),
+                "semantics": "",
+            }
+        )
+    return out
+
+
+def _infer_child_signals_fallback(top_checklist: Dict[str, Any], node_id: str, node_meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    l2 = top_checklist.get("L2") if isinstance(top_checklist, dict) else {}
+    clocking = l2.get("clocking") if isinstance(l2, dict) else []
+    top_signals = l2.get("signals") if isinstance(l2, dict) else []
+
+    clk_name = "clk"
+    rst_name = "rst_n"
+    if isinstance(clocking, list) and clocking and isinstance(clocking[0], dict):
+        clk_name = str(clocking[0].get("clock_name") or clk_name)
+        rst_name = str(clocking[0].get("reset_name") or rst_name)
+
+    by_name = {}
+    if isinstance(top_signals, list):
+        for sig in top_signals:
+            if not isinstance(sig, dict):
+                continue
+            name = str(sig.get("name", "")).strip()
+            if name:
+                by_name[name] = sig
+
+    def _sig(name: str, direction: str, width_expr: str = "1", semantics: str = "") -> Dict[str, Any]:
+        return {"name": name, "direction": direction, "width_expr": width_expr, "semantics": semantics}
+
+    node_style = _child_style_from_node_meta(node_meta)
+    signals: List[Dict[str, Any]] = []
+    if node_style != "combinational":
+        signals.append(_sig(clk_name, "INPUT", "1", "clock"))
+        if rst_name:
+            signals.append(_sig(rst_name, "INPUT", "1", "reset"))
+
+    lowered = node_id.lower()
+    if "counter" in lowered:
+        signals.append(_sig("count", "OUTPUT", _width_from_top_signal(by_name, "count_dbg", "8"), "count value"))
+    elif "duty" in lowered and "reg" in lowered:
+        wr_data_w = _width_from_top_signal(by_name, "wr_data", "8")
+        signals.extend(
+            [
+                _sig("wr_en", "INPUT", "1", "write enable"),
+                _sig("wr_data", "INPUT", wr_data_w, "write data"),
+                _sig("duty", "OUTPUT", wr_data_w, "duty value"),
+            ]
+        )
+    elif "compare" in lowered:
+        cmp_w = _width_from_top_signal(by_name, "count_dbg", _width_from_top_signal(by_name, "duty_dbg", "8"))
+        signals.extend(
+            [
+                _sig("count", "INPUT", cmp_w, "count input"),
+                _sig("duty", "INPUT", cmp_w, "duty input"),
+                _sig("pwm_out", "OUTPUT", "1", "compare output"),
+            ]
+        )
+    return signals
+
+
+def _build_autogenerated_child_checklist(top_checklist: Dict[str, Any], node_id: str) -> Dict[str, Any]:
+    checklist = build_empty_checklist()
+    checklist["module_name"] = node_id
+    node_meta = _node_meta_from_top_checklist(top_checklist, node_id)
+    node_desc = str(node_meta.get("description", "")).strip() if isinstance(node_meta, dict) else ""
+    node_type = str(node_meta.get("node_type", "")).strip() if isinstance(node_meta, dict) else ""
+    node_style = _child_style_from_node_meta(node_meta)
+
+    top_l1 = top_checklist.get("L1", {}) if isinstance(top_checklist, dict) else {}
+    top_l2 = top_checklist.get("L2", {}) if isinstance(top_checklist, dict) else {}
+    top_l3 = top_checklist.get("L3", {}) if isinstance(top_checklist, dict) else {}
+    top_l4 = top_checklist.get("L4", {}) if isinstance(top_checklist, dict) else {}
+    top_l5 = top_checklist.get("L5", {}) if isinstance(top_checklist, dict) else {}
+
+    role_summary = node_desc or f"Auto-generated child module scaffold for {node_id}."
+    key_rule = f"Implements node '{node_id}' ({node_type or 'child block'}) within the top-level architecture."
+    if node_style == "combinational":
+        key_rules = [
+            key_rule,
+            "Combinational-only contract: no edge-triggered state or internal cycle-to-cycle storage.",
+        ]
+        reset_semantics = "none (combinational module)"
+        performance_intent = "combinational evaluation each cycle from current inputs"
+    else:
+        key_rules = [key_rule]
+        reset_semantics = str(top_l1.get("reset_semantics", "")).strip() or "reset to deterministic safe state"
+        performance_intent = str(top_l1.get("performance_intent", "")).strip() or "single-cycle operation"
+    checklist["L1"] = {
+        "role_summary": role_summary,
+        "key_rules": key_rules,
+        "performance_intent": performance_intent,
+        "reset_semantics": reset_semantics,
+        "corner_cases": [f"integration of {node_id} with top-level wiring"],
+        "open_questions": [],
+    }
+
+    signals = _infer_child_signals_from_connections(top_checklist, node_id)
+    if not signals:
+        signals = _infer_child_signals_fallback(top_checklist, node_id, node_meta)
+    checklist["L2"] = {
+        # Keep at least one clocking entry to satisfy L2 schema requirements.
+        # Combinational behavior is enforced via module_contract/style instead.
+        "clocking": top_l2.get("clocking", []),
+        "signals": signals,
+        "handshake_semantics": top_l2.get("handshake_semantics", []),
+        "transaction_unit": (
+            "combinational evaluation"
+            if node_style == "combinational"
+            else (str(top_l2.get("transaction_unit", "")).strip() or "one update per clock edge")
+        ),
+        "configuration_parameters": top_l2.get("configuration_parameters", []),
+    }
+
+    checklist["L3"] = {
+        "test_goals": [f"Lint/compile smoke for child module {node_id}."],
+        "oracle_strategy": "basic structural/behavioral checks",
+        "stimulus_strategy": "directed smoke checks",
+        "pass_fail_criteria": [f"{node_id} compiles and matches its described role."],
+        "coverage_targets": top_l3.get("coverage_targets", []),
+        "reset_constraints": top_l3.get("reset_constraints", {"min_cycles_after_reset": 0}),
+        "scenarios": [],
+    }
+
+    checklist["L4"] = {
+        "block_diagram": [
+            {
+                "node_id": node_id,
+                "description": role_summary,
+                "node_type": node_type or "module",
+                "interface_refs": node_meta.get("interface_refs", []) if isinstance(node_meta, dict) else [],
+                "uses_standard_component": False,
+                "notes": node_meta.get("notes", "") if isinstance(node_meta, dict) else "",
+            }
+        ],
+        "dependencies": [],
+        "connections": [],
+        "clock_domains": top_l4.get("clock_domains", []),
+        "resource_strategy": str(top_l4.get("resource_strategy", "")).strip() or "minimal child resource implementation",
+        "latency_budget": str(top_l4.get("latency_budget", "")).strip() or "single-cycle",
+        "assertion_plan": top_l4.get("assertion_plan", {"sva": [], "scoreboard_assertions": []}),
+    }
+
+    checklist["L5"] = {
+        "required_artifacts": top_l5.get("required_artifacts", []),
+        "acceptance_metrics": top_l5.get("acceptance_metrics", []),
+        "exclusions": top_l5.get("exclusions", []),
+        "synthesis_target": top_l5.get("synthesis_target", "fpga_generic"),
+    }
+    return checklist
+
+
 def _require_gateway() -> object:
     model_override = os.getenv("SPEC_HELPER_MODEL", "").strip() or None
     gateway = init_llm_gateway(model_override=model_override)
@@ -1147,6 +1448,7 @@ def _collect_multi_specs(
 
     spec_id = uuid4()
     last_checklist: Dict[str, Any] = {}
+    top_checklist: Dict[str, Any] | None = None
     for module_name, module_text in modules:
         if interactive:
             print(f"\nProcessing module '{module_name}'...", flush=True)
@@ -1172,9 +1474,45 @@ def _collect_multi_specs(
             spec_id=spec_id,
             filename_suffix=suffix,
         )
+        if module_name == top_module:
+            top_checklist = checklist
         last_checklist = checklist
 
-    _write_lock(module_names, top_module, spec_id)
+    if top_checklist is None:
+        raise RuntimeError(f"Top module '{top_module}' section was not processed.")
+    canonical_modules = _canonical_modules_from_top_checklist(top_checklist, top_module)
+    declared_modules = _ordered_unique_names(module_names)
+    missing_modules = [name for name in canonical_modules if name not in declared_modules]
+    extra_modules = [name for name in declared_modules if name not in canonical_modules]
+    if extra_modules:
+        raise RuntimeError(
+            "Spec/module mismatch between Module blocks and L4.block_diagram non-standard nodes; "
+            f"extra Module section(s): {', '.join(extra_modules)}. "
+            "Remove extra Module sections or add corresponding L4.block_diagram nodes."
+        )
+
+    if missing_modules:
+        for module_name in missing_modules:
+            scaffold_checklist = _build_autogenerated_child_checklist(top_checklist, module_name)
+            module_spec_text = (
+                f"Module: {module_name}\n"
+                "Title: Auto-generated child module scaffold\n\n"
+                f"L1\nRole summary: {scaffold_checklist['L1']['role_summary']}\n"
+            )
+            module_spec_path = _module_spec_path(spec_path, module_name)
+            module_spec_path.write_text(module_spec_text.strip() + "\n")
+            suffix = "" if module_name == top_module else f"_{module_name}"
+            _write_artifacts(
+                module_spec_text,
+                scaffold_checklist,
+                module_spec_path,
+                module_name=module_name,
+                spec_id=spec_id,
+                filename_suffix=suffix,
+            )
+
+    lock_modules = canonical_modules
+    _write_lock(lock_modules, top_module, spec_id)
     return last_checklist
 
 
@@ -1186,10 +1524,9 @@ def collect_specs_from_text(module_name: str, spec_text: str, interactive: bool 
     spec_path = SPEC_DIR / f"spec_input_{stamp}.txt"
     spec_path.write_text(spec_text.strip() + "\n")
 
-    if not module_name:
-        defaults_text, modules = _split_spec_modules(spec_text)
-        if modules:
-            return _collect_multi_specs(gateway, spec_text, spec_path, interactive)
+    defaults_text, modules = _split_spec_modules(spec_text)
+    if modules:
+        return _collect_multi_specs(gateway, spec_text, spec_path, interactive)
 
     if module_name:
         spec_module = _extract_module_name(spec_text)
@@ -1212,6 +1549,7 @@ def collect_specs_from_text(module_name: str, spec_text: str, interactive: bool 
         interactive=interactive,
         spec_path=spec_path,
     )
+    _ensure_single_module_contract(checklist, checklist.get("module_name", module_name or "demo_module"))
     spec_id = _write_artifacts(spec_text, checklist, spec_path, module_name=checklist.get("module_name"))
     module_value = checklist.get("module_name", "demo_module")
     _write_lock([_sanitize_name(str(module_value))], _sanitize_name(str(module_value)), spec_id)
@@ -1233,8 +1571,20 @@ def collect_specs() -> None:
             print("\nAborted.")
             return
         top_module = _extract_top_module(spec_text) or modules[0][0]
+        lock_modules = [name for name, _ in modules]
+        lock_path = SPEC_DIR / "lock.json"
+        if lock_path.exists():
+            try:
+                lock_payload = json.loads(lock_path.read_text())
+                values = lock_payload.get("modules")
+                if isinstance(values, list):
+                    parsed = _ordered_unique_names([str(v) for v in values])
+                    if parsed:
+                        lock_modules = parsed
+            except Exception:
+                pass
         print(
-            f"\nSpecs locked for modules {', '.join(name for name, _ in modules)} "
+            f"\nSpecs locked for modules {', '.join(lock_modules)} "
             f"(top: {top_module}) under {SPEC_DIR}/"
         )
         return
@@ -1251,6 +1601,7 @@ def collect_specs() -> None:
     except KeyboardInterrupt:
         print("\nAborted.")
         return
+    _ensure_single_module_contract(checklist, checklist.get("module_name", "demo_module"))
     spec_id = _write_artifacts(spec_text, checklist, spec_path, module_name=checklist.get("module_name"))
     module_name = checklist.get("module_name", "demo_module")
     _write_lock([_sanitize_name(str(module_name))], _sanitize_name(str(module_name)), spec_id)

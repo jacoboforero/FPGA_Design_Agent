@@ -84,3 +84,83 @@ def test_lint_worker_errors_fail(tmp_path, monkeypatch):
     monkeypatch.setattr("workers.lint.worker.subprocess.run", fake_run)
     result = worker.handle_task(make_task(rtl))
     assert result.status is TaskStatus.FAILURE
+
+
+def test_lint_worker_moddup_warning_fails_by_default(tmp_path, monkeypatch):
+    worker = LintWorker(connection_params=None, stop_event=None)
+    worker.verilator = "verilator"
+    rtl = tmp_path / "demo.sv"
+    rtl.write_text("module demo; endmodule\n")
+
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout="",
+            stderr="%Warning-MODDUP: demo.sv:1:1: Duplicate declaration of module: 'demo'\n",
+        )
+
+    monkeypatch.setattr("workers.lint.worker.subprocess.run", fake_run)
+    result = worker.handle_task(make_task(rtl))
+    assert result.status is TaskStatus.FAILURE
+    assert "MODDUP" in result.log_output
+
+
+def test_lint_worker_semantic_fail_for_combinational_edge_always(tmp_path, monkeypatch):
+    monkeypatch.setenv("RTL_LINT_SEMANTIC", "1")
+    monkeypatch.setenv("RTL_LINT_SEMANTIC_STRICT", "1")
+    worker = LintWorker(connection_params=None, stop_event=None)
+    worker.verilator = "verilator"
+    rtl = tmp_path / "cmp.sv"
+    rtl.write_text(
+        """module cmp(input clk, input [7:0] a, input [7:0] b, output reg y);
+always @(posedge clk) begin
+  y <= (a < b);
+end
+endmodule
+"""
+    )
+
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("workers.lint.worker.subprocess.run", fake_run)
+    task = TaskMessage(
+        priority=TaskPriority.MEDIUM,
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.LINTER,
+        context={"rtl_path": str(rtl), "module_contract": {"style": "combinational", "forbid_edge_always": True}},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "RLSEM001" in result.log_output
+
+
+def test_lint_worker_semantic_warn_in_non_strict_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("RTL_LINT_SEMANTIC", "1")
+    monkeypatch.setenv("RTL_LINT_SEMANTIC_STRICT", "0")
+    worker = LintWorker(connection_params=None, stop_event=None)
+    worker.verilator = "verilator"
+    rtl = tmp_path / "cmp.sv"
+    rtl.write_text(
+        """module cmp(input clk, input [7:0] a, input [7:0] b, output reg y);
+always @(posedge clk) begin
+  y <= (a < b);
+end
+endmodule
+"""
+    )
+
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("workers.lint.worker.subprocess.run", fake_run)
+    task = TaskMessage(
+        priority=TaskPriority.MEDIUM,
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.LINTER,
+        context={"rtl_path": str(rtl), "module_contract": {"style": "combinational", "forbid_edge_always": True}},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert "[rtl_semantic] WARN" in result.log_output
