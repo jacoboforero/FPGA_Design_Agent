@@ -163,8 +163,23 @@ def run_full(args: argparse.Namespace) -> None:
     run_name = args.run_name or _default_run_name("cli_full")
     _purge_task_memory(REPO_ROOT / "artifacts" / "task_memory")
     configure_observability(run_name=run_name, default_tags=["cli", "full"])
-    # 1) Collect specs interactively
-    spec_flow.collect_specs()
+    
+    # 1) Collect specs
+    if args.spec_file:
+        # Load spec from file instead of interactive collection
+        spec_path = Path(args.spec_file)
+        if not spec_path.is_absolute():
+            spec_path = REPO_ROOT / spec_path
+        if not spec_path.exists():
+            raise FileNotFoundError(f"Spec file not found: {spec_path}")
+        spec_text = spec_path.read_text()
+        _print_section("Loading Spec from File")
+        print(f"Loaded spec from: {spec_path}")
+        # Use non-interactive mode to process the spec
+        spec_flow.collect_specs_from_text("", spec_text, interactive=False)
+    else:
+        # Interactive spec collection
+        spec_flow.collect_specs()
 
     # 2) Plan
     _print_section("Planning")
@@ -217,6 +232,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Hardware agent system CLI")
     parser.add_argument("--timeout", type=float, default=0.0, help="Pipeline timeout in seconds (0 disables)")
     parser.add_argument("--run-name", help="Optional run name for observability/AgentOps")
+    parser.add_argument("--spec-file", help="Path to spec file (skips interactive spec collection)")
+    parser.add_argument("--problem", help="VerilogEval problem ID to run (e.g., Prob001_zero)")
     return parser
 
 
