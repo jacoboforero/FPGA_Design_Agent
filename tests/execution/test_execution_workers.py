@@ -10,6 +10,7 @@ from agents.debug.worker import DebugWorker
 from agents.implementation.worker import ImplementationWorker
 from agents.reflection.worker import ReflectionWorker
 from agents.testbench.worker import TestbenchWorker
+from core.runtime.config import get_runtime_config, set_runtime_config
 from core.runtime.retry import TaskInputError
 from core.schemas.contracts import AgentType, EntityType, TaskMessage, TaskStatus, WorkerType
 from tests.execution.helpers import FakeGateway, FakeResponse
@@ -101,6 +102,94 @@ def test_implementation_worker_success_sanitizes(tmp_path):
     assert "output reg" in contents
 
 
+def test_implementation_worker_rejects_integration_without_connections(tmp_path):
+    worker = ImplementationWorker(connection_params=None, stop_event=None)
+    worker.gateway = FakeGateway(FakeResponse(content="module demo; endmodule\n"))
+    rtl_path = tmp_path / "demo.sv"
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.IMPLEMENTATION,
+        context={
+            "node_id": "demo",
+            "rtl_path": str(rtl_path),
+            "interface": {"signals": _iface_signals()},
+            "children": ["child_mod"],
+            "child_interfaces": {
+                "child_mod": {
+                    "signals": [
+                        {"name": "clk", "direction": "INPUT", "width": 1},
+                        {"name": "out", "direction": "OUTPUT", "width": 1},
+                    ]
+                }
+            },
+            "connections": [],
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "missing L4.connections" in result.log_output
+
+
+def test_implementation_worker_rejects_unknown_child_connection_port(tmp_path):
+    worker = ImplementationWorker(connection_params=None, stop_event=None)
+    worker.gateway = FakeGateway(FakeResponse(content="module demo; endmodule\n"))
+    rtl_path = tmp_path / "demo.sv"
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.IMPLEMENTATION,
+        context={
+            "node_id": "demo",
+            "rtl_path": str(rtl_path),
+            "interface": {"signals": _iface_signals()},
+            "children": ["child_mod"],
+            "child_interfaces": {
+                "child_mod": {
+                    "signals": [
+                        {"name": "clk", "direction": "INPUT", "width": 1},
+                        {"name": "out", "direction": "OUTPUT", "width": 1},
+                    ]
+                }
+            },
+            "connections": [
+                {
+                    "src": {"node_id": "child_mod", "port": "missing"},
+                    "dst": {"node_id": "demo", "port": "out"},
+                }
+            ],
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "is not declared in child interface" in result.log_output
+
+
+def test_implementation_worker_strips_extra_module_definitions(tmp_path):
+    worker = ImplementationWorker(connection_params=None, stop_event=None)
+    worker.gateway = FakeGateway(
+        FakeResponse(
+            content=(
+                "module helper_child(input logic a, output logic y);\n"
+                "assign y = a;\n"
+                "endmodule\n\n"
+                "module top_mod(input logic clk, output logic out);\n"
+                "always_ff @(posedge clk) out <= 1'b0;\n"
+                "endmodule\n"
+            )
+        )
+    )
+    rtl_path = tmp_path / "top_mod.sv"
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.IMPLEMENTATION,
+        context={"node_id": "top_mod", "rtl_path": str(rtl_path), "interface": {"signals": _iface_signals()}},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    contents = rtl_path.read_text()
+    assert "module helper_child" not in contents
+    assert "module top_mod" in contents
+
+
 def test_testbench_worker_missing_interface(tmp_path):
     worker = TestbenchWorker(connection_params=None, stop_event=None)
     task = TaskMessage(
@@ -127,6 +216,29 @@ def test_testbench_worker_no_gateway(tmp_path):
     result = worker.handle_task(task)
     assert result.status is TaskStatus.FAILURE
     assert "LLM gateway unavailable" in result.log_output
+
+
+def test_testbench_worker_child_smoke_mode_does_not_require_gateway(tmp_path):
+    worker = TestbenchWorker(connection_params=None, stop_event=None)
+    worker.gateway = None
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.TESTBENCH,
+        context={
+            "node_id": "child_mod",
+            "top_module": "top_mod",
+            "rtl_path": str(tmp_path / "child_mod.sv"),
+            "interface": {"signals": _iface_signals()},
+            "verification": {"test_goals": ["Lint/compile smoke for child module child_mod."]},
+            "clocking": [{"clock_name": "clk", "reset_name": "rst_n", "clock_polarity": "POSEDGE"}],
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert "Deterministic smoke TB generation" in result.log_output
+    contents = Path(result.artifacts_path).read_text()
+    assert "module tb_child_mod;" in contents
+    assert "$finish(0);" in contents
 
 
 def test_testbench_worker_empty_response(tmp_path):
@@ -440,7 +552,9 @@ def test_tb_lint_worker_delay_semantic_ignores_comment_tokens_and_allows_two_del
 
 
 def test_tb_lint_worker_semantic_can_be_disabled(tmp_path, monkeypatch):
-    monkeypatch.setenv("TB_LINT_SEMANTIC", "0")
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.lint.tb_semantic_enabled = False
+    set_runtime_config(cfg)
     worker = TestbenchLintWorker(connection_params=None, stop_event=None)
     worker.iverilog = "iverilog"
     rtl_path = tmp_path / "demo.sv"
@@ -818,9 +932,9 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
             return resp
 
     worker = DebugWorker(connection_params=None, stop_event=None)
-    monkeypatch.setenv("DEBUG_MAX_ATTEMPTS", "3")
-    monkeypatch.setenv("IVERILOG_PATH", "iverilog")
-    monkeypatch.setenv("VERILATOR_PATH", "verilator")
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.debug.max_attempts = 3
+    set_runtime_config(cfg)
 
     def fake_run(cmd, timeout_s):
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -867,9 +981,6 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
 
 
 def test_debug_worker_success(sandbox, monkeypatch):
-    monkeypatch.setenv("IVERILOG_PATH", "iverilog")
-    monkeypatch.setenv("VERILATOR_PATH", "verilator")
-
     def fake_run(cmd, timeout_s):
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -914,9 +1025,9 @@ def test_debug_worker_success(sandbox, monkeypatch):
 
 
 def test_debug_worker_local_validation_failure(sandbox, monkeypatch):
-    monkeypatch.setenv("DEBUG_MAX_ATTEMPTS", "1")
-    monkeypatch.setenv("IVERILOG_PATH", "iverilog")
-    monkeypatch.setenv("VERILATOR_PATH", "verilator")
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.debug.max_attempts = 1
+    set_runtime_config(cfg)
     monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
 
     def fake_run(cmd, timeout_s):
@@ -962,7 +1073,9 @@ def test_debug_worker_local_validation_failure(sandbox, monkeypatch):
 
 
 def test_debug_worker_noop_patch_fails(sandbox, monkeypatch):
-    monkeypatch.setenv("DEBUG_MAX_ATTEMPTS", "1")
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.debug.max_attempts = 1
+    set_runtime_config(cfg)
     worker = DebugWorker(connection_params=None, stop_event=None)
     worker.gateway = FakeGateway(
         FakeResponse(
@@ -993,8 +1106,9 @@ def test_debug_worker_noop_patch_fails(sandbox, monkeypatch):
 
 
 def test_debug_worker_local_validation_fails_on_semantic_lint(sandbox, monkeypatch):
-    monkeypatch.setenv("DEBUG_MAX_ATTEMPTS", "1")
-    monkeypatch.setenv("VERILATOR_PATH", "verilator")
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.debug.max_attempts = 1
+    set_runtime_config(cfg)
     monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
 
     def fake_run(cmd, timeout_s):
@@ -1056,9 +1170,9 @@ def test_debug_worker_local_validation_retry_then_success(sandbox, monkeypatch):
             self.calls += 1
             return resp
 
-    monkeypatch.setenv("DEBUG_MAX_ATTEMPTS", "2")
-    monkeypatch.setenv("IVERILOG_PATH", "iverilog")
-    monkeypatch.setenv("VERILATOR_PATH", "verilator")
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.debug.max_attempts = 2
+    set_runtime_config(cfg)
     monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
 
     calls = {"n": 0}

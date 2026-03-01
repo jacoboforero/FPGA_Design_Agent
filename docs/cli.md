@@ -1,75 +1,46 @@
-# CLI usage
+# CLI
 
-Entrypoint: `apps/cli/cli.py`. The recommended workflow runs it inside the pinned toolchain container.
+## Purpose
+Document the canonical command-line entrypoints and expected run patterns.
 
-## Prereqs
-- Docker + Docker Compose
-- LLM required: set `USE_LLM=1` and provider keys (`OPENAI_API_KEY`/`GROQ_API_KEY`) in `.env`
+## Audience
+Users and maintainers running the system locally or in containers.
 
-## Recommended workflow (containerized)
+## Scope
+Command usage and operational notes. Internal orchestration logic is out of scope.
+
+## Primary Entrypoint
+- `apps/cli/cli.py`
+
+## Recommended Containerized Flow (from repo root)
 ```bash
 make build
 make up
 make deps
 make cli
 ```
-The CLI prompts you to press Enter to open `$EDITOR` so you can paste the initial specification.
-At startup you can also choose to point at an existing spec file; the CLI will copy it into a new `spec_input_*.txt` and then open it in your editor for review/saving. The original file is never modified.
-The container includes Verilator 5.044 and Icarus (`iverilog`/`vvp`) for RTL lint, testbench lint, and simulation.
-By default, Verilator warnings are logged but not treated as failures; set `VERILATOR_STRICT_WARNINGS=1` to fail the lint stage on warnings.
-`make cli` and `make shell` will source `.env` if it exists, and the CLI also loads `.env` at startup.
-`make deps` installs the OpenAI client extra required for LLM-backed agents.
-The container sets `EDITOR=nano`; override by setting `EDITOR` in `.env` if you prefer another editor.
-Inside Docker, `RABBITMQ_URL` must use the service host (`amqp://user:password@rabbitmq:5672/`). `make cli` will auto-fix localhost URLs.
 
-Common helpers:
+## Host Fallback (from repo root)
 ```bash
-make shell
-make test
-make logs
-make down
+PYTHONPATH=. python3 apps/cli/cli.py --timeout 120 --config config/runtime.yaml --preset engineer_fast
 ```
 
-## Devcontainer
-Open the repo in a Dev Container to use the same pinned toolchain automatically. The config uses the `app` service in `infrastructure/docker-compose.yml`.
-
-## Host-only workflow (not recommended)
+## Useful Subcommands
 ```bash
-# Interactive spec -> plan -> run in one command
-PYTHONPATH=. python apps/cli/cli.py --timeout 120 [--run-name my_run]
+PYTHONPATH=. python3 apps/cli/cli.py doctor --preset engineer_fast
+PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark
 ```
 
-Execution output defaults to an LLM-written narrative (`--narrative-mode llm`) that hides internal stage/agent plumbing.
-Use `--narrative-mode deterministic` for no extra LLM narration calls, or `--narrative-mode off` to show raw internal progress logs.
-By default, state-transition lines are suppressed in narrative mode to reduce clutter; set `CLI_NARRATIVE_SHOW_STATE=1` to include them.
-Narrative can use a separate model from generation by setting `NARRATIVE_MODEL` (for OpenAI users, this is useful when `OPENAI_MODEL` is GPT-5 but you want faster narration).
-If `NARRATIVE_MODEL` is unset and `OPENAI_MODEL` starts with `gpt-5`, narration automatically falls back to `NARRATIVE_FALLBACK_MODEL` (default `gpt-4.1-mini`) for responsiveness.
-Use `NARRATIVE_LLM_TIMEOUT_S` to bound narrative latency per card before deterministic fallback.
-Spec completion can also use its own model via `SPEC_HELPER_MODEL`.
-ANSI colors are enabled automatically on TTYs and can be forced with `FORCE_COLOR=1` (or disabled with `CLI_COLOR=0` / `NO_COLOR`).
+## Notes
+- `benchmark` preset is for benchmark command usage, not interactive full flow.
+- Runtime behavior is YAML-driven (`config/runtime.yaml`), while secrets remain env-based.
 
-## Multi-module specs
-You can define multiple modules in one spec by repeating `Module: <name>` blocks. Optionally add `Top: <module>` to mark the top-level; otherwise the first module is used. Text before the first `Module:` line is treated as shared defaults and is prepended to each module section.
+## Source of Truth
+- `/home/jacobo/school/FPGA_Design_Agent/apps/cli/cli.py`
+- `/home/jacobo/school/FPGA_Design_Agent/apps/cli/doctor.py`
+- `/home/jacobo/school/FPGA_Design_Agent/apps/cli/run_verilog_eval.py`
 
-Only the top module runs TB/TB lint/SIM/acceptance; submodules stop after lint.
-
-## Typical flows
-- **With LLM + tools (host-only fallback):**
-  ```bash
-  export USE_LLM=1 OPENAI_API_KEY=...
-  PYTHONPATH=. python apps/cli/cli.py --timeout 120 --run-name my_llm_run
-  ```
-- **Suite smoke (increasing complexity, non-interactive specs):**
-  ```bash
-  PYTHONPATH=. python apps/cli/run_suite.py --timeout 90
-  # Each case auto-sets run names suite_<case> for observability/cost logs.
-  ```
-
-Artifacts end up in `artifacts/generated/` (design context + RTL/TB) and `artifacts/task_memory/<node>/<stage>/` (logs, artifact paths). The CLI auto-purges `artifacts/task_memory/` at the start of each run, but stage folders are mirrored into `artifacts/observability/runs/<run_name>/<run_id>/task_memory/` so you can inspect failures (and debug prompts/LLM outputs) across runs. Per-run event logs are written to `artifacts/observability/<run_name>_events.jsonl`. Increase `--timeout` for slower sims or LLM calls.
-By default, the CLI also purges broker work queues at run start (`CLI_PURGE_QUEUES=1`) to prevent stale messages from previous interrupted runs from blocking planning/execution. Planner wait is bounded by `CLI_PLANNER_TIMEOUT_S` when global `--timeout` is disabled.
-
-Note: Coverage reports are not generated by the sim worker yet. Acceptance gating temporarily treats missing coverage artifacts/metrics as warnings when simulation passes. This will be tightened once coverage generation is implemented.
-
-Note: The testbench generator applies a lightweight sanitizer to enforce Verilog-2001 compatibility and avoid common race conditions (e.g., checks delayed after posedge). If a generated TB violates those invariants, it is auto-corrected.
-
-Observability/cost tracking with AgentOps is documented in `docs/observability.md`.
+## Related Docs
+- [workflows/interactive-run.md](./workflows/interactive-run.md)
+- [workflows/benchmark-run.md](./workflows/benchmark-run.md)
+- [reference/runtime-config.md](./reference/runtime-config.md)

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -19,8 +18,18 @@ from agents.common.base import AgentWorkerBase
 from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, init_llm_gateway
 from agents.common.tb_sanitizer import sanitize_testbench
 from workers.lint.worker import _format_semantic_issues, _run_rtl_semantic_lint
+from workers.tb_lint.worker import (
+    _format_semantic_failure_log as _format_tb_semantic_failure_log,
+    _format_semantic_issues as _format_tb_semantic_issues,
+    _normalize_clocking_context as _normalize_tb_clocking_context,
+    _run_tb_semantic_lint,
+)
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import TaskInputError
+from core.runtime.config import get_runtime_config
+
+_VERILATOR_QUIET_UNSUPPORTED_RE = re.compile(r"invalid option:\s*--quiet", re.IGNORECASE)
+_SIM_FAIL_MARKER_RE = re.compile(r"\b(FAIL|FAILURE|ERROR|FATAL|ASSERT|ASSERTION)\b", re.IGNORECASE)
 
 
 class DebugWorker(AgentWorkerBase):
@@ -92,7 +101,7 @@ class DebugWorker(AgentWorkerBase):
             "- If stuck=true or a failure signature repeats, your patch MUST change strategy materially and explain the delta in summary.\n"
             "- If waveform dumping uses a cycle window, do NOT treat DUMP_START=0 as \"disabled\"; some benches accidentally $dumpoff forever.\n"
             "- If the context includes child modules and connection wiring, preserve the integration structure; only fix wiring or glue logic as needed.\n"
-            "- Your patch is accepted only if local deterministic validation passes (tb_lint for TB changes; lint for RTL changes).\n"
+            "- Your patch is accepted only if local deterministic validation passes (tb_lint for TB changes; lint for RTL changes; sim check for smoke-child sim failures).\n"
         )
         user = (
             f"Node: {node_id}\n"
@@ -118,9 +127,11 @@ class DebugWorker(AgentWorkerBase):
             Message(role=MessageRole.SYSTEM, content=system),
             Message(role=MessageRole.USER, content=user),
         ]
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS_DEBUG", "10000"))
-        temperature = float(os.getenv("LLM_TEMPERATURE_DEBUG", "0.2"))
-        cfg = GenerationConfig(temperature=temperature, max_tokens=max_tokens)
+        llm_cfg = get_runtime_config().llm
+        max_tokens = int(llm_cfg.max_tokens_debug)
+        temperature = float(llm_cfg.temperature_debug)
+        top_p = llm_cfg.top_p
+        cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
 
         stage_dir = Path("artifacts/task_memory") / node_id / _stage_dir("debug", sim_attempt)
         try:
@@ -132,7 +143,7 @@ class DebugWorker(AgentWorkerBase):
         except Exception:
             pass
 
-        max_attempts = int(os.getenv("DEBUG_MAX_ATTEMPTS", "3"))
+        max_attempts = int(get_runtime_config().debug.max_attempts)
         last_error: str | None = None
         for llm_attempt in range(1, max_attempts + 1):
             try:
@@ -441,12 +452,19 @@ def _run_local_validation(
 
     need_rtl_lint = ("rtl" in touched_files) or (debug_reason == "rtl_lint")
     need_tb_lint = ("tb" in touched_files) or (debug_reason == "tb_lint")
+    need_sim = (
+        debug_reason == "sim"
+        and _is_smoke_child_context(ctx)
+        and (("rtl" in touched_files) or ("tb" in touched_files))
+    )
     rtl_paths = _resolve_rtl_paths(ctx, rtl_path)
 
     if need_rtl_lint:
         checks.append(_run_rtl_lint_check(ctx=ctx, rtl_paths=rtl_paths, rtl_path=rtl_path))
     if need_tb_lint:
-        checks.append(_run_tb_lint_check(rtl_paths, tb_path))
+        checks.append(_run_tb_lint_check(ctx=ctx, rtl_paths=rtl_paths, tb_path=tb_path))
+    if need_sim:
+        checks.append(_run_sim_check(rtl_paths, tb_path))
 
     if not checks:
         return {
@@ -466,6 +484,22 @@ def _run_local_validation(
             details_lines.append(output)
     details = "\n".join(details_lines).strip()
     return {"ok": ok, "summary": summary, "details": details, "checks": checks}
+
+
+def _is_smoke_child_context(ctx: dict) -> bool:
+    if not isinstance(ctx, dict):
+        return False
+    node_id = str(ctx.get("node_id") or "").strip()
+    top_module = str(ctx.get("top_module") or "").strip()
+    if not node_id or not top_module or node_id == top_module:
+        return False
+    verification = ctx.get("verification")
+    if not isinstance(verification, dict):
+        return False
+    goals = verification.get("test_goals")
+    if not isinstance(goals, list):
+        return False
+    return any("smoke" in str(goal or "").strip().lower() for goal in goals)
 
 
 def _resolve_rtl_paths(ctx: dict, rtl_path: Path) -> list[str]:
@@ -489,22 +523,28 @@ def _run_rtl_lint_check(*, ctx: dict, rtl_paths: list[str], rtl_path: Path) -> d
     if missing:
         return {"name": name, "ok": False, "output": f"RTL missing for local lint: {missing}"}
 
-    verilator = os.getenv("VERILATOR_PATH") or shutil.which("verilator")
+    runtime_cfg = get_runtime_config()
+    lint_cfg = runtime_cfg.lint
+    verilator = runtime_cfg.tools.verilator_path or shutil.which("verilator")
     if not verilator:
         return {"name": name, "ok": False, "output": "Verilator not found for local debug validation."}
 
     cmd = [verilator, "--lint-only", "--quiet", "--sv", *rtl_paths]
-    timeout_s = float(os.getenv("DEBUG_LOCAL_LINT_TIMEOUT_S", "12"))
+    timeout_s = float(runtime_cfg.debug.local_lint_timeout_s)
     try:
         completed = _run_subprocess(cmd, timeout_s)
+        output = _format_tool_output(completed.stdout, completed.stderr)
+        if completed.returncode != 0 and _VERILATOR_QUIET_UNSUPPORTED_RE.search(output):
+            fallback = [verilator, "--lint-only", "--sv", *rtl_paths]
+            completed = _run_subprocess(fallback, timeout_s)
+            fallback_output = _format_tool_output(completed.stdout, completed.stderr)
+            output = f"Verilator '--quiet' unsupported; retried without it.\n{fallback_output}".strip()
     except subprocess.TimeoutExpired as exc:
         return {"name": name, "ok": False, "output": f"Verilator local validation timed out: {exc}"}
     except Exception as exc:  # noqa: BLE001
         return {"name": name, "ok": False, "output": f"Verilator local validation failed: {exc}"}
-
-    output = _format_tool_output(completed.stdout, completed.stderr)
-    strict_warnings = os.getenv("VERILATOR_STRICT_WARNINGS", "0") == "1"
-    fail_moddup = os.getenv("RTL_LINT_FAIL_MODDUP", "1") != "0"
+    strict_warnings = lint_cfg.verilator_strict_warnings
+    fail_moddup = lint_cfg.rtl_fail_moddup
     has_moddup = "MODDUP" in output.upper()
     has_error = ("%Error" in output) or ("%Fatal" in output)
     failed = (completed.returncode != 0 and (strict_warnings or has_error)) or (has_moddup and fail_moddup)
@@ -515,23 +555,32 @@ def _run_rtl_lint_check(*, ctx: dict, rtl_paths: list[str], rtl_path: Path) -> d
             "output": output or "Verilator local validation failed.",
         }
 
-    semantic_enabled = os.getenv("RTL_LINT_SEMANTIC", "1") != "0"
-    semantic_strict = os.getenv("RTL_LINT_SEMANTIC_STRICT", "1") != "0"
+    semantic_enabled = lint_cfg.rtl_semantic_enabled
+    semantic_strict = lint_cfg.rtl_semantic_strict
     semantic_issues: list[str] = []
+    blocking_issues: list[str] = []
+    advisory_issues: list[str] = []
     if semantic_enabled:
         semantic_issues = _run_rtl_semantic_lint(
             rtl_text=rtl_path.read_text(),
             module_contract=ctx.get("module_contract") if isinstance(ctx, dict) else None,
         )
-    if semantic_issues and semantic_strict:
-        semantic_log = "[rtl_semantic] FAIL\n" + _format_semantic_issues(semantic_issues)
+        for issue in semantic_issues:
+            code = issue.split(" ", 1)[0]
+            if code == "RLSEM010":
+                advisory_issues.append(issue)
+            else:
+                blocking_issues.append(issue)
+    if blocking_issues and semantic_strict:
+        semantic_log = "[rtl_semantic] FAIL\n" + _format_semantic_issues(blocking_issues + advisory_issues)
         if output:
             semantic_log += f"\n{output}"
         return {"name": name, "ok": False, "output": semantic_log}
 
     merged_output = output or "Verilator local validation passed."
-    if semantic_issues:
-        merged_output = f"{merged_output}\n[rtl_semantic] WARN\n{_format_semantic_issues(semantic_issues)}".strip()
+    warn_issues = blocking_issues + advisory_issues
+    if warn_issues:
+        merged_output = f"{merged_output}\n[rtl_semantic] WARN\n{_format_semantic_issues(warn_issues)}".strip()
     elif semantic_enabled:
         merged_output = f"{merged_output}\n[rtl_semantic] PASS".strip()
 
@@ -542,7 +591,7 @@ def _run_rtl_lint_check(*, ctx: dict, rtl_paths: list[str], rtl_path: Path) -> d
     }
 
 
-def _run_tb_lint_check(rtl_paths: list[str], tb_path: Path) -> dict:
+def _run_tb_lint_check(*, ctx: dict, rtl_paths: list[str], tb_path: Path) -> dict:
     name = "tb_lint"
     missing = [path for path in rtl_paths if not Path(path).exists()]
     if missing:
@@ -550,12 +599,13 @@ def _run_tb_lint_check(rtl_paths: list[str], tb_path: Path) -> dict:
     if not tb_path.exists():
         return {"name": name, "ok": False, "output": f"Testbench missing for local TB lint: {tb_path}"}
 
-    iverilog = os.getenv("IVERILOG_PATH") or shutil.which("iverilog")
+    runtime_cfg = get_runtime_config()
+    iverilog = runtime_cfg.tools.iverilog_path or shutil.which("iverilog")
     if not iverilog:
         return {"name": name, "ok": False, "output": "Icarus (iverilog) not found for local debug validation."}
 
     cmd = [iverilog, "-g2012", "-g2005-sv", "-tnull", *rtl_paths, str(tb_path)]
-    timeout_s = float(os.getenv("DEBUG_LOCAL_LINT_TIMEOUT_S", "12"))
+    timeout_s = float(runtime_cfg.debug.local_lint_timeout_s)
     try:
         completed = _run_subprocess(cmd, timeout_s)
     except subprocess.TimeoutExpired as exc:
@@ -564,10 +614,123 @@ def _run_tb_lint_check(rtl_paths: list[str], tb_path: Path) -> dict:
         return {"name": name, "ok": False, "output": f"TB local validation failed: {exc}"}
 
     output = _format_tool_output(completed.stdout, completed.stderr)
+    if completed.returncode != 0:
+        return {
+            "name": name,
+            "ok": False,
+            "output": output or "TB local validation failed.",
+        }
+
+    lint_cfg = get_runtime_config().lint
+    semantic_enabled = lint_cfg.tb_semantic_enabled
+    semantic_strict = lint_cfg.tb_semantic_strict
+    semantic_issues: list[str] = []
+    if semantic_enabled:
+        iface = ctx.get("interface") if isinstance(ctx.get("interface"), dict) else {}
+        iface_signals = iface.get("signals") if isinstance(iface, dict) else []
+        signal_names: list[str] = []
+        if isinstance(iface_signals, list):
+            for item in iface_signals:
+                if not isinstance(item, dict):
+                    continue
+                name_field = item.get("name")
+                if name_field:
+                    signal_names.append(str(name_field))
+        clocking_raw = ctx.get("clocking")
+        clocking = _normalize_tb_clocking_context(clocking_raw, signal_names)
+        clock_name = str(clocking.get("clock_name", "clk") or "clk")
+        reset_name_raw = clocking.get("reset_name")
+        reset_name = str(reset_name_raw).strip() if reset_name_raw else None
+        reset_polarity = str(clocking.get("reset_polarity", "ACTIVE_LOW")).upper()
+        reset_active_low = reset_polarity in {"ACTIVE_LOW", "LOW", "0"}
+        semantic_issues = _run_tb_semantic_lint(
+            tb_text=tb_path.read_text(),
+            clock_name=clock_name,
+            reset_name=reset_name,
+            reset_active_low=reset_active_low,
+            signal_names=signal_names,
+        )
+        if semantic_issues and semantic_strict:
+            compile_log = (completed.stdout or completed.stderr or "").strip()
+            return {
+                "name": name,
+                "ok": False,
+                "output": _format_tb_semantic_failure_log(semantic_issues, compile_log),
+            }
+
+    merged_output = output or "TB local validation passed."
+    if semantic_enabled:
+        if semantic_issues:
+            merged_output = (
+                f"{merged_output.rstrip()}\n"
+                "[tb_semantic] WARN\n"
+                f"{_format_tb_semantic_issues(semantic_issues)}"
+            ).strip()
+        else:
+            merged_output = f"{merged_output.rstrip()}\n[tb_semantic] PASS".strip()
+
     return {
         "name": name,
-        "ok": completed.returncode == 0,
-        "output": output or ("TB local validation passed." if completed.returncode == 0 else "TB local validation failed."),
+        "ok": True,
+        "output": merged_output,
+    }
+
+
+def _run_sim_check(rtl_paths: list[str], tb_path: Path) -> dict:
+    name = "sim"
+    missing = [path for path in rtl_paths if not Path(path).exists()]
+    if missing:
+        return {"name": name, "ok": False, "output": f"RTL missing for local sim validation: {missing}"}
+    if not tb_path.exists():
+        return {"name": name, "ok": False, "output": f"Testbench missing for local sim validation: {tb_path}"}
+
+    runtime_cfg = get_runtime_config()
+    iverilog = runtime_cfg.tools.iverilog_path or shutil.which("iverilog")
+    vvp = runtime_cfg.tools.vvp_path or shutil.which("vvp")
+    if not iverilog or not vvp:
+        return {"name": name, "ok": False, "output": "Icarus (iverilog/vvp) not found for local sim validation."}
+
+    timeout_s = float(runtime_cfg.debug.local_lint_timeout_s)
+    out_path = "/tmp/debug_local_sim.out"
+    build_cmd = [iverilog, "-g2012", "-g2005-sv", "-o", out_path, *rtl_paths, str(tb_path)]
+    try:
+        build = _run_subprocess(build_cmd, timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        return {"name": name, "ok": False, "output": f"Local sim build timed out: {exc}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"name": name, "ok": False, "output": f"Local sim build failed: {exc}"}
+    build_output = _format_tool_output(build.stdout, build.stderr)
+    if build.returncode != 0:
+        return {
+            "name": name,
+            "ok": False,
+            "output": (build_output or "Local sim build failed."),
+        }
+
+    run_cmd = [vvp, out_path]
+    try:
+        run = _run_subprocess(run_cmd, timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        return {"name": name, "ok": False, "output": f"Local sim run timed out: {exc}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"name": name, "ok": False, "output": f"Local sim run failed: {exc}"}
+    run_output = _format_tool_output(run.stdout, run.stderr)
+    marker_fail = bool(_SIM_FAIL_MARKER_RE.search(run_output or ""))
+    ok = run.returncode == 0 and not marker_fail
+    if ok:
+        merged = run_output or "Local sim validation passed."
+        return {"name": name, "ok": True, "output": merged}
+    reason = []
+    if run.returncode != 0:
+        reason.append(f"exit_code={run.returncode}")
+    if marker_fail:
+        reason.append("failure_marker_detected")
+    reason_text = ", ".join(reason) if reason else "unknown_failure"
+    output = run_output or "Local sim validation failed."
+    return {
+        "name": name,
+        "ok": False,
+        "output": f"{output}\n[sim_analysis] {reason_text}".strip(),
     }
 
 
@@ -576,7 +739,7 @@ def _format_tool_output(stdout: str | None, stderr: str | None) -> str:
     if not raw:
         return ""
     lines = raw.splitlines()
-    max_lines = int(os.getenv("DEBUG_LOCAL_LINT_MAX_LINES", "20"))
+    max_lines = int(get_runtime_config().debug.local_lint_max_lines)
     trimmed = lines[:max_lines]
     suffix = "\n... (truncated)" if len(lines) > max_lines else ""
     return "\n".join(trimmed) + suffix

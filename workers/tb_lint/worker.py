@@ -4,7 +4,6 @@ lightweight semantic checks on checker/reset/timing patterns.
 """
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -15,10 +14,9 @@ import pika
 
 from core.schemas.contracts import ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
-from core.runtime.retry import RetryableError, TaskInputError, get_retry_count, next_retry_headers, MAX_RETRIES
-
-TASK_EXCHANGE = "tasks_exchange"
-RESULTS_ROUTING_KEY = "RESULTS"
+from core.runtime.retry import RetryableError, TaskInputError, get_max_retries, get_retry_count, next_retry_headers
+from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE
+from core.runtime.config import get_runtime_config
 
 _PROC_START_RE = re.compile(r"(?im)^\s*(always\s*@\s*\(([^)]*)\)|initial)(?:\s|$)")
 _COMPARE_IF_RE = re.compile(r"if\s*\(([^)]*(?:!==|!=)[^)]*)\)", flags=re.IGNORECASE | re.DOTALL)
@@ -40,7 +38,7 @@ class TestbenchLintWorker(threading.Thread):
         super().__init__(daemon=True)
         self.connection_params = connection_params
         self.stop_event = stop_event
-        self.iverilog = os.getenv("IVERILOG_PATH") or shutil.which("iverilog")
+        self.iverilog = get_runtime_config().tools.iverilog_path or shutil.which("iverilog")
 
     def run(self) -> None:
         with pika.BlockingConnection(self.connection_params) as conn:
@@ -66,7 +64,7 @@ class TestbenchLintWorker(threading.Thread):
                     continue
                 except RetryableError:
                     retry_count = get_retry_count(props)
-                    if retry_count < MAX_RETRIES:
+                    if retry_count < get_max_retries():
                         headers = next_retry_headers(props)
                         ch.basic_publish(
                             exchange=TASK_EXCHANGE,
@@ -86,7 +84,7 @@ class TestbenchLintWorker(threading.Thread):
                         artifacts_path=None,
                         log_output=f"Unhandled testbench lint error: {exc}",
                     )
-                self._publish_result(ch, result)
+                self._publish_result(ch, task, result)
                 ch.basic_ack(method.delivery_tag)
 
     def handle_task(self, task: TaskMessage) -> ResultMessage:
@@ -130,8 +128,9 @@ class TestbenchLintWorker(threading.Thread):
                     artifacts_path=None,
                     log_output=output,
                 )
-            semantic_enabled = os.getenv("TB_LINT_SEMANTIC", "1") != "0"
-            semantic_strict = os.getenv("TB_LINT_SEMANTIC_STRICT", "1") != "0"
+            lint_cfg = get_runtime_config().lint
+            semantic_enabled = lint_cfg.tb_semantic_enabled
+            semantic_strict = lint_cfg.tb_semantic_strict
             semantic_issues: list[str] = []
             if semantic_enabled:
                 iface = task.context.get("interface") if isinstance(task.context.get("interface"), dict) else {}
@@ -200,11 +199,17 @@ class TestbenchLintWorker(threading.Thread):
             log_output=log,
         )
 
-    def _publish_result(self, ch: pika.adapters.blocking_connection.BlockingChannel, result: ResultMessage) -> None:
+    def _publish_result(
+        self,
+        ch: pika.adapters.blocking_connection.BlockingChannel,
+        task: TaskMessage,
+        result: ResultMessage,
+    ) -> None:
+        routed = result.model_copy(update={"run_id": result.run_id or task.run_id})
         ch.basic_publish(
             exchange=TASK_EXCHANGE,
-            routing_key=RESULTS_ROUTING_KEY,
-            body=result.model_dump_json().encode(),
+            routing_key=task.results_routing_key or DEFAULT_RESULTS_ROUTING_KEY,
+            body=routed.model_dump_json().encode(),
             properties=pika.BasicProperties(content_type="application/json"),
         )
 

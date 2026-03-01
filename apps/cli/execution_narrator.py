@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, Optional
 
 from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, init_llm_gateway
 from core.observability.agentops_tracker import get_tracker
+from core.runtime.config import get_runtime_config
 
 
 _STATE_SENTENCE = {
@@ -150,7 +151,7 @@ class ExecutionNarrator:
         self._last_state_by_node: Dict[str, str] = {}
         self._warned_llm_fallback = False
         self._printed_blocks = 0
-        self.show_state_updates = os.getenv("CLI_NARRATIVE_SHOW_STATE", "0").strip() == "1"
+        self.show_state_updates = bool(get_runtime_config().cli.narrative_show_state)
 
         self.gateway = None
         if self.mode == "llm":
@@ -284,14 +285,16 @@ class ExecutionNarrator:
             Message(role=MessageRole.SYSTEM, content=system),
             Message(role=MessageRole.USER, content=user),
         ]
+        llm_cfg = get_runtime_config().llm
         cfg = GenerationConfig(
-            temperature=float(os.getenv("NARRATIVE_TEMPERATURE", "0.5")),
-            max_tokens=int(os.getenv("NARRATIVE_MAX_TOKENS", "220")),
+            temperature=float(llm_cfg.narrative_temperature),
+            top_p=llm_cfg.top_p,
+            max_tokens=int(llm_cfg.narrative_max_tokens),
         )
         provider = str(getattr(self.gateway, "provider", "")).lower()
         if provider in {"openai", "groq"}:
             cfg.provider_specific.setdefault("response_format", {"type": "json_object"})
-        timeout_s = float(os.getenv("NARRATIVE_LLM_TIMEOUT_S", "10"))
+        timeout_s = float(llm_cfg.narrative_timeout_s)
 
         async def _generate() -> Any:
             return await self.gateway.generate(messages=msgs, config=cfg)  # type: ignore[arg-type]
@@ -345,15 +348,16 @@ class ExecutionNarrator:
     def _init_llm_gateway() -> Optional[object]:
         # Keep generation quality high while making progress output responsive.
         # If main model is GPT-5 and no override is provided, default narrator to gpt-4.1-mini.
-        explicit_model = os.getenv("NARRATIVE_MODEL", "").strip()
+        llm_cfg = get_runtime_config().llm
+        explicit_model = str(llm_cfg.narrative_model or "").strip()
         if explicit_model:
             return init_llm_gateway(model_override=explicit_model)
 
-        provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+        provider = str(llm_cfg.provider or "openai").strip().lower()
         if provider == "openai":
-            main_model = os.getenv("OPENAI_MODEL", "").strip().lower()
+            main_model = str(llm_cfg.default_model or "").strip().lower()
             if main_model.startswith("gpt-5"):
-                fast_model = os.getenv("NARRATIVE_FALLBACK_MODEL", "gpt-4.1-mini").strip()
+                fast_model = str(llm_cfg.narrative_fallback_model or "gpt-4.1-mini").strip()
                 return init_llm_gateway(model_override=fast_model)
         return init_llm_gateway()
 

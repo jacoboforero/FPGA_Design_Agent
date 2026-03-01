@@ -1,35 +1,37 @@
-# Testing plan
+# Test Plan
 
-Cover contracts first, then the orchestration flow. Keep fast tests default; gate tool/LLM runs behind opt-in jobs.
+## Purpose
+Describe test strategy, priority checks, and practical commands for routine verification.
 
-## Unit / schema
-- `tests/core/schemas`: enums, Task/Result validation, any agent-specific payloads.
+## Audience
+Contributors validating runtime behavior, broker routing, and schema correctness.
 
-## Integration (broker + workers)
-- Happy path: implementation → lint → testbench → TB lint → simulation → acceptance → DONE; assert states and artifacts/logs exist.
-- Failure: missing file → DLQ, schema mismatch → DLQ, transient tool error → one retry then DLQ.
-- Sim failure: distill → reflect → debug (patch) → re-run verification (bounded retries) → (DONE or FAILED); assert per-attempt logs/insights are persisted.
-- TB lint failure: debug (patch) → retry verification (bounded retries); assert TB lint log + debug outputs exist.
-- Acceptance failure: mark FAILED; assert acceptance log includes missing artifacts/metrics.
-- Timeout: long sim triggers timeout → distill → reflect → debug → FAILED.
-- Ordering: verify orchestrator issues tasks in the defined sequence and marks DONE/FAILED correctly.
+## Scope
+Test planning and command references for local and CI usage.
 
-## Workers
-- RTL lint: Verilator on good/bad fixtures; expect exit code + logs.
-- Testbench lint: iverilog -tnull on good/bad TBs; expect exit code + logs.
-- Acceptance: required artifacts + metrics checks (coverage report/log parsing).
-- Simulation: iverilog/vvp on simple RTL/TB; expect exit code + stdout/stderr captured.
-- Distill: sample sim log/waveform → distilled JSON path.
+## Priority Coverage
+- Schema and contract tests
+- Orchestration state progression and failure handling
+- Worker behavior (lint, tb_lint, sim, acceptance, distill)
+- Infrastructure routing and DLQ behavior
 
-## Agents
-- LLM off: tasks should fail with explicit errors (no fallback artifacts).
-- LLM on (optional job): small prompts per agent; non-empty outputs and interface adherence.
+## Recommended Commands (from repo root)
+```bash
+pytest tests/core/schemas -q
+pytest tests/infrastructure -q
+pytest tests/workers -q
+pytest tests/execution -q
+python3 tests/run_infrastructure_tests.py
+```
 
-## DLQ / retry
-- Malformed task → NACK (requeue=false) → DLQ.
-- Transient tool/LLM error → one retry → DLQ on repeat failure.
-- Interface mismatch → DLQ and no further tasks for that node.
+## CI Guidance
+- Keep fast schema/unit checks in default CI path.
+- Run tool-heavy and benchmark checks in optional jobs.
 
-## CI knobs
-- Default CI: schema + lightweight integration checks.
-- Optional jobs: real Verilator/sim and LLM provider tests when secrets/tooling are available.
+## Source of Truth
+- `/home/jacobo/school/FPGA_Design_Agent/tests/`
+- `/home/jacobo/school/FPGA_Design_Agent/pytest.ini`
+
+## Related Docs
+- [reference/test-commands.md](./reference/test-commands.md)
+- [workflows/failure-repair-loop.md](./workflows/failure-repair-loop.md)

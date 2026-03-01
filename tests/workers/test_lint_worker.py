@@ -5,6 +5,7 @@ import subprocess
 
 from workers.lint.worker import LintWorker
 from core.runtime.retry import TaskInputError
+from core.runtime.config import get_runtime_config, set_runtime_config
 from core.schemas.contracts import TaskMessage, EntityType, WorkerType, TaskPriority, TaskStatus
 
 
@@ -58,7 +59,9 @@ def test_lint_worker_nonfatal_warnings_are_success(tmp_path, monkeypatch):
 
 
 def test_lint_worker_strict_warnings_fail(tmp_path, monkeypatch):
-    monkeypatch.setenv("VERILATOR_STRICT_WARNINGS", "1")
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.lint.verilator_strict_warnings = True
+    set_runtime_config(cfg)
     worker = LintWorker(connection_params=None, stop_event=None)
     worker.verilator = "verilator"
     rtl = tmp_path / "demo.sv"
@@ -106,9 +109,32 @@ def test_lint_worker_moddup_warning_fails_by_default(tmp_path, monkeypatch):
     assert "MODDUP" in result.log_output
 
 
+def test_lint_worker_retries_without_quiet_when_unsupported(tmp_path, monkeypatch):
+    worker = LintWorker(connection_params=None, stop_event=None)
+    worker.verilator = "verilator"
+    rtl = tmp_path / "demo.sv"
+    rtl.write_text("module demo; endmodule\n")
+    calls = []
+
+    def fake_run(cmd, capture_output, text, timeout):
+        calls.append(list(cmd))
+        if "--quiet" in cmd:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="%Error: Invalid option: --quiet\n")
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("workers.lint.worker.subprocess.run", fake_run)
+    result = worker.handle_task(make_task(rtl))
+    assert result.status is TaskStatus.SUCCESS
+    assert any("--quiet" in cmd for cmd in calls)
+    assert any("--quiet" not in cmd for cmd in calls)
+    assert "retried without it" in result.log_output.lower()
+
+
 def test_lint_worker_semantic_fail_for_combinational_edge_always(tmp_path, monkeypatch):
-    monkeypatch.setenv("RTL_LINT_SEMANTIC", "1")
-    monkeypatch.setenv("RTL_LINT_SEMANTIC_STRICT", "1")
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.lint.rtl_semantic_enabled = True
+    cfg.lint.rtl_semantic_strict = True
+    set_runtime_config(cfg)
     worker = LintWorker(connection_params=None, stop_event=None)
     worker.verilator = "verilator"
     rtl = tmp_path / "cmp.sv"
@@ -137,8 +163,10 @@ endmodule
 
 
 def test_lint_worker_semantic_warn_in_non_strict_mode(tmp_path, monkeypatch):
-    monkeypatch.setenv("RTL_LINT_SEMANTIC", "1")
-    monkeypatch.setenv("RTL_LINT_SEMANTIC_STRICT", "0")
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.lint.rtl_semantic_enabled = True
+    cfg.lint.rtl_semantic_strict = False
+    set_runtime_config(cfg)
     worker = LintWorker(connection_params=None, stop_event=None)
     worker.verilator = "verilator"
     rtl = tmp_path / "cmp.sv"

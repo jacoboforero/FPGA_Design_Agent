@@ -19,8 +19,13 @@ class PlannerWorker(AgentWorkerBase):
         ctx = task.context or {}
         spec_dir = Path(ctx.get("spec_dir", "artifacts/task_memory/specs")).resolve()
         out_dir = Path(ctx.get("out_dir", "artifacts/generated")).resolve()
+        execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else None
         try:
-            planner.generate_from_specs(spec_dir=spec_dir, out_dir=out_dir)
+            planner.generate_from_specs(
+                spec_dir=spec_dir,
+                out_dir=out_dir,
+                execution_policy=execution_policy,
+            )
         except Exception as exc:  # noqa: BLE001
             return ResultMessage(
                 task_id=task.task_id,

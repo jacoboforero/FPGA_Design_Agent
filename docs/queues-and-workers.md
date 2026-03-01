@@ -1,28 +1,37 @@
-# Queues & workers
+# Queues and Workers
 
-RabbitMQ is the glue between the orchestrator and every runtime. Keep the routing simple and fail fast to DLQ on bad inputs.
+## Purpose
+Specify queue routing and deterministic worker responsibilities.
+
+## Audience
+Engineers maintaining message routing, worker pools, and broker configuration.
+
+## Scope
+Broker-level and worker-level execution flow.
 
 ## Queues
-- `agent_tasks` — LLM agents (spec-helper, planner, implementation, testbench, reflection, debug)
-- `process_tasks` — deterministic/light work (RTL lint, testbench lint, acceptance, distill, misc tooling)
-- `simulation_tasks` — heavier runs (sim)
-- `results` — all completions land here
-- `dead_letter_queue` — DLX target for rejected messages
+- `agent_tasks` for reasoning/agent tasks
+- `process_tasks` for light deterministic work
+- `simulation_tasks` for heavy deterministic simulation tasks
+- run-scoped result queue bound to `RESULTS.<run_id>`
+- `dead_letter_queue` for rejected messages
 
-## Lifecycle (per task)
-1) Orchestrator builds `TaskMessage` with routing and context.  
-2) Message goes to the right queue (`agent_tasks`/`process_tasks`/`simulation_tasks`).  
-3) Worker consumes, does the work, and publishes `ResultMessage` to `results`.  
-4) Orchestrator updates state and enqueues the next stage.
+## Task Lifecycle
+1. Orchestrator publishes `TaskMessage`.
+2. Queue routes by `entity_type`.
+3. Worker/agent executes and publishes `ResultMessage`.
+4. Orchestrator advances state or applies failure policy.
 
-## DLQ expectations
-- Validate inputs first; if schema/interface is wrong, NACK with `requeue=false` (DLQ).
-- Retry only once for transient LLM/tool failures; otherwise DLQ to avoid clogging queues.
-- DLQ keeps headers (task_id, correlation_id, routing key, failure count) for triage.
+## Failure Handling
+- Validation failures should route to DLQ (`requeue=false`).
+- Transient failures are retried under configured policy.
 
-## Worker pools (default routing keys)
-- `REASONING` → agents
-- `LIGHT_DETERMINISTIC` → RTL lint/testbench lint/acceptance/distill
-- `HEAVY_DETERMINISTIC` → simulation
+## Source of Truth
+- `/home/jacobo/school/FPGA_Design_Agent/core/runtime/broker.py`
+- `/home/jacobo/school/FPGA_Design_Agent/workers/`
+- `/home/jacobo/school/FPGA_Design_Agent/infrastructure/rabbitmq-definitions.json`
 
-See [schemas.md](./schemas.md) for the controlled vocabularies (`AgentType`, `WorkerType`, `EntityType`, `TaskStatus`, etc.).
+## Related Docs
+- [architecture.md](./architecture.md)
+- [schemas.md](./schemas.md)
+- [components/workers.md](./components/workers.md)

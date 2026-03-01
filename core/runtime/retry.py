@@ -3,10 +3,11 @@ Retry utilities for brokered tasks.
 """
 from __future__ import annotations
 
-import os
 from typing import Any, Dict
+from core.runtime.config import get_runtime_config
 
-MAX_RETRIES = int(os.getenv("TASK_MAX_RETRIES", "1"))
+# Legacy constant retained for backwards compatibility with external imports.
+MAX_RETRIES = 1
 RETRY_HEADER = "x-retry-count"
 
 
@@ -31,6 +32,13 @@ def next_retry_headers(props: Any) -> Dict[str, Any]:
     headers = dict(getattr(props, "headers", None) or {})
     headers[RETRY_HEADER] = get_retry_count(props) + 1
     return headers
+
+
+def get_max_retries() -> int:
+    try:
+        return int(get_runtime_config().broker.task_max_retries)
+    except Exception:
+        return MAX_RETRIES
 
 
 def is_transient_error(exc: Exception) -> bool:

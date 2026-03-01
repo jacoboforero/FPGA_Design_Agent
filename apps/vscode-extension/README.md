@@ -1,37 +1,32 @@
-# HW Agent UI (VS Code Extension)
+# HW Agent VS Code Extension
 
-Developer-facing extension to drive the hardware agent demo:
-- View DAG nodes and states
-- Refresh status
-- Start a demo run
+## Purpose
+Document extension setup for viewing DAG state and triggering demo runs.
 
-## Setup
+## Audience
+Developers using the VS Code UI extension.
 
-1. Install dependencies:
-   ```bash
-   cd vscode-extension
-   npm install
-   ```
-2. Ensure the backend bridge is running and exposes:
-   - `GET /state` → `{ nodes: [{ id, state, logTail? }] }`
-   - `POST /run` → starts a demo run
-3. Adjust the API base URL in settings (`hwAgent.apiBaseUrl`, default `http://localhost:8000`).
+## Scope
+Extension-side setup and expected backend endpoints.
 
-## Development
+## Setup (from repo root)
+```bash
+cd apps/vscode-extension
+npm install
+```
 
-- Compile: `npm run compile`
-- Watch: `npm run watch`
-- Launch Extension Host from VS Code (Run > Launch Extension).
-
-## Commands
-
-- `HW Agent: Refresh State` — refresh the DAG view
-- `HW Agent: Run Demo` — trigger a run via backend `/run`
-
-## Views
-
-- Explorer: **HW Agent DAG** shows nodes and their states (colors by state).
+## Required Backend Endpoints
+- `GET /state`
+- `POST /run`
 
 ## Notes
+- API base URL setting: `hwAgent.apiBaseUrl` (default `http://localhost:8000`).
+- Extension talks to HTTP bridge, not RabbitMQ directly.
 
-- The extension calls the backend bridge over HTTP; it does not talk to RabbitMQ directly.
+## Source of Truth
+- `/home/jacobo/school/FPGA_Design_Agent/apps/vscode-extension/src/`
+- `/home/jacobo/school/FPGA_Design_Agent/apps/ui_backend/server.py`
+
+## Related Docs
+- [/home/jacobo/school/FPGA_Design_Agent/docs/components/ui-bridge.md](/home/jacobo/school/FPGA_Design_Agent/docs/components/ui-bridge.md)
+- [/home/jacobo/school/FPGA_Design_Agent/docs/cli.md](/home/jacobo/school/FPGA_Design_Agent/docs/cli.md)

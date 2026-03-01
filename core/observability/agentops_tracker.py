@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+from core.runtime.config import get_runtime_config
 
 try:  # Optional dependency
     import agentops
@@ -90,8 +91,9 @@ class AgentOpsTracker:
             return
 
         tags = default_tags or []
-        llm_provider = os.getenv("LLM_PROVIDER")
-        llm_model = os.getenv("OPENAI_MODEL") or os.getenv("GROQ_MODEL")
+        llm_cfg = get_runtime_config().llm
+        llm_provider = llm_cfg.provider
+        llm_model = llm_cfg.default_model
         if llm_provider:
             tags.append(f"provider:{llm_provider}")
         if llm_model:

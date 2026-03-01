@@ -1,20 +1,46 @@
-# Documentation guide
+# Documentation Index
 
-Start here to get oriented, then drill into the file you need.
+## Purpose
+Provide a master map for project documentation and prevent drift across component, workflow, and reference docs.
 
-- **overview.md** — high-level flow (plan → execute → decide)
-- **architecture.md** — components, queues, state machine
-- **agents.md** — role-by-role inputs/outputs
-- **cli.md** — commands and run examples
-- **spec-and-planning.md** — L1–L5 checklist and planner handoff
-- **queues-and-workers.md** — RabbitMQ layout, DLQ expectations
-- **schemas.md** — contract pointers (see `core/schemas/` for source)
-- **test-plan.md** — what to exercise by default vs optional jobs
+## Audience
+Contributors, maintainers, and reviewers working on the pipeline.
 
-Common paths:
-- Locked specs: `artifacts/task_memory/specs/`
-- Planner outputs: `artifacts/generated/{design_context.json, dag.json}`
-- Generated RTL/TB: `artifacts/generated/rtl/`
-- Logs/artifact pointers: `artifacts/task_memory/<node>/<stage>/` (cleared at each CLI run)
-- Observability events: `artifacts/observability/<run_name>_events.jsonl`
-- Multi-module specs: see `docs/spec-and-planning.md` (single input with multiple `Module:` sections)
+## Scope
+Index only. This file links to canonical docs; it does not restate implementation rules.
+
+## Root Guides
+- `overview.md` (purpose: system lifecycle)
+- `architecture.md` (purpose: component map and state progression)
+- `agents.md` (purpose: LLM agent responsibilities)
+- `cli.md` (purpose: command-line usage)
+- `spec-and-planning.md` (purpose: L1-L5 planning workflow)
+- `queues-and-workers.md` (purpose: broker and worker routing)
+- `schemas.md` (purpose: message contracts and enums)
+- `test-plan.md` (purpose: test strategy and commands)
+- `observability.md` (purpose: runtime events and cost tracking)
+- `benchmark-methodology.md` (purpose: benchmark scoring policy)
+- `config-migration.md` (purpose: env-to-YAML runtime migration)
+
+## Component Docs (`docs/components/`)
+- `components/orchestrator.md` (purpose: orchestration loop and transitions)
+- `components/workers.md` (purpose: deterministic worker behavior)
+- `components/llm-gateway.md` (purpose: provider gateway and model selection)
+- `components/ui-bridge.md` (purpose: FastAPI bridge for VS Code extension)
+
+## Workflow Docs (`docs/workflows/`)
+- `workflows/interactive-run.md` (purpose: interactive full-run flow)
+- `workflows/benchmark-run.md` (purpose: benchmark runbook)
+- `workflows/failure-repair-loop.md` (purpose: debug retry lifecycle)
+
+## Reference Docs (`docs/reference/`)
+- `reference/runtime-config.md` (purpose: runtime YAML field reference)
+- `reference/test-commands.md` (purpose: command quick reference)
+
+## Source of Truth
+- `/home/jacobo/school/FPGA_Design_Agent/README.md`
+- `/home/jacobo/school/FPGA_Design_Agent/apps/cli/cli.py`
+
+## Related Docs
+- [overview.md](./overview.md)
+- [architecture.md](./architecture.md)

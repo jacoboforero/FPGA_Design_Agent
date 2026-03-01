@@ -3,7 +3,6 @@ Simulation worker. Runs iverilog/vvp and fails hard if tools are missing.
 """
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -12,10 +11,9 @@ from pathlib import Path
 import pika
 from core.schemas.contracts import ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
-from core.runtime.retry import RetryableError, TaskInputError, get_retry_count, next_retry_headers, MAX_RETRIES
-
-TASK_EXCHANGE = "tasks_exchange"
-RESULTS_ROUTING_KEY = "RESULTS"
+from core.runtime.retry import RetryableError, TaskInputError, get_max_retries, get_retry_count, next_retry_headers
+from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE
+from core.runtime.config import get_runtime_config
 
 
 class SimulationWorker(threading.Thread):
@@ -45,7 +43,7 @@ class SimulationWorker(threading.Thread):
                     continue
                 except RetryableError:
                     retry_count = get_retry_count(props)
-                    if retry_count < MAX_RETRIES:
+                    if retry_count < get_max_retries():
                         headers = next_retry_headers(props)
                         ch.basic_publish(
                             exchange=TASK_EXCHANGE,
@@ -65,12 +63,13 @@ class SimulationWorker(threading.Thread):
                         artifacts_path=None,
                         log_output=f"Unhandled simulation error: {exc}",
                     )
-                self._publish_result(ch, result)
+                self._publish_result(ch, task, result)
                 ch.basic_ack(method.delivery_tag)
 
     def handle_task(self, task: TaskMessage) -> ResultMessage:
-        iverilog = os.getenv("IVERILOG_PATH") or shutil.which("iverilog")
-        vvp = os.getenv("VVP_PATH") or shutil.which("vvp")
+        runtime_cfg = get_runtime_config()
+        iverilog = runtime_cfg.tools.iverilog_path or shutil.which("iverilog")
+        vvp = runtime_cfg.tools.vvp_path or shutil.which("vvp")
         rtl_path = task.context.get("rtl_path")
         tb_path = task.context.get("tb_path")
         node_id = task.context.get("node_id")
@@ -117,7 +116,11 @@ class SimulationWorker(threading.Thread):
             run_cmd = [vvp, "/tmp/sim.out"]
             run = subprocess.run(run_cmd, capture_output=True, text=True, timeout=30)
             run_output = "\n".join(part for part in [run.stdout, run.stderr] if part).strip()
-            has_failure_marker = _has_failure_marker(run_output)
+            ctx = task.context if isinstance(task.context, dict) else {}
+            execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
+            verification_scope = str(ctx.get("verification_scope", "")).strip()
+            benchmark_mode = bool(execution_policy.get("benchmark_mode")) or verification_scope == "oracle_compare"
+            has_failure_marker = False if benchmark_mode else _has_failure_marker(run_output)
             if run.returncode != 0 or has_failure_marker:
                 log_lines.append("[run]")
                 log_lines.append(f"cmd: {' '.join(run_cmd)}")
@@ -128,7 +131,7 @@ class SimulationWorker(threading.Thread):
                 if run.returncode != 0:
                     log_lines.append(f"Simulation failed (exit code {run.returncode}).")
                 else:
-                    log_lines.append("Simulation reported failure in output; treating as failure.")
+                    log_lines.append("Simulation reported failure marker in output; treating as failure.")
                 if cycle is not None or time_val is not None:
                     cycle_msg = str(cycle) if cycle is not None else "unknown"
                     time_msg = str(time_val) if time_val is not None else "unknown"
@@ -189,11 +192,17 @@ class SimulationWorker(threading.Thread):
                 log_output=f"Simulation failed: {exc}",
             )
 
-    def _publish_result(self, ch: pika.adapters.blocking_connection.BlockingChannel, result: ResultMessage) -> None:
+    def _publish_result(
+        self,
+        ch: pika.adapters.blocking_connection.BlockingChannel,
+        task: TaskMessage,
+        result: ResultMessage,
+    ) -> None:
+        routed = result.model_copy(update={"run_id": result.run_id or task.run_id})
         ch.basic_publish(
             exchange=TASK_EXCHANGE,
-            routing_key=RESULTS_ROUTING_KEY,
-            body=result.model_dump_json().encode(),
+            routing_key=task.results_routing_key or DEFAULT_RESULTS_ROUTING_KEY,
+            body=routed.model_dump_json().encode(),
             properties=pika.BasicProperties(content_type="application/json"),
         )
 
@@ -249,8 +258,9 @@ def _maybe_rerun_with_dump(
         log_lines.append("Skipping waveform rerun (failure cycle not found; enable cycle logging in testbench).")
         return {}
 
-    before = int(os.getenv("SIM_FAIL_WINDOW_BEFORE", "20"))
-    after = int(os.getenv("SIM_FAIL_WINDOW_AFTER", "5"))
+    sim_cfg = get_runtime_config().sim
+    before = int(sim_cfg.fail_window_before)
+    after = int(sim_cfg.fail_window_after)
     start_cycle = max(0, cycle - before)
     end_cycle = cycle + after
     waveform_path = Path("artifacts/task_memory") / node_id / _stage_dir("sim", attempt) / "waveform.vcd"

@@ -5,7 +5,6 @@ Fails hard if upstream logs are missing.
 from __future__ import annotations
 
 import json
-import os
 import re
 import threading
 from collections import deque
@@ -14,10 +13,9 @@ from pathlib import Path
 import pika
 from core.schemas.contracts import DistilledDataset, ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
-from core.runtime.retry import RetryableError, TaskInputError, get_retry_count, next_retry_headers, MAX_RETRIES
-
-TASK_EXCHANGE = "tasks_exchange"
-RESULTS_ROUTING_KEY = "RESULTS"
+from core.runtime.retry import RetryableError, TaskInputError, get_max_retries, get_retry_count, next_retry_headers
+from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE
+from core.runtime.config import get_runtime_config
 
 
 class DistillWorker(threading.Thread):
@@ -51,7 +49,7 @@ class DistillWorker(threading.Thread):
                     continue
                 except RetryableError:
                     retry_count = get_retry_count(props)
-                    if retry_count < MAX_RETRIES:
+                    if retry_count < get_max_retries():
                         headers = next_retry_headers(props)
                         ch.basic_publish(
                             exchange=TASK_EXCHANGE,
@@ -70,7 +68,7 @@ class DistillWorker(threading.Thread):
                         status=TaskStatus.FAILURE,
                         log_output=f"Unhandled distillation error: {exc}",
                     )
-                self._publish_result(ch, result)
+                self._publish_result(ch, task, result)
                 ch.basic_ack(method.delivery_tag)
 
     def handle_task(self, task: TaskMessage) -> ResultMessage:
@@ -87,8 +85,9 @@ class DistillWorker(threading.Thread):
         cycle, time_val = _extract_failure_info(sim_text)
         window = None
         if cycle is not None:
-            before = int(os.getenv("SIM_FAIL_WINDOW_BEFORE", "20"))
-            after = int(os.getenv("SIM_FAIL_WINDOW_AFTER", "5"))
+            sim_cfg = get_runtime_config().sim
+            before = int(sim_cfg.fail_window_before)
+            after = int(sim_cfg.fail_window_after)
             window = {"start_cycle": max(0, cycle - before), "end_cycle": cycle + after}
         fail_line_idx, fail_line = _extract_failure_line(sim_text)
         failure_signal_snapshot = _extract_failure_signal_snapshot(fail_line)
@@ -152,11 +151,17 @@ class DistillWorker(threading.Thread):
             distilled_dataset=dataset,
         )
 
-    def _publish_result(self, ch: pika.adapters.blocking_connection.BlockingChannel, result: ResultMessage) -> None:
+    def _publish_result(
+        self,
+        ch: pika.adapters.blocking_connection.BlockingChannel,
+        task: TaskMessage,
+        result: ResultMessage,
+    ) -> None:
+        routed = result.model_copy(update={"run_id": result.run_id or task.run_id})
         ch.basic_publish(
             exchange=TASK_EXCHANGE,
-            routing_key=RESULTS_ROUTING_KEY,
-            body=result.model_dump_json().encode(),
+            routing_key=task.results_routing_key or DEFAULT_RESULTS_ROUTING_KEY,
+            body=routed.model_dump_json().encode(),
             properties=pika.BasicProperties(content_type="application/json"),
         )
 
@@ -268,10 +273,11 @@ def _distill_waveform_excerpt(
 ) -> dict | None:
     try:
         hints_lower = {h.lower() for h in signal_hints}
-        max_signals = int(os.getenv("VCD_MAX_SIGNALS", "40"))
-        max_changes = int(os.getenv("VCD_MAX_CHANGES_PER_SIGNAL", "200"))
-        before_time = int(os.getenv("VCD_TIME_WINDOW_BEFORE", "2000"))
-        after_time = int(os.getenv("VCD_TIME_WINDOW_AFTER", "2000"))
+        sim_cfg = get_runtime_config().sim
+        max_signals = int(sim_cfg.vcd_max_signals)
+        max_changes = int(sim_cfg.vcd_max_changes_per_signal)
+        before_time = int(sim_cfg.vcd_time_window_before)
+        after_time = int(sim_cfg.vcd_time_window_after)
 
         start_time = 0
         end_time = 0

@@ -3,7 +3,6 @@ Deterministic lint worker. Runs Verilator lint and fails hard on errors.
 """
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -13,13 +12,13 @@ from pathlib import Path
 import pika
 from core.schemas.contracts import ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
-from core.runtime.retry import RetryableError, TaskInputError, get_retry_count, next_retry_headers, MAX_RETRIES
-
-TASK_EXCHANGE = "tasks_exchange"
-RESULTS_ROUTING_KEY = "RESULTS"
+from core.runtime.retry import RetryableError, TaskInputError, get_max_retries, get_retry_count, next_retry_headers
+from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE
+from core.runtime.config import get_runtime_config
 
 
 _EDGE_ALWAYS_RE = re.compile(r"always\s*@\s*\(([^)]*(?:posedge|negedge)[^)]*)\)", re.IGNORECASE | re.DOTALL)
+_VERILATOR_QUIET_UNSUPPORTED_RE = re.compile(r"invalid option:\s*--quiet", re.IGNORECASE)
 
 
 def _run_rtl_semantic_lint(
@@ -75,12 +74,47 @@ def _format_semantic_failure_log(issues: list[str], compile_log: str) -> str:
     return base
 
 
+def _split_semantic_issues(issues: list[str]) -> tuple[list[str], list[str]]:
+    blocking: list[str] = []
+    advisory: list[str] = []
+    for issue in issues:
+        code = issue.split(" ", 1)[0]
+        if code == "RLSEM010":
+            advisory.append(issue)
+        else:
+            blocking.append(issue)
+    return blocking, advisory
+
+
+def _combine_process_output(completed: subprocess.CompletedProcess[str]) -> str:
+    return ((completed.stderr or "") + (completed.stdout or "")).strip()
+
+
+def _run_verilator_lint(
+    *,
+    verilator: str,
+    rtl_args: list[str],
+    timeout_s: float,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    primary_cmd = [verilator, "--lint-only", "--quiet", "--sv", *rtl_args]
+    completed = subprocess.run(primary_cmd, capture_output=True, text=True, timeout=timeout_s)
+    output = _combine_process_output(completed)
+    if completed.returncode != 0 and _VERILATOR_QUIET_UNSUPPORTED_RE.search(output):
+        fallback_cmd = [verilator, "--lint-only", "--sv", *rtl_args]
+        completed = subprocess.run(fallback_cmd, capture_output=True, text=True, timeout=timeout_s)
+        fallback_output = _combine_process_output(completed)
+        note = "Verilator '--quiet' unsupported; retried without it."
+        output = f"{note}\n{fallback_output}".strip()
+    return completed, output
+
+
 class LintWorker(threading.Thread):
     def __init__(self, connection_params: pika.ConnectionParameters, stop_event: threading.Event):
         super().__init__(daemon=True)
         self.connection_params = connection_params
         self.stop_event = stop_event
-        self.verilator = os.getenv("VERILATOR_PATH") or shutil.which("verilator")
+        runtime_cfg = get_runtime_config()
+        self.verilator = runtime_cfg.tools.verilator_path or shutil.which("verilator")
 
     def run(self) -> None:
         with pika.BlockingConnection(self.connection_params) as conn:
@@ -107,7 +141,7 @@ class LintWorker(threading.Thread):
                     continue
                 except RetryableError:
                     retry_count = get_retry_count(props)
-                    if retry_count < MAX_RETRIES:
+                    if retry_count < get_max_retries():
                         headers = next_retry_headers(props)
                         ch.basic_publish(
                             exchange=TASK_EXCHANGE,
@@ -127,7 +161,7 @@ class LintWorker(threading.Thread):
                         artifacts_path=None,
                         log_output=f"Unhandled lint error: {exc}",
                     )
-                self._publish_result(ch, result)
+                self._publish_result(ch, task, result)
                 ch.basic_ack(method.delivery_tag)
 
     def handle_task(self, task: TaskMessage) -> ResultMessage:
@@ -152,16 +186,18 @@ class LintWorker(threading.Thread):
                 artifacts_path=None,
                 log_output="Verilator not found; set VERILATOR_PATH or install verilator.",
             )
-        strict_warnings = os.getenv("VERILATOR_STRICT_WARNINGS", "0") == "1"
-        fail_moddup = os.getenv("RTL_LINT_FAIL_MODDUP", "1") != "0"
-        semantic_enabled = os.getenv("RTL_LINT_SEMANTIC", "1") != "0"
-        semantic_strict = os.getenv("RTL_LINT_SEMANTIC_STRICT", "1") != "0"
+        lint_cfg = get_runtime_config().lint
+        strict_warnings = lint_cfg.verilator_strict_warnings
+        fail_moddup = lint_cfg.rtl_fail_moddup
+        semantic_enabled = lint_cfg.rtl_semantic_enabled
+        semantic_strict = lint_cfg.rtl_semantic_strict
         try:
             rtl_args = list(dict.fromkeys(rtl_paths))
-            cmd = [self.verilator, "--lint-only", "--quiet", "--sv", *rtl_args]
-            completed = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            output = (completed.stderr or "") + (completed.stdout or "")
-            output = output.strip()
+            completed, output = _run_verilator_lint(
+                verilator=self.verilator,
+                rtl_args=rtl_args,
+                timeout_s=10,
+            )
             has_moddup = "MODDUP" in output.upper()
             has_error = ("%Error" in output) or ("%Fatal" in output)
             if has_moddup and fail_moddup:
@@ -191,16 +227,18 @@ class LintWorker(threading.Thread):
                     rtl_text=rtl_path.read_text(),
                     module_contract=task.context.get("module_contract") if isinstance(task.context, dict) else None,
                 )
-                if semantic_issues and semantic_strict:
+                blocking_issues, advisory_issues = _split_semantic_issues(semantic_issues)
+                if blocking_issues and semantic_strict:
                     return ResultMessage(
                         task_id=task.task_id,
                         correlation_id=task.correlation_id,
                         status=TaskStatus.FAILURE,
                         artifacts_path=None,
-                        log_output=_format_semantic_failure_log(semantic_issues, output),
+                        log_output=_format_semantic_failure_log(blocking_issues + advisory_issues, output),
                     )
-                if semantic_issues:
-                    log = f"{log.rstrip()}\n[rtl_semantic] WARN\n{_format_semantic_issues(semantic_issues)}".strip()
+                warn_issues = blocking_issues + advisory_issues
+                if warn_issues:
+                    log = f"{log.rstrip()}\n[rtl_semantic] WARN\n{_format_semantic_issues(warn_issues)}".strip()
                 else:
                     log = f"{log.rstrip()}\n[rtl_semantic] PASS".strip()
         except subprocess.TimeoutExpired as exc:
@@ -226,10 +264,16 @@ class LintWorker(threading.Thread):
             log_output=log,
         )
 
-    def _publish_result(self, ch: pika.adapters.blocking_connection.BlockingChannel, result: ResultMessage) -> None:
+    def _publish_result(
+        self,
+        ch: pika.adapters.blocking_connection.BlockingChannel,
+        task: TaskMessage,
+        result: ResultMessage,
+    ) -> None:
+        routed = result.model_copy(update={"run_id": result.run_id or task.run_id})
         ch.basic_publish(
             exchange=TASK_EXCHANGE,
-            routing_key=RESULTS_ROUTING_KEY,
-            body=result.model_dump_json().encode(),
+            routing_key=task.results_routing_key or DEFAULT_RESULTS_ROUTING_KEY,
+            body=routed.model_dump_json().encode(),
             properties=pika.BasicProperties(content_type="application/json"),
         )

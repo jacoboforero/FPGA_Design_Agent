@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 from pathlib import Path
 from typing import List, Tuple
@@ -18,6 +17,7 @@ from agents.common.llm_gateway import init_llm_gateway, Message, MessageRole, Ge
 from agents.common.tb_sanitizer import sanitize_testbench
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
+from core.runtime.config import get_runtime_config
 
 
 class TestbenchWorker(AgentWorkerBase):
@@ -44,26 +44,29 @@ class TestbenchWorker(AgentWorkerBase):
         tb_path = Path(ctx.get("tb_path", "")) if ctx.get("tb_path") else Path(ctx["rtl_path"]).with_name(f"{node_id}_tb.sv")
         tb_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if not self.gateway or not Message or not GenerationConfig:
-            return ResultMessage(
-                task_id=task.task_id,
-                correlation_id=task.correlation_id,
-                status=TaskStatus.FAILURE,
-                artifacts_path=None,
-                log_output="LLM gateway unavailable; set USE_LLM=1 and configure provider credentials.",
-            )
-        try:
-            tb_source, log_output = asyncio.run(self._llm_generate_tb(ctx, node_id))
-        except Exception as exc:  # noqa: BLE001
-            if is_transient_error(exc):
-                raise RetryableError(f"LLM testbench transient error: {exc}")
-            return ResultMessage(
-                task_id=task.task_id,
-                correlation_id=task.correlation_id,
-                status=TaskStatus.FAILURE,
-                artifacts_path=None,
-                log_output=f"LLM testbench generation failed: {exc}",
-            )
+        if self._should_use_deterministic_smoke_tb(ctx, node_id):
+            tb_source, log_output = self._generate_deterministic_smoke_tb(ctx, node_id)
+        else:
+            if not self.gateway or not Message or not GenerationConfig:
+                return ResultMessage(
+                    task_id=task.task_id,
+                    correlation_id=task.correlation_id,
+                    status=TaskStatus.FAILURE,
+                    artifacts_path=None,
+                    log_output="LLM gateway unavailable; set USE_LLM=1 and configure provider credentials.",
+                )
+            try:
+                tb_source, log_output = asyncio.run(self._llm_generate_tb(ctx, node_id))
+            except Exception as exc:  # noqa: BLE001
+                if is_transient_error(exc):
+                    raise RetryableError(f"LLM testbench transient error: {exc}")
+                return ResultMessage(
+                    task_id=task.task_id,
+                    correlation_id=task.correlation_id,
+                    status=TaskStatus.FAILURE,
+                    artifacts_path=None,
+                    log_output=f"LLM testbench generation failed: {exc}",
+                )
         if not tb_source or not tb_source.strip():
             return ResultMessage(
                 task_id=task.task_id,
@@ -113,6 +116,153 @@ class TestbenchWorker(AgentWorkerBase):
             artifacts_path=str(tb_path),
             log_output=log_output,
         )
+
+    def _should_use_deterministic_smoke_tb(self, ctx: dict, node_id: str) -> bool:
+        top_module = str(ctx.get("top_module") or "").strip()
+        if not top_module or top_module == node_id:
+            return False
+        verification = ctx.get("verification")
+        if not isinstance(verification, dict):
+            return False
+        goals = verification.get("test_goals")
+        if not isinstance(goals, list) or not goals:
+            return False
+        for item in goals:
+            text = str(item or "").strip().lower()
+            if "smoke" in text:
+                return True
+        return False
+
+    def _tb_width_decl(self, sig: dict) -> str:
+        width_int = self._width_int(sig)
+        width_expr = self._width_expr(sig)
+        if width_int and width_int > 1:
+            return f"[{width_int - 1}:0] "
+        if width_expr not in ("1", ""):
+            return f"[({width_expr})-1:0] "
+        return ""
+
+    def _generate_deterministic_smoke_tb(self, ctx: dict, node_id: str) -> Tuple[str, str]:
+        iface = ctx["interface"]["signals"]
+        clocking = self._normalize_clocking(ctx.get("clocking"))
+        tb_module = f"tb_{node_id}"
+        clock_name = clocking["clock_name"]
+        reset_name = clocking["reset_name"]
+        reset_active_low = bool(clocking["reset_active_expr"].startswith("!"))
+        drive_edge = clocking["drive_edge"]
+
+        declared_inputs = {
+            str(sig.get("name", "")).strip()
+            for sig in iface
+            if str(sig.get("direction", "")).upper() == "INPUT"
+        }
+        has_clock = clock_name in declared_inputs
+        has_reset = bool(reset_name) and reset_name in declared_inputs
+
+        lines: list[str] = [f"module {tb_module};", ""]
+        lines.extend(
+            [
+                "integer cycle;",
+                "integer dump_enabled;",
+                "reg [2047:0] dump_file;",
+                "",
+            ]
+        )
+
+        for sig in iface:
+            name = str(sig.get("name", "")).strip()
+            direction = str(sig.get("direction", "")).upper()
+            width_decl = self._tb_width_decl(sig)
+            if direction == "OUTPUT":
+                decl = "wire"
+            elif direction == "INOUT":
+                decl = "wire"
+            else:
+                decl = "reg"
+            lines.append(f"  {decl} {width_decl}{name};")
+        lines.append("")
+
+        lines.extend(
+            [
+                f"  {node_id} dut (",
+                "\n".join(
+                    f"    .{str(sig.get('name', '')).strip()}({str(sig.get('name', '')).strip()}){',' if idx < len(iface) - 1 else ''}"
+                    for idx, sig in enumerate(iface)
+                ),
+                "  );",
+                "",
+            ]
+        )
+
+        if has_clock:
+            lines.extend(
+                [
+                    f"  initial {clock_name} = 1'b0;",
+                    f"  always #5 {clock_name} = ~{clock_name};",
+                    "",
+                    "  initial cycle = 0;",
+                    f"  always @({clocking['sample_edge']} {clock_name}) cycle <= cycle + 1;",
+                    "",
+                ]
+            )
+
+        lines.append("  initial begin")
+        for sig in iface:
+            name = str(sig.get("name", "")).strip()
+            direction = str(sig.get("direction", "")).upper()
+            if direction != "INPUT":
+                continue
+            if has_clock and name == clock_name:
+                continue
+            if has_reset and name == reset_name:
+                continue
+            lines.append(f"    {name} = 0;")
+        if has_reset:
+            active = "1'b0" if reset_active_low else "1'b1"
+            inactive = "1'b1" if reset_active_low else "1'b0"
+            lines.append(f"    {reset_name} = {active};")
+            if has_clock:
+                lines.append(f"    repeat (3) @({clocking['sample_edge']} {clock_name});")
+            else:
+                lines.append("    #30;")
+            lines.append(f"    {reset_name} = {inactive};")
+        if has_clock:
+            lines.append(f"    repeat (2) @({drive_edge} {clock_name});")
+            stim_inputs = [
+                str(sig.get("name", "")).strip()
+                for sig in iface
+                if str(sig.get("direction", "")).upper() == "INPUT"
+                and str(sig.get("name", "")).strip() not in {clock_name, reset_name}
+            ]
+            if stim_inputs:
+                lines.append(f"    {stim_inputs[0]} = ~{stim_inputs[0]};")
+                lines.append(f"    @({drive_edge} {clock_name});")
+                lines.append(f"    {stim_inputs[0]} = 0;")
+            lines.append(f"    repeat (20) @({clocking['sample_edge']} {clock_name});")
+            lines.append('    $display("PASS: cycle=%0d time=%0t smoke test completed", cycle, $time);')
+        else:
+            lines.append("    #200;")
+            lines.append('    $display("PASS: time=%0t smoke test completed", $time);')
+        lines.append("    $finish(0);")
+        lines.append("  end")
+        lines.append("")
+
+        lines.extend(
+            [
+                "  initial begin",
+                '    dump_enabled = $test$plusargs("DUMP");',
+                "    if (dump_enabled) begin",
+                '      if (!$value$plusargs("DUMP_FILE=%s", dump_file)) dump_file = "dump.vcd";',
+                "      $dumpfile(dump_file);",
+                f"      $dumpvars(0, {tb_module});",
+                "    end",
+                "  end",
+                "",
+                "endmodule",
+            ]
+        )
+
+        return "\n".join(lines), "Deterministic smoke TB generation for child module."
 
     def _width_expr(self, sig) -> str:
         raw = sig.get("width", 1)
@@ -194,11 +344,20 @@ class TestbenchWorker(AgentWorkerBase):
     async def _llm_generate_tb(self, ctx, node_id: str) -> Tuple[str, str]:
         iface = ctx["interface"]["signals"]
         ports = []
+        dut_inputs: list[str] = []
+        dut_outputs: list[str] = []
+        dut_inouts: list[str] = []
         for sig in iface:
             name = sig["name"]
             width_expr = self._width_expr(sig)
             width_int = self._width_int(sig)
             dir_kw = sig["direction"].lower()
+            if dir_kw == "input":
+                dut_inputs.append(name)
+            elif dir_kw == "output":
+                dut_outputs.append(name)
+            elif dir_kw == "inout":
+                dut_inouts.append(name)
             base_type = "wire" if dir_kw == "output" else "reg"
             if width_int and width_int > 1:
                 width_decl = f"[{width_int-1}:0] "
@@ -226,6 +385,11 @@ class TestbenchWorker(AgentWorkerBase):
             "- Declare regs/wires/integers at module scope only.\n"
             "- Do not use $stop. Use $finish(1) on failure and $finish(0) on pass.\n"
             "- Failure print must include cycle=<cycle> and time=<time> and key DUT signals.\n\n"
+            "Signal-driving contract (strict):\n"
+            "- Drive only DUT input ports from the testbench.\n"
+            "- DUT output ports are observe-only; never drive them from testbench logic.\n"
+            "- Do not assign DUT output nets via continuous assign, procedural assignment, force/release, or task side-effects.\n"
+            "- For protocol/reference modeling, use separate ref_* variables instead of driving DUT outputs.\n\n"
             "Hard timing contract (must follow exactly):\n"
             f"- DUT sample edge: {clocking['sample_edge']} {clocking['clock_name']}.\n"
             f"- Drive DUT inputs only on {clocking['drive_edge']} {clocking['clock_name']}. Do not drive stimulus on DUT sample edge.\n"
@@ -254,6 +418,9 @@ class TestbenchWorker(AgentWorkerBase):
             f"- DUT module: {node_id}\n"
             f"- Required TB module: {tb_module}\n"
             f"- Port list:\n" + "\n".join(f"  - {p}" for p in ports) + "\n\n"
+            f"- DUT input ports (TB may drive): {', '.join(dut_inputs) if dut_inputs else 'none'}\n"
+            f"- DUT output ports (observe-only, TB must never drive): {', '.join(dut_outputs) if dut_outputs else 'none'}\n"
+            f"- DUT inout ports (avoid driving unless explicitly required): {', '.join(dut_inouts) if dut_inouts else 'none'}\n\n"
             f"Normalized clock/reset contract:\n"
             f"- clock_name: {clocking['clock_name']}\n"
             f"- clock_polarity: {clocking['clock_polarity']}\n"
@@ -271,9 +438,11 @@ class TestbenchWorker(AgentWorkerBase):
             Message(role=MessageRole.SYSTEM, content=system),
             Message(role=MessageRole.USER, content=user),
         ]
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS", 10000))
-        temperature = float(os.getenv("LLM_TEMPERATURE", 0.2))
-        cfg = GenerationConfig(temperature=temperature, max_tokens=max_tokens)
+        llm_cfg = get_runtime_config().llm
+        max_tokens = int(llm_cfg.max_tokens)
+        temperature = float(llm_cfg.temperature)
+        top_p = llm_cfg.top_p
+        cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
         resp = await self.gateway.generate(messages=msgs, config=cfg)  # type: ignore[arg-type]
         tracker = get_tracker()
         try:

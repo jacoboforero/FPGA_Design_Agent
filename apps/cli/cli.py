@@ -1,5 +1,5 @@
 """
-Minimal CLI for the end-to-end demo pipeline (spec -> plan -> run).
+CLI entrypoint for the end-to-end pipeline and benchmark runner.
 """
 from __future__ import annotations
 
@@ -10,9 +10,11 @@ import shutil
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List
+from urllib.parse import urlparse
 
 import pika
 
@@ -40,11 +42,12 @@ from apps.cli.execution_narrator import ExecutionNarrator
 from core.observability.setup import configure_observability
 from core.observability.agentops_tracker import get_tracker
 from core.schemas.contracts import AgentType, EntityType, ResultMessage, TaskMessage, TaskStatus
+from core.runtime.broker import TASK_EXCHANGE, RunRouting, create_run_routing, declare_results_queue
+from core.runtime.config import DEFAULT_CONFIG_PATH, get_runtime_config, initialize_runtime_config
 
-TASK_EXCHANGE = "tasks_exchange"
-RESULTS_ROUTING_KEY = "RESULTS"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+_LOCAL_BROKER_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 def _load_env_file(path: Path) -> None:
@@ -70,26 +73,40 @@ def _load_env_file(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
-def connection_params_from_env() -> pika.ConnectionParameters:
-    rabbit_url = os.getenv("RABBITMQ_URL", "amqp://user:password@localhost:5672/")
-    params = pika.URLParameters(rabbit_url)
-    params.heartbeat = int(os.getenv("RABBITMQ_HEARTBEAT", "600"))
-    params.blocked_connection_timeout = float(os.getenv("RABBITMQ_BLOCKED_CONNECTION_TIMEOUT", "300"))
-    params.connection_attempts = int(os.getenv("RABBITMQ_CONNECTION_ATTEMPTS", "5"))
-    params.retry_delay = float(os.getenv("RABBITMQ_RETRY_DELAY", "2"))
-    params.socket_timeout = float(os.getenv("RABBITMQ_SOCKET_TIMEOUT", "10"))
+def connection_params_from_config() -> pika.ConnectionParameters:
+    broker_cfg = get_runtime_config().broker
+    broker_url = _resolve_broker_url(broker_cfg.url)
+    params = pika.URLParameters(broker_url)
+    params.heartbeat = int(broker_cfg.heartbeat)
+    params.blocked_connection_timeout = float(broker_cfg.blocked_connection_timeout)
+    params.connection_attempts = int(broker_cfg.connection_attempts)
+    params.retry_delay = float(broker_cfg.retry_delay)
+    params.socket_timeout = float(broker_cfg.socket_timeout)
     return params
 
 
-def _truthy_env(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+def _resolve_broker_url(configured_url: str) -> str:
+    """
+    YAML config is the source of truth, but keep a compatibility fallback:
+    when config points to localhost and env points to a non-local host (e.g. docker service),
+    prefer env so `make cli` works inside containers.
+    """
+    env_url = os.getenv("RABBITMQ_URL", "").strip()
+    if not env_url:
+        return configured_url
+    cfg_host = (urlparse(configured_url).hostname or "").strip().lower()
+    env_host = (urlparse(env_url).hostname or "").strip().lower()
+    if cfg_host in _LOCAL_BROKER_HOSTS and env_host and env_host not in _LOCAL_BROKER_HOSTS:
+        return env_url
+    return configured_url
+
+
+# Backwards-compatible import surface used by run_suite.
+connection_params_from_env = connection_params_from_config
 
 
 def _purge_broker_queues(params: pika.ConnectionParameters) -> None:
-    if not _truthy_env("CLI_PURGE_QUEUES", True):
+    if not get_runtime_config().broker.purge_queues_on_start:
         return
     queues = ("agent_tasks", "process_tasks", "simulation_tasks", "results")
     with pika.BlockingConnection(params) as conn:
@@ -125,21 +142,34 @@ def stop_workers(workers: Iterable[threading.Thread], stop_event: threading.Even
         w.join(timeout=1.0)
 
 
-def _run_planner_task(params: pika.ConnectionParameters, timeout: float = 30.0) -> None:
+def _run_planner_task(
+    params: pika.ConnectionParameters,
+    run_routing: RunRouting,
+    *,
+    timeout: float = 30.0,
+    execution_policy: dict | None = None,
+) -> None:
     if timeout <= 0:
         timeout = float("inf")
+    task_ctx = {
+        "spec_dir": str(REPO_ROOT / "artifacts" / "task_memory" / "specs"),
+        "out_dir": str(REPO_ROOT / "artifacts" / "generated"),
+    }
+    if execution_policy:
+        task_ctx["execution_policy"] = execution_policy
     task = TaskMessage(
         entity_type=EntityType.REASONING,
         task_type=AgentType.PLANNER,
-        context={
-            "spec_dir": str(REPO_ROOT / "artifacts" / "task_memory" / "specs"),
-            "out_dir": str(REPO_ROOT / "artifacts" / "generated"),
-        },
+        context=task_ctx,
+        run_id=run_routing.run_id,
+        results_routing_key=run_routing.results_routing_key,
     )
     with pika.BlockingConnection(params) as conn:
         ch = conn.channel()
-        ch.queue_declare(queue="results", durable=True)
-        ch.queue_bind(queue="results", exchange=TASK_EXCHANGE, routing_key=RESULTS_ROUTING_KEY)
+        results_queue = declare_results_queue(
+            ch,
+            results_routing_key=run_routing.results_routing_key,
+        )
         ch.basic_publish(
             exchange=TASK_EXCHANGE,
             routing_key=task.entity_type.value,
@@ -148,17 +178,20 @@ def _run_planner_task(params: pika.ConnectionParameters, timeout: float = 30.0) 
         )
         start = datetime.now(timezone.utc)
         while (datetime.now(timezone.utc) - start).total_seconds() < timeout:
-            method, props, body = ch.basic_get(queue="results", auto_ack=True)
+            method, props, body = ch.basic_get(queue=results_queue, auto_ack=False)
             if body is None:
                 time.sleep(0.05)
                 continue
             result = ResultMessage.model_validate_json(body)
             if result.task_id != task.task_id:
+                ch.basic_nack(method.delivery_tag, requeue=True)
                 continue
+            ch.basic_ack(method.delivery_tag)
             if result.status is not TaskStatus.SUCCESS:
                 raise RuntimeError(f"Planning failed: {result.log_output}")
             return
     raise RuntimeError("Planner timed out waiting for results. Verify broker queues are clean and planner worker is running.")
+
 
 def _confirm(prompt: str, default: bool = True) -> bool:
     suffix = " [Y/n]" if default else " [y/N]"
@@ -174,16 +207,23 @@ def _default_run_name(prefix: str) -> str:
     return f"{prefix}_{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
 
-def _default_narrative_mode() -> str:
-    mode = os.getenv("CLI_NARRATIVE_MODE", "llm").strip().lower()
-    if mode in {"llm", "deterministic", "off"}:
-        return mode
-    return "llm"
+def _sanitize_module_hint(name: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in name.strip())
+    if not cleaned or cleaned[0].isdigit():
+        cleaned = f"mod_{cleaned}"
+    return cleaned
 
 
 def _print_section(title: str) -> None:
     bar = "=" * len(title)
     print(f"\n{title}\n{bar}")
+
+
+def _format_exception(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return message
+    return f"{exc.__class__.__name__}: {exc!r}"
 
 
 def _purge_task_memory(root: Path) -> None:
@@ -194,22 +234,60 @@ def _purge_task_memory(root: Path) -> None:
 
 
 def run_full(args: argparse.Namespace) -> None:
+    cfg = get_runtime_config()
+    preset = cfg.resolved_preset
+    if preset.benchmark_mode:
+        raise RuntimeError(
+            "Benchmark preset uses official VerilogEval harness scoring. "
+            "Run `python apps/cli/cli.py benchmark --preset benchmark` instead of full interactive mode."
+        )
+    execution_policy = {
+        "preset": cfg.active_preset,
+        "spec_profile": preset.spec_profile,
+        "verification_profile": preset.verification_profile,
+        "allow_repair_loop": preset.allow_repair_loop,
+        "benchmark_mode": preset.benchmark_mode,
+        "debug_max_retries": cfg.debug.max_retries,
+    }
+
     run_name = args.run_name or _default_run_name("cli_full")
     _purge_task_memory(REPO_ROOT / "artifacts" / "task_memory")
-    configure_observability(run_name=run_name, default_tags=["cli", "full"])
+    configure_observability(run_name=run_name, default_tags=["cli", "full", f"preset:{cfg.active_preset}"])
     # 1) Collect specs interactively
-    spec_flow.collect_specs()
+    if args.direct_spec and not args.spec_file:
+        raise RuntimeError("--direct-spec requires --spec-file.")
+    if args.spec_file:
+        spec_file = Path(args.spec_file).expanduser().resolve()
+        if not spec_file.exists() or not spec_file.is_file():
+            raise RuntimeError(f"Spec file not found: {spec_file}")
+        spec_text = spec_file.read_text()
+        module_hint = _sanitize_module_hint(spec_file.stem)
+        spec_flow.collect_specs_from_text(
+            module_hint,
+            spec_text,
+            interactive=False,
+            spec_profile=preset.spec_profile,
+            direct_parse=bool(args.direct_spec),
+        )
+    else:
+        spec_flow.collect_specs()
 
     # 2) Plan
     _print_section("Planning")
-    params = connection_params_from_env()
+    params = connection_params_from_config()
     _purge_broker_queues(params)
-    planner_timeout = args.timeout if args.timeout > 0 else float(os.getenv("CLI_PLANNER_TIMEOUT_S", "60"))
+    planner_timeout = args.timeout if args.timeout > 0 else float(cfg.broker.planner_timeout_s)
     planner_stop = threading.Event()
     planner_worker = PlannerWorker(params, planner_stop)
     planner_worker.start()
+    run_routing = create_run_routing()
     try:
-        _run_planner_task(params, timeout=planner_timeout)
+        _run_planner_task(
+            params,
+            run_routing,
+            timeout=planner_timeout,
+            execution_policy=execution_policy,
+        )
     finally:
         planner_stop.set()
         planner_worker.join(timeout=1.0)
@@ -219,7 +297,7 @@ def run_full(args: argparse.Namespace) -> None:
     nodes = ", ".join(n["id"] for n in dag.get("nodes", []))
     print(f"Plan generated: {dag_path} (nodes: {nodes})")
 
-    if not _confirm("Proceed to execution?", True):
+    if not args.yes and not _confirm("Proceed to execution?", True):
         print("Aborted after planning.")
         return
 
@@ -227,10 +305,11 @@ def run_full(args: argparse.Namespace) -> None:
     _print_section("Execution")
     rtl_root = REPO_ROOT / "artifacts" / "generated"
     task_memory_root = REPO_ROOT / "artifacts" / "task_memory"
+    narrative_mode = args.narrative_mode or cfg.cli.default_narrative_mode
     narrator = None
-    if args.narrative_mode != "off":
-        narrator = ExecutionNarrator(task_memory_root=task_memory_root, mode=args.narrative_mode)
-        print(f"Narrative output enabled ({args.narrative_mode}).")
+    if narrative_mode != "off":
+        narrator = ExecutionNarrator(task_memory_root=task_memory_root, mode=narrative_mode)
+        print(f"Narrative output enabled ({narrative_mode}).")
     stop_event = threading.Event()
     workers = start_workers(params, stop_event)
     try:
@@ -241,7 +320,11 @@ def run_full(args: argparse.Namespace) -> None:
             rtl_root,
             task_memory_root,
             event_callback=narrator.handle_event if narrator else None,
-            raw_progress=args.narrative_mode == "off",
+            raw_progress=narrative_mode == "off",
+            run_id=run_routing.run_id,
+            results_routing_key=run_routing.results_routing_key,
+            allow_repair_loop=preset.allow_repair_loop,
+            execution_policy=execution_policy,
         ).run(timeout_s=args.timeout)
     finally:
         stop_workers(workers, stop_event)
@@ -263,30 +346,85 @@ def run_full(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Hardware agent system CLI")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to runtime YAML config.")
+    parser.add_argument("--preset", help="Override active preset from config.")
     parser.add_argument("--timeout", type=float, default=0.0, help="Pipeline timeout in seconds (0 disables)")
     parser.add_argument("--run-name", help="Optional run name for observability/AgentOps")
+    parser.add_argument("--spec-file", help="Path to a spec text file to run non-interactively.")
+    parser.add_argument(
+        "--direct-spec",
+        action="store_true",
+        help="Parse L1-L5 structured spec text directly (skip Spec Helper LLM interaction). Requires --spec-file.",
+    )
+    parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt after planning.")
     parser.add_argument(
         "--narrative-mode",
         choices=("llm", "deterministic", "off"),
-        default=_default_narrative_mode(),
+        default=None,
         help="Execution output mode: LLM narrative, deterministic narrative, or raw internal progress.",
     )
     return parser
 
 
+def _run_benchmark_command(argv: list[str]) -> None:
+    from apps.cli.run_verilog_eval import build_parser as build_benchmark_parser, run_from_args
+
+    parser = build_benchmark_parser()
+    args = parser.parse_args(argv)
+    initialize_runtime_config(Path(args.config), preset_override=args.preset)
+    run_from_args(args)
+
+
+def _run_doctor_command(argv: list[str]) -> int:
+    from apps.cli.doctor import build_parser as build_doctor_parser, run_from_args
+
+    parser = build_doctor_parser()
+    args = parser.parse_args(argv)
+    initialize_runtime_config(Path(args.config), preset_override=args.preset)
+    return int(run_from_args(args))
+
+
 def main(argv: list[str] | None = None) -> None:
     _load_env_file(REPO_ROOT / ".env")
     argv = argv if argv is not None else sys.argv[1:]
+    if argv and argv[0] == "doctor":
+        try:
+            code = _run_doctor_command(argv[1:])
+        except KeyboardInterrupt:
+            print("\nAborted.")
+            sys.exit(1)
+        except Exception as exc:  # noqa: BLE001
+            print(f"\nError: {_format_exception(exc)}")
+            if os.getenv("CLI_SHOW_TRACEBACK") == "1":
+                traceback.print_exc()
+            sys.exit(1)
+        if code != 0:
+            sys.exit(code)
+        return
+    if argv and argv[0] == "benchmark":
+        try:
+            _run_benchmark_command(argv[1:])
+        except KeyboardInterrupt:
+            print("\nAborted.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"\nError: {_format_exception(exc)}")
+            if os.getenv("CLI_SHOW_TRACEBACK") == "1":
+                traceback.print_exc()
+            sys.exit(1)
+        return
     if argv and argv[0] in ("run", "full"):
         argv = argv[1:]
     parser = build_parser()
     args = parser.parse_args(argv)
+    initialize_runtime_config(Path(args.config), preset_override=args.preset)
     try:
         run_full(args)
     except KeyboardInterrupt:
         print("\nAborted.")
     except Exception as exc:  # noqa: BLE001
-        print(f"\nError: {exc}")
+        print(f"\nError: {_format_exception(exc)}")
+        if os.getenv("CLI_SHOW_TRACEBACK") == "1":
+            traceback.print_exc()
         sys.exit(1)
 
 

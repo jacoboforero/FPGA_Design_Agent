@@ -34,6 +34,7 @@ class DemoContextBuilder:
         connections = node.get("connections")
         if connections is None:
             connections = self._context.get("connections", [])
+        execution_policy = self._context.get("execution_policy", {})
         return {
             "node_id": node_id,
             "interface": node["interface"],
@@ -48,6 +49,7 @@ class DemoContextBuilder:
             "verification": node.get("verification", {}),
             "acceptance": node.get("acceptance", {}),
             "verification_scope": node.get("verification_scope", "full"),
+            "execution_policy": execution_policy,
             "top_module": self._context.get("top_module"),
             "children": children,
             "child_interfaces": child_interfaces,

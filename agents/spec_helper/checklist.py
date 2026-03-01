@@ -313,6 +313,10 @@ def is_missing(value: Any, field: Dict[str, Any]) -> bool:
             if isinstance(val, str) and _is_none_token(val):
                 return True
             if isinstance(val, list):
+                # Explicit empty lists are valid for plan fields that intentionally
+                # declare "no entries" (e.g., assertion_plan.sva = []).
+                if len(val) == 0:
+                    continue
                 if _list_has_only_none(val):
                     return True
                 continue

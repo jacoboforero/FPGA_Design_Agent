@@ -1,22 +1,35 @@
-# Message Schemas & Controlled Vocabularies
+# Schemas
 
-Shared schemas keep the Orchestrator, agents, and deterministic workers aligned. Full tables live in `core/schemas/SCHEMAS.md` and the source of truth models are in `core/schemas/contracts.py`.
+## Purpose
+Summarize shared message contracts and controlled vocabularies used across runtime components.
 
-## Core Models
+## Audience
+Contributors changing task payloads, result payloads, routing enums, or validation behavior.
 
-- **TaskMessage:** Work unit published by the Orchestrator. Includes `task_id`, `correlation_id`, `priority`, routing fields (`entity_type`, `task_type` via `AgentType`/`WorkerType`), and a `context` payload with task-specific parameters.  
-- **ResultMessage:** Completion record emitted by workers. Includes `status` (`TaskStatus`), `artifacts_path`, `log_output`, optional `metrics` (`CostMetrics`), and optional analysis payloads (`AnalysisMetadata`, `DistilledDataset`, `ReflectionInsights`).
+## Scope
+Schema overview and usage guidance. Full model definitions remain in code.
+
+## Core Contracts
+- **TaskMessage**: task identity, routing fields, and execution context.
+- **ResultMessage**: task completion status, logs, and optional analysis artifacts.
 
 ## Controlled Vocabularies
+- `EntityType`: `REASONING`, `LIGHT_DETERMINISTIC`, `HEAVY_DETERMINISTIC`
+- `AgentType`: planner/spec helper/implementation/testbench/reflection/debug
+- `WorkerType`: linter/testbench linter/acceptance/simulator/distillation
+- `TaskStatus`: `SUCCESS`, `FAILURE`, `ESCALATED_TO_HUMAN`
 
-- **EntityType:** `REASONING`, `LIGHT_DETERMINISTIC`, `HEAVY_DETERMINISTIC` (maps to routing/worker class).  
-- **AgentType:** `SpecificationHelperAgent`, `PlannerAgent`, `ImplementationAgent`, `TestbenchAgent`, `ReflectionAgent`, `DebugAgent` (selected per agent task).  
-- **WorkerType:** `LinterWorker`, `TestbenchLinterWorker`, `AcceptanceWorker`, `SimulatorWorker`, `SynthesizerWorker`, `DistillationWorker` (deterministic tasks).  
-- **TaskPriority:** `LOW`, `MEDIUM`, `HIGH`.  
-- **TaskStatus:** `SUCCESS`, `FAILURE`, `ESCALATED_TO_HUMAN`.
+## Validation Guidance
+- Validate payloads before execution.
+- Preserve `task_id` and `correlation_id` across retries/results.
+- Keep schema changes backward compatible unless coordinated as breaking changes.
 
-## Usage Notes
+## Source of Truth
+- `/home/jacobo/school/FPGA_Design_Agent/core/schemas/contracts.py`
+- `/home/jacobo/school/FPGA_Design_Agent/core/schemas/specifications.py`
+- `/home/jacobo/school/FPGA_Design_Agent/core/schemas/SCHEMAS.md`
 
-- Workers must validate inbound messages against these schemas before execution; schema failures should be rejected to the DLQ.  
-- Orchestrator and workers should preserve `task_id` and `correlation_id` across retries to maintain traceability from planning artifacts to execution attempts.  
-- Coverage identifiers, interface enums, and routing metadata referenced in L1–L5 planning artifacts should align with these schemas to avoid poison pills. See [queues-and-workers.md](./queues-and-workers.md) for DLX/DLQ handling.
+## Related Docs
+- [queues-and-workers.md](./queues-and-workers.md)
+- [spec-and-planning.md](./spec-and-planning.md)
+- [reference/runtime-config.md](./reference/runtime-config.md)

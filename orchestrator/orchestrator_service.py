@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import shutil
 import time
@@ -26,13 +25,16 @@ from core.schemas.contracts import (
 )
 from core.observability.emitter import emit_runtime_event
 from core.observability.run_artifacts import get_run_artifacts_dir, mirror_directory
+from core.runtime.broker import (
+    DEFAULT_RESULTS_ROUTING_KEY,
+    TASK_EXCHANGE,
+    declare_results_queue,
+)
+from core.runtime.config import get_runtime_config
 
 from orchestrator.context_builder import DemoContextBuilder
 from orchestrator.state_machine import Node, NodeState
 from orchestrator.task_memory import TaskMemory
-
-TASK_EXCHANGE = "tasks_exchange"
-RESULTS_ROUTING_KEY = "RESULTS"
 
 
 class DemoOrchestrator:
@@ -55,6 +57,12 @@ class DemoOrchestrator:
         state_callback=None,
         event_callback: Optional[Callable[[str, dict[str, Any]], None]] = None,
         raw_progress: bool = True,
+        *,
+        run_id: str | None = None,
+        results_routing_key: str = DEFAULT_RESULTS_ROUTING_KEY,
+        results_queue_name: str | None = None,
+        allow_repair_loop: bool = True,
+        execution_policy: Optional[dict[str, Any]] = None,
     ):
         self.connection_params = connection_params
         self.design_context_path = design_context_path
@@ -72,6 +80,11 @@ class DemoOrchestrator:
         self.state_callback = state_callback
         self.event_callback = event_callback
         self.raw_progress = raw_progress
+        self.run_id = run_id
+        self.results_routing_key = results_routing_key
+        self.results_queue_name = results_queue_name
+        self.allow_repair_loop = allow_repair_loop
+        self.execution_policy = execution_policy or {}
 
     def _emit_event(self, event_type: str, payload: dict[str, Any]) -> None:
         if not self.event_callback:
@@ -102,7 +115,15 @@ class DemoOrchestrator:
             ctx["attempt"] = attempt
         if extra_ctx:
             ctx.update(extra_ctx)
-        task = TaskMessage(entity_type=entity, task_type=task_type, context=ctx)
+        if self.execution_policy:
+            ctx.setdefault("execution_policy", self.execution_policy)
+        task = TaskMessage(
+            entity_type=entity,
+            task_type=task_type,
+            context=ctx,
+            run_id=self.run_id,
+            results_routing_key=self.results_routing_key,
+        )
         ch.basic_publish(
             exchange=TASK_EXCHANGE,
             routing_key=entity.value,
@@ -133,8 +154,11 @@ class DemoOrchestrator:
             timeout_s = float("inf")
         with pika.BlockingConnection(self.connection_params) as conn:
             ch = conn.channel()
-            ch.queue_declare(queue="results", durable=True)
-            ch.queue_bind(queue="results", exchange=TASK_EXCHANGE, routing_key=RESULTS_ROUTING_KEY)
+            results_queue = declare_results_queue(
+                ch,
+                results_routing_key=self.results_routing_key,
+                queue_name=self.results_queue_name,
+            )
 
             node_ids = list(self.nodes.keys())
             tasks: Dict[str, Dict[str, TaskMessage]] = {}
@@ -142,7 +166,10 @@ class DemoOrchestrator:
             active_nodes = set()
             done_nodes = set()
             succeeded_nodes = set()
-            max_debug_retries = int(os.getenv("DEBUG_MAX_RETRIES", "2"))
+            configured_retries = int(get_runtime_config().debug.max_retries)
+            max_debug_retries = int(
+                self.execution_policy.get("debug_max_retries", configured_retries)
+            )
             attempt_by_node: dict[str, int] = {}
             debug_attempts_by_node: dict[str, dict[str, int]] = {}
             tb_generated_by_node: dict[str, bool] = {}
@@ -454,7 +481,7 @@ class DemoOrchestrator:
             start = time.time()
 
             while time.time() - start < timeout_s and len(done_nodes) < len(node_ids):
-                method, props, body = ch.basic_get(queue="results", auto_ack=True)
+                method, props, body = ch.basic_get(queue=results_queue, auto_ack=False)
                 if body is None:
                     time.sleep(0.1)
                     continue
@@ -470,7 +497,9 @@ class DemoOrchestrator:
                     if target_node:
                         break
                 if not target_node:
+                    ch.basic_nack(method.delivery_tag, requeue=True)
                     continue
+                ch.basic_ack(method.delivery_tag)
 
                 kind, stage_attempt = _parse_stage_key(stage)
                 self.task_memory.record_log(target_node, stage, result.log_output)
@@ -508,6 +537,9 @@ class DemoOrchestrator:
                 )
 
                 if result.status is not TaskStatus.SUCCESS:
+                    if not self.allow_repair_loop and kind in {"lint", "tb_lint", "sim", "distill", "reflect", "debug"}:
+                        _finish_failed(target_node)
+                        continue
                     if kind == "lint":
                         reason = "rtl_lint"
                         attempt = stage_attempt or attempt_by_node.get(target_node, 1)

@@ -177,7 +177,74 @@ def _build_module_contract(
     return contract
 
 
-def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> None:
+def _module_port_index(l2_by_module: Dict[str, L2Specification]) -> Dict[str, set[str]]:
+    index: Dict[str, set[str]] = {}
+    for module, spec in l2_by_module.items():
+        index[module] = {sig.name for sig in spec.signals if sig.name}
+    return index
+
+
+def _validate_l4_connection_endpoints(
+    *,
+    module_nodes: List[str],
+    l4: L4Specification,
+    port_index: Dict[str, set[str]],
+) -> None:
+    module_set = set(module_nodes)
+    for conn in l4.connections:
+        for side_name, endpoint in (("src", conn.src), ("dst", conn.dst)):
+            node_id = endpoint.node_id
+            if node_id not in module_set:
+                continue
+            port = endpoint.port
+            declared = port_index.get(node_id, set())
+            if port in declared:
+                continue
+            declared_list = ", ".join(sorted(declared))
+            raise RuntimeError(
+                f"L4.connections {side_name} endpoint '{node_id}.{port}' does not exist in "
+                f"L2.signals for module '{node_id}'. Declared ports: [{declared_list}]"
+            )
+
+
+def _validate_child_connection_coverage(
+    *,
+    module_nodes: List[str],
+    deps_map: Dict[str, List[str]],
+    l4: L4Specification,
+) -> None:
+    modules_with_children = [module for module in module_nodes if deps_map.get(module)]
+    if not modules_with_children:
+        return
+
+    if not l4.connections:
+        parents = ", ".join(modules_with_children)
+        raise RuntimeError(
+            "L4.connections is empty, but these modules declare generated child dependencies: "
+            f"{parents}. Add explicit L4.connections wiring for integration."
+        )
+
+    connected_nodes: set[str] = set()
+    for conn in l4.connections:
+        connected_nodes.add(conn.src.node_id)
+        connected_nodes.add(conn.dst.node_id)
+
+    for parent in modules_with_children:
+        missing_children = [child for child in deps_map.get(parent, []) if child not in connected_nodes]
+        if not missing_children:
+            continue
+        missing = ", ".join(missing_children)
+        raise RuntimeError(
+            f"Missing L4.connections coverage for child module(s) [{missing}] required by parent '{parent}'. "
+            "Define explicit connection endpoints for each generated child module."
+        )
+
+
+def generate_from_specs(
+    spec_dir: Path = SPEC_DIR,
+    out_dir: Path = OUT_DIR,
+    execution_policy: Dict[str, Any] | None = None,
+) -> None:
     spec_dir = spec_dir.resolve()
     out_dir = out_dir.resolve()
     lock_path = spec_dir / "lock.json"
@@ -195,6 +262,8 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
     l4 = L4Specification.model_validate_json((spec_dir / "L4_architecture.json").read_text())
     l5 = L5Specification.model_validate_json((spec_dir / "L5_acceptance.json").read_text())
 
+    execution_policy = execution_policy or {}
+    verification_profile = str(execution_policy.get("verification_profile", "hybrid_scoreboard"))
     module_nodes = _extract_module_nodes(l4, top_module)
     node_meta_map = _node_metadata_map(l4)
     if lock_modules:
@@ -229,6 +298,10 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
         l2_by_module[module] = L2Specification.model_validate_json(paths["L2"].read_text())
         l3_by_module[module] = L3Specification.model_validate_json(paths["L3"].read_text())
         l5_by_module[module] = L5Specification.model_validate_json(paths["L5"].read_text())
+
+    port_index = _module_port_index(l2_by_module)
+    _validate_l4_connection_endpoints(module_nodes=module_nodes, l4=l4, port_index=port_index)
+    _validate_child_connection_coverage(module_nodes=module_nodes, deps_map=deps_map, l4=l4)
 
     nodes: Dict[str, Dict[str, Any]] = {}
     for module in module_nodes:
@@ -314,7 +387,7 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
             "demo_behavior": demo_behavior,
             "verification": verification,
             "acceptance": acceptance,
-            "verification_scope": "full",
+            "verification_scope": verification_profile,
             "children": children,
             "connections": node_connections,
             "module_contract": node_contract,
@@ -327,6 +400,7 @@ def generate_from_specs(spec_dir: Path = SPEC_DIR, out_dir: Path = OUT_DIR) -> N
         "top_module": top_module,
         "modules": module_nodes,
         "connections": [conn.model_dump() for conn in l4.connections],
+        "execution_policy": execution_policy,
     }
     design_context["design_context_hash"] = _hash_dict(design_context["nodes"])
 

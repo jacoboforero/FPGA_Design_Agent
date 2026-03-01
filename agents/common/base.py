@@ -5,7 +5,6 @@ tasks from the shared ``agent_tasks`` queue and emits results to ``RESULTS``.
 """
 from __future__ import annotations
 
-import os
 import threading
 import time
 from typing import Iterable, Set
@@ -13,10 +12,9 @@ from typing import Iterable, Set
 import pika
 from core.schemas.contracts import AgentType, ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
-from core.runtime.retry import RetryableError, TaskInputError, get_retry_count, next_retry_headers, MAX_RETRIES
-
-TASK_EXCHANGE = "tasks_exchange"
-RESULTS_ROUTING_KEY = "RESULTS"
+from core.runtime.retry import RetryableError, TaskInputError, get_max_retries, get_retry_count, next_retry_headers
+from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE
+from core.runtime.config import get_runtime_config
 
 
 class AgentWorkerBase(threading.Thread):
@@ -39,16 +37,23 @@ class AgentWorkerBase(threading.Thread):
     def handle_task(self, task: TaskMessage) -> ResultMessage:  # pragma: no cover - overridden
         raise NotImplementedError
 
-    def _publish_result(self, ch: pika.adapters.blocking_connection.BlockingChannel, result: ResultMessage) -> None:
+    def _publish_result(
+        self,
+        ch: pika.adapters.blocking_connection.BlockingChannel,
+        task: TaskMessage,
+        result: ResultMessage,
+    ) -> None:
+        routed = result.model_copy(update={"run_id": result.run_id or task.run_id})
+        routing_key = task.results_routing_key or DEFAULT_RESULTS_ROUTING_KEY
         ch.basic_publish(
             exchange=TASK_EXCHANGE,
-            routing_key=RESULTS_ROUTING_KEY,
-            body=result.model_dump_json().encode(),
+            routing_key=routing_key,
+            body=routed.model_dump_json().encode(),
             properties=pika.BasicProperties(content_type="application/json"),
         )
 
     def run(self) -> None:
-        reconnect_delay_s = float(os.getenv("RABBITMQ_RECONNECT_DELAY", "1.0"))
+        reconnect_delay_s = float(get_runtime_config().broker.reconnect_delay_s)
         while not self.stop_event.is_set():
             try:
                 with pika.BlockingConnection(self.connection_params) as conn:
@@ -79,7 +84,7 @@ class AgentWorkerBase(threading.Thread):
                             continue
                         except RetryableError:
                             retry_count = get_retry_count(props)
-                            if retry_count < MAX_RETRIES:
+                            if retry_count < get_max_retries():
                                 headers = next_retry_headers(props)
                                 ch.basic_publish(
                                     exchange=TASK_EXCHANGE,
@@ -98,7 +103,7 @@ class AgentWorkerBase(threading.Thread):
                                 status=TaskStatus.FAILURE,
                                 log_output=f"Unhandled agent error: {exc}",
                             )
-                        self._publish_result(ch, result)
+                        self._publish_result(ch, task, result)
                         ch.basic_ack(method.delivery_tag)
             except Exception as exc:  # noqa: BLE001
                 emit_runtime_event(

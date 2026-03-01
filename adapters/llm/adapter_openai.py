@@ -15,6 +15,7 @@ from adapters.llm.gateway import (
     ModelResponse,
     GenerationConfig,
 )
+from core.runtime.config import get_runtime_config
 
 
 class OpenAIGateway(LLMGateway):
@@ -40,9 +41,14 @@ class OpenAIGateway(LLMGateway):
         model: str = "gpt-5-nano",
         organization: Optional[str] = None, # Required for billing, rate limits, usage reports.
     ):
+        try:
+            request_timeout_s = float(get_runtime_config().llm.request_timeout_s)
+        except Exception:
+            request_timeout_s = 120.0
         self.client = AsyncOpenAI(
             api_key=api_key,
             organization=organization,
+            timeout=request_timeout_s,
         )
         self._model = model
         raw_mode = os.getenv("OPENAI_API_MODE", "auto").strip().lower() or "auto"

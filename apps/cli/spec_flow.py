@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import inspect
 import shlex
 import shutil
 import subprocess
@@ -16,7 +17,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from uuid import UUID, uuid4
 
+import yaml
+
 from agents.common.llm_gateway import init_llm_gateway
+from core.runtime.config import get_runtime_config
 from agents.spec_helper.checklist import (
     FieldInfo,
     build_empty_checklist,
@@ -59,11 +63,16 @@ from core.schemas.specifications import (
 
 SPEC_DIR = Path("artifacts/task_memory/specs")
 
-WELCOME_BANNER = r"""
-============================================================
-  Multi-Agent Hardware Design CLI
-============================================================
-"""
+HOME_LOGO = [
+    "   ___   _   _  _____  _____        ____   _____  _      ",
+    "  / _ \\ | | | ||_   _||  _  |      |  _ \\ |_   _|| |     ",
+    " / /_\\ \\| | | |  | |  | | | | _____| |_) |  | |  | |     ",
+    " |  _  || |_| |  | |  | |_| ||_____| |  _<  | |  | |___ ",
+    " |_| |_| \\___/   |_|  |_____|      |_| \\_\\  |_|  |_____| ",
+]
+
+_APP_TITLE = "Auto-RTL"
+_APP_TAGLINE = "Design Computer Hardware, but 10x faster"
 
 # ---------------------------------------------------------------------------
 # Minimal ANSI color helpers (no extra deps)
@@ -88,11 +97,34 @@ _COLOR = _colors_enabled()
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
+_WHITE = "\033[97m"
+_MINT = "\033[38;5;121m"
 _RED = "\033[31m"
+_GREEN = _MINT
 _YELLOW = "\033[33m"
-_BLUE = "\033[34m"
-_MAGENTA = "\033[35m"
-_CYAN = "\033[36m"
+_BLUE = _MINT
+_MAGENTA = _MINT
+_CYAN = _MINT
+
+
+def _rgb_fg(r: int, g: int, b: int, fallback: str) -> str:
+    if os.getenv("COLORTERM", "").lower() in {"truecolor", "24bit"}:
+        return f"\033[38;2;{r};{g};{b}m"
+    return fallback
+
+
+def _rgb_bg(r: int, g: int, b: int, fallback: str = "") -> str:
+    if os.getenv("COLORTERM", "").lower() in {"truecolor", "24bit"}:
+        return f"\033[48;2;{r};{g};{b}m"
+    return fallback
+
+
+_THEME_ACCENT = _rgb_fg(124, 237, 204, _MINT)
+_THEME_ACCENT_SOFT = _rgb_fg(102, 193, 166, _MINT)
+_THEME_TEXT = _rgb_fg(241, 248, 246, _WHITE)
+_THEME_MUTED = _rgb_fg(166, 197, 188, _MINT)
+_THEME_SURFACE = _rgb_bg(22, 27, 28)
+_THEME_SURFACE_ALT = _rgb_bg(27, 33, 34)
 
 
 def _style(text: str, *codes: str) -> str:
@@ -101,8 +133,58 @@ def _style(text: str, *codes: str) -> str:
     return "".join(codes) + text + _RESET
 
 
+def _terminal_width(default: int = 108) -> int:
+    try:
+        cols = shutil.get_terminal_size((default, 24)).columns
+    except Exception:  # noqa: BLE001
+        return default
+    return max(72, min(cols, 132))
+
+
+def _trim_to_width(text: str, width: int) -> str:
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return text[: width - 3].rstrip() + "..."
+
+
+def _print_panel(title: str, lines: List[str], *, border_color: str = _CYAN, text_color: str = "") -> None:
+    inner = min(_terminal_width() - 6, 96)
+    accent = border_color or _THEME_ACCENT_SOFT
+    top = "." + ("-" * (inner + 2)) + "."
+    bottom = "'" + ("-" * (inner + 2)) + "'"
+    print(_style(top, accent))
+    header = _trim_to_width(f"[ {title} ]", inner).ljust(inner)
+    print(_style("|", accent) + _style(f" {header} ", _BOLD, _THEME_TEXT, _THEME_SURFACE) + _style("|", accent))
+    print(_style("|", accent) + _style(" " * (inner + 2), _THEME_SURFACE) + _style("|", accent))
+    for line in lines:
+        rendered = _trim_to_width(line, inner).ljust(inner)
+        if text_color:
+            print(_style("|", accent) + _style(f" {rendered} ", text_color, _THEME_SURFACE_ALT) + _style("|", accent))
+        else:
+            print(_style("|", accent) + _style(f" {rendered} ", _THEME_TEXT, _THEME_SURFACE_ALT) + _style("|", accent))
+    print(_style("|", accent) + _style(" " * (inner + 2), _THEME_SURFACE) + _style("|", accent))
+    print(_style(bottom, accent))
+    print()
+
+
 def _print_banner() -> None:
-    print(_style(WELCOME_BANNER, _BOLD, _CYAN))
+    print()
+    inner = min(_terminal_width() - 6, 96)
+    top = "." + ("-" * (inner + 2)) + "."
+    bottom = "'" + ("-" * (inner + 2)) + "'"
+    welcome = "Welcome, Vibe Engineer."
+    print(_style(top, _THEME_ACCENT))
+    print(_style("|", _THEME_ACCENT) + _style(f" {_trim_to_width(welcome, inner).ljust(inner)} ", _THEME_TEXT, _THEME_SURFACE) + _style("|", _THEME_ACCENT))
+    print(_style(bottom, _THEME_ACCENT))
+    print()
+    logo_colors = (_THEME_ACCENT, _THEME_TEXT, _THEME_ACCENT, _THEME_TEXT, _THEME_ACCENT)
+    for idx, line in enumerate(HOME_LOGO):
+        print(_style("  " + _trim_to_width(line, inner), _BOLD, logo_colors[idx % len(logo_colors)]))
+    print()
+    print(_style(f"  {_APP_TAGLINE}", _THEME_MUTED))
+    print(_style("  " + ("-" * min(inner, 84)), _THEME_ACCENT_SOFT))
     print()
 
 
@@ -137,35 +219,45 @@ def _open_editor_for_spec() -> Tuple[str, Path]:
     SPEC_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     spec_path = SPEC_DIR / f"spec_input_{stamp}.txt"
-    print("Spec Input")
-    print("-" * 10)
-    print("Choose how to provide the spec:")
-    print("1) Create a new spec file (default)")
-    print("2) Use an existing spec file (copied into a new file)")
-    choice = input("Select [1/2]: ").strip().lower()
+    _print_panel(
+        "Spec Input",
+        [
+            "Choose how to provide the specification source:",
+            "1) Create a new spec file (default).",
+            "2) Use an existing spec file (copied into a new run file).",
+        ],
+        border_color=_MINT,
+    )
+    choice = input(_style("Select option [1/2]: ", _BOLD, _MINT)).strip().lower()
     use_existing = choice in ("2", "existing", "file", "path")
 
     if use_existing:
-        path_text = input("Path to existing spec file: ").strip()
+        path_text = input(_style("Path to existing spec file: ", _BOLD)).strip()
         if not path_text:
-            print("No path provided; aborting.")
+            print(_style("No path provided; aborting.", _YELLOW))
             return "", spec_path
         src_path = Path(os.path.expanduser(path_text)).expanduser()
         if not src_path.exists() or not src_path.is_file():
-            print(f"Spec path not found or not a file: {src_path}")
+            print(_style(f"Spec path not found or not a file: {src_path}", _RED))
             return "", spec_path
         try:
             spec_path.write_text(src_path.read_text())
         except Exception as exc:  # noqa: BLE001
-            print(f"Could not read spec file: {exc}")
+            print(_style(f"Could not read spec file: {exc}", _RED))
             return "", spec_path
-        print("Existing spec copied into a new file for this run.")
+        print(_style("Existing spec copied into a new file for this run.", _GREEN))
     else:
         spec_path.write_text("")
 
-    print("Press Enter to open your editor and paste/confirm the specification.")
-    print("Save and close the editor when you're done.")
-    print(f"File: {spec_path}")
+    _print_panel(
+        "Editor",
+        [
+            "Press Enter to open your editor and paste or confirm the specification.",
+            "Save and close the editor to continue.",
+            f"Run file: {spec_path}",
+        ],
+        border_color=_MINT,
+    )
     try:
         input()
     except KeyboardInterrupt:
@@ -265,6 +357,245 @@ def _build_module_spec_text(defaults_text: str, module_text: str) -> str:
 def _module_spec_path(base_path: Path, module_name: str) -> Path:
     stem = base_path.stem
     return base_path.with_name(f"{stem}_{_sanitize_name(module_name)}.txt")
+
+
+_L_SECTION_RE = re.compile(r"^\s*(L[1-5])\s*$")
+
+
+def _section_key(data: Dict[str, Any], *names: str, default: Any = None) -> Any:
+    for key in names:
+        if key in data:
+            return data[key]
+    return default
+
+
+def _as_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _as_list_value(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _as_list_of_dicts(value: Any) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in _as_list_value(value):
+        if isinstance(item, dict):
+            out.append(item)
+    return out
+
+
+def _as_list_of_texts(value: Any) -> List[str]:
+    out: List[str] = []
+    for item in _as_list_value(value):
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                out.append(text)
+            continue
+        if isinstance(item, dict):
+            if len(item) == 1:
+                key, val = next(iter(item.items()))
+                out.append(f"{str(key).strip()}: {str(val).strip()}")
+            else:
+                out.append(json.dumps(item, ensure_ascii=True))
+            continue
+        text = str(item).strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def _split_l_sections(module_text: str) -> Dict[str, str]:
+    lines = module_text.splitlines()
+    sections: List[Tuple[str, int]] = []
+    for idx, line in enumerate(lines):
+        match = _L_SECTION_RE.match(line)
+        if not match:
+            continue
+        sections.append((match.group(1), idx))
+
+    if not sections:
+        raise RuntimeError("Direct spec parsing expected L1-L5 section headers, but none were found.")
+
+    out: Dict[str, str] = {}
+    for i, (name, start_idx) in enumerate(sections):
+        end_idx = sections[i + 1][1] if i + 1 < len(sections) else len(lines)
+        payload = "\n".join(lines[start_idx + 1 : end_idx]).strip()
+        out[name] = payload
+    return out
+
+
+def _yaml_escape_bullets(body: str) -> str:
+    escaped: List[str] = []
+    obj_item_re = re.compile(r"^(\s*)-\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*.*$")
+    generic_bullet_re = re.compile(r"^(\s*)-\s+(.*)$")
+    for line in body.splitlines():
+        if obj_item_re.match(line):
+            escaped.append(line)
+            continue
+        bullet = generic_bullet_re.match(line)
+        if not bullet:
+            escaped.append(line)
+            continue
+        indent, text = bullet.groups()
+        quoted = text.strip().replace("\\", "\\\\").replace('"', '\\"')
+        escaped.append(f'{indent}- "{quoted}"')
+    return "\n".join(escaped)
+
+
+def _parse_yaml_section(body: str, label: str) -> Dict[str, Any]:
+    if not body.strip():
+        return {}
+    try:
+        parsed = yaml.safe_load(body)
+    except Exception as exc:  # noqa: BLE001
+        try:
+            parsed = yaml.safe_load(_yaml_escape_bullets(body))
+        except Exception as escaped_exc:  # noqa: BLE001
+            raise RuntimeError(f"Failed to parse {label} section as YAML-like mapping: {escaped_exc}") from escaped_exc
+    if parsed is None:
+        return {}
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"{label} section must parse to a mapping; got {type(parsed).__name__}.")
+    return parsed
+
+
+def _parse_direct_checklist(module_text: str, *, module_name_override: str | None = None) -> Dict[str, Any]:
+    module_name = _extract_module_name(module_text) or module_name_override
+    if not module_name:
+        raise RuntimeError("Direct spec parsing requires a 'Module: <name>' line.")
+    module_name = _sanitize_name(module_name)
+
+    sections = _split_l_sections(module_text)
+    missing_sections = [name for name in ("L1", "L2", "L3", "L4", "L5") if name not in sections]
+    if missing_sections:
+        raise RuntimeError(f"Direct spec parsing missing required sections: {', '.join(missing_sections)}")
+
+    l1_raw = _parse_yaml_section(sections["L1"], "L1")
+    l2_raw = _parse_yaml_section(sections["L2"], "L2")
+    l3_raw = _parse_yaml_section(sections["L3"], "L3")
+    l4_raw = _parse_yaml_section(sections["L4"], "L4")
+    l5_raw = _parse_yaml_section(sections["L5"], "L5")
+
+    reset_constraints = _as_dict(_section_key(l3_raw, "Reset constraints", "reset_constraints", default={}))
+    if not reset_constraints:
+        min_cycles = _section_key(l3_raw, "min_cycles_after_reset", default=None)
+        ordering_notes = _section_key(l3_raw, "ordering_notes", default=None)
+        if min_cycles is not None or ordering_notes is not None:
+            reset_constraints = {
+                "min_cycles_after_reset": min_cycles if min_cycles is not None else 0,
+                "ordering_notes": ordering_notes,
+            }
+
+    assertion_plan = _as_dict(_section_key(l4_raw, "Assertion plan", "assertion_plan", default={}))
+    if "sva" in l4_raw and "sva" not in assertion_plan:
+        assertion_plan["sva"] = l4_raw.get("sva")
+    if "scoreboard_assertions" in l4_raw and "scoreboard_assertions" not in assertion_plan:
+        assertion_plan["scoreboard_assertions"] = l4_raw.get("scoreboard_assertions")
+    if "sva" in assertion_plan:
+        assertion_plan["sva"] = _as_list_of_texts(assertion_plan.get("sva"))
+    if "scoreboard_assertions" in assertion_plan:
+        assertion_plan["scoreboard_assertions"] = _as_list_of_texts(assertion_plan.get("scoreboard_assertions"))
+
+    checklist = build_empty_checklist()
+    checklist["module_name"] = module_name
+    checklist["L1"] = {
+        "role_summary": _section_key(l1_raw, "Role summary", "role_summary", default=""),
+        "key_rules": _as_list_of_texts(_section_key(l1_raw, "Key rules", "key_rules", default=[])),
+        "performance_intent": _section_key(l1_raw, "Performance intent", "performance_intent", default=""),
+        "reset_semantics": _section_key(l1_raw, "Reset semantics", "reset_semantics", default=""),
+        "corner_cases": _as_list_of_texts(_section_key(l1_raw, "Corner cases", "corner_cases", default=[])),
+        "open_questions": _as_list_of_texts(_section_key(l1_raw, "Open questions", "open_questions", default=[])),
+    }
+    checklist["L2"] = {
+        "clocking": _as_list_of_dicts(_section_key(l2_raw, "Clocking", "clocking", default=[])),
+        "signals": _as_list_of_dicts(_section_key(l2_raw, "Signals", "signals", default=[])),
+        "handshake_semantics": _as_list_of_dicts(
+            _section_key(l2_raw, "Handshake semantics", "handshake_semantics", default=[])
+        ),
+        "transaction_unit": _section_key(l2_raw, "Transaction unit", "transaction_unit", default=""),
+        "configuration_parameters": _as_list_of_dicts(
+            _section_key(l2_raw, "Configuration parameters", "configuration_parameters", default=[])
+        ),
+    }
+    checklist["L3"] = {
+        "test_goals": _as_list_of_texts(_section_key(l3_raw, "Test goals", "test_goals", default=[])),
+        "oracle_strategy": _section_key(l3_raw, "Oracle strategy", "oracle_strategy", default=""),
+        "stimulus_strategy": _section_key(l3_raw, "Stimulus strategy", "stimulus_strategy", default=""),
+        "pass_fail_criteria": _as_list_of_texts(
+            _section_key(l3_raw, "Pass/fail criteria", "pass_fail_criteria", default=[])
+        ),
+        "coverage_targets": _as_list_of_dicts(_section_key(l3_raw, "Coverage targets", "coverage_targets", default=[])),
+        "reset_constraints": reset_constraints,
+        "scenarios": _as_list_of_dicts(_section_key(l3_raw, "Scenarios", "scenarios", default=[])),
+    }
+    checklist["L4"] = {
+        "block_diagram": _as_list_of_dicts(_section_key(l4_raw, "Block diagram", "block_diagram", default=[])),
+        "dependencies": _as_list_of_dicts(_section_key(l4_raw, "Dependencies", "dependencies", default=[])),
+        "connections": _as_list_of_dicts(_section_key(l4_raw, "Connections", "connections", default=[])),
+        "clock_domains": _as_list_of_dicts(_section_key(l4_raw, "Clock domains", "clock_domains", default=[])),
+        "resource_strategy": _section_key(l4_raw, "Resource strategy", "resource_strategy", default=""),
+        "latency_budget": _section_key(l4_raw, "Latency budget", "latency_budget", default=""),
+        "assertion_plan": assertion_plan,
+    }
+    checklist["L5"] = {
+        "required_artifacts": _as_list_of_dicts(_section_key(l5_raw, "Required artifacts", "required_artifacts", default=[])),
+        "acceptance_metrics": _as_list_of_dicts(_section_key(l5_raw, "Acceptance metrics", "acceptance_metrics", default=[])),
+        "exclusions": _as_list_of_texts(_section_key(l5_raw, "Exclusions", "exclusions", default=[])),
+        "synthesis_target": _section_key(l5_raw, "Synthesis target", "synthesis_target", default=""),
+    }
+    return checklist
+
+
+def _collect_multi_specs_direct(spec_text: str, spec_path: Path) -> Dict[str, Any]:
+    _, modules = _split_spec_modules(spec_text)
+    if not modules:
+        raise RuntimeError("Direct multi-module parse called without Module sections.")
+
+    top_module = _extract_top_module(spec_text) or modules[0][0]
+    module_names = [name for name, _ in modules]
+    if top_module not in module_names:
+        raise RuntimeError(f"Top module '{top_module}' not found in spec modules: {module_names}")
+    if len(set(module_names)) != len(module_names):
+        raise RuntimeError(f"Duplicate module names in spec: {module_names}")
+
+    spec_id = uuid4()
+    last_checklist: Dict[str, Any] = {}
+    top_checklist: Dict[str, Any] | None = None
+    for module_name, module_text in modules:
+        checklist = _parse_direct_checklist(module_text, module_name_override=module_name)
+        module_spec_path = _module_spec_path(spec_path, module_name)
+        module_spec_path.write_text(module_text.strip() + "\n")
+        suffix = "" if module_name == top_module else f"_{module_name}"
+        _write_artifacts(
+            module_text,
+            checklist,
+            module_spec_path,
+            module_name=module_name,
+            spec_id=spec_id,
+            filename_suffix=suffix,
+        )
+        if module_name == top_module:
+            top_checklist = checklist
+        last_checklist = checklist
+
+    if top_checklist is None:
+        raise RuntimeError(f"Top module '{top_module}' section was not processed.")
+
+    canonical_modules = _validate_module_inventory(
+        module_names=module_names,
+        top_module=top_module,
+        top_checklist=top_checklist,
+    )
+    _write_lock(canonical_modules, top_module, spec_id)
+    return last_checklist
 
 
 def _set_module_name_in_text(spec_text: str, module_name: str) -> str:
@@ -1176,8 +1507,166 @@ def _build_autogenerated_child_checklist(top_checklist: Dict[str, Any], node_id:
     return checklist
 
 
+_PROMPT_PORT_RE = re.compile(
+    r"^\s*-\s*(input|output|inout)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\(([^)]*)\))?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _prompt_width_expr(hint: str | None) -> str:
+    text = str(hint or "").strip()
+    if not text:
+        return "1"
+    num_match = re.search(r"(\d+)", text)
+    if num_match:
+        return str(int(num_match.group(1)))
+    return "1"
+
+
+def _extract_signals_from_prompt(spec_text: str) -> List[Dict[str, Any]]:
+    signals: List[Dict[str, Any]] = []
+    for line in spec_text.splitlines():
+        match = _PROMPT_PORT_RE.match(line)
+        if not match:
+            continue
+        direction_raw, name, width_hint = match.groups()
+        direction = direction_raw.upper()
+        signals.append(
+            {
+                "name": name.strip(),
+                "direction": direction,
+                "width_expr": _prompt_width_expr(width_hint),
+                "semantics": "",
+            }
+        )
+    return signals
+
+
+def _apply_benchmark_defaults(checklist: Dict[str, Any], spec_text: str) -> Dict[str, Any]:
+    module_name = checklist.get("module_name")
+    if not module_name:
+        extracted = _extract_module_name(spec_text) or "TopModule"
+        checklist["module_name"] = _sanitize_name(extracted)
+    module_name = str(checklist.get("module_name") or "TopModule")
+
+    l1 = checklist.setdefault("L1", {})
+    role_summary = str(l1.get("role_summary", "")).strip()
+    if not role_summary:
+        compact = " ".join(line.strip() for line in spec_text.splitlines() if line.strip())
+        l1["role_summary"] = compact[:280] if compact else f"Implements module {module_name}."
+    key_rules = _clean_list(l1.get("key_rules", []))
+    if not key_rules:
+        l1["key_rules"] = ["Implement behavior exactly as described in the prompt."]
+    if not str(l1.get("performance_intent", "")).strip():
+        l1["performance_intent"] = "Use prompt-defined timing/latency behavior."
+    if not str(l1.get("reset_semantics", "")).strip():
+        l1["reset_semantics"] = "Only as explicitly described in the prompt."
+    corner_cases = _clean_list(l1.get("corner_cases", []))
+    if not corner_cases:
+        l1["corner_cases"] = ["No additional corner cases beyond prompt requirements."]
+
+    l2 = checklist.setdefault("L2", {})
+    signals = _clean_list_of_objects(l2.get("signals", []))
+    if not signals:
+        signals = _extract_signals_from_prompt(spec_text)
+    if not signals:
+        signals = [
+            {"name": "in", "direction": "INPUT", "width_expr": "1", "semantics": ""},
+            {"name": "out", "direction": "OUTPUT", "width_expr": "1", "semantics": ""},
+        ]
+    l2["signals"] = signals
+    clocking = _clean_list_of_objects(l2.get("clocking", []))
+    if not clocking:
+        signal_names = {str(item.get("name", "")).lower() for item in signals if isinstance(item, dict)}
+        clk_name = "clk" if "clk" in signal_names else ("clock" if "clock" in signal_names else "clk")
+        rst_name = "rst_n" if "rst_n" in signal_names else ("reset" if "reset" in signal_names else None)
+        clocking = [{"clock_name": clk_name, "clock_polarity": "POSEDGE", "reset_name": rst_name}]
+    l2["clocking"] = clocking
+    if not str(l2.get("transaction_unit", "")).strip():
+        l2["transaction_unit"] = "Prompt-defined update unit."
+    if not isinstance(l2.get("handshake_semantics"), list):
+        l2["handshake_semantics"] = []
+    if not isinstance(l2.get("configuration_parameters"), list):
+        l2["configuration_parameters"] = []
+
+    l3 = checklist.setdefault("L3", {})
+    if not _clean_list(l3.get("test_goals", [])):
+        l3["test_goals"] = ["Pass benchmark harness checks for all provided tests."]
+    if not str(l3.get("oracle_strategy", "")).strip():
+        l3["oracle_strategy"] = "Use benchmark-provided reference outputs as oracle."
+    if not str(l3.get("stimulus_strategy", "")).strip():
+        l3["stimulus_strategy"] = "Use benchmark-provided test stimuli."
+    if not _clean_list(l3.get("pass_fail_criteria", [])):
+        l3["pass_fail_criteria"] = ["DUT outputs match oracle outputs for benchmark tests."]
+    if not isinstance(l3.get("coverage_targets"), list):
+        l3["coverage_targets"] = []
+    reset_constraints = _clean_object(l3.get("reset_constraints", {}))
+    if _as_int(reset_constraints.get("min_cycles_after_reset")) is None:
+        l3["reset_constraints"] = {"min_cycles_after_reset": 0}
+    if not isinstance(l3.get("scenarios"), list):
+        l3["scenarios"] = []
+
+    l4 = checklist.setdefault("L4", {})
+    if not _clean_list_of_objects(l4.get("block_diagram", [])):
+        l4["block_diagram"] = [
+            {
+                "node_id": module_name,
+                "description": f"Top module for {module_name}.",
+                "node_type": "module",
+                "interface_refs": [],
+                "uses_standard_component": False,
+                "notes": "",
+            }
+        ]
+    if not isinstance(l4.get("dependencies"), list):
+        l4["dependencies"] = []
+    if not isinstance(l4.get("connections"), list):
+        l4["connections"] = []
+    if not isinstance(l4.get("clock_domains"), list):
+        l4["clock_domains"] = []
+    if not str(l4.get("resource_strategy", "")).strip():
+        l4["resource_strategy"] = "Use minimal resources required by the prompt behavior."
+    if not str(l4.get("latency_budget", "")).strip():
+        l4["latency_budget"] = "Prompt-defined latency requirements."
+    assertion_plan = _clean_object(l4.get("assertion_plan", {}))
+    sva_entries = _clean_list(assertion_plan.get("sva", [])) if isinstance(assertion_plan, dict) else []
+    scoreboard_entries = (
+        _clean_list(assertion_plan.get("scoreboard_assertions", [])) if isinstance(assertion_plan, dict) else []
+    )
+    if not sva_entries:
+        sva_entries = ["No additional SVA beyond benchmark harness requirements."]
+    if not scoreboard_entries:
+        scoreboard_entries = ["Harness oracle comparison is the scoreboard authority."]
+    l4["assertion_plan"] = {
+        "sva": sva_entries,
+        "scoreboard_assertions": scoreboard_entries,
+    }
+
+    l5 = checklist.setdefault("L5", {})
+    if not _clean_list_of_objects(l5.get("required_artifacts", [])):
+        l5["required_artifacts"] = [
+            {"name": "rtl", "description": "Generated RTL source", "mandatory": True},
+            {"name": "sim_log", "description": "Simulation log from harness", "mandatory": True},
+        ]
+    if not _clean_list_of_objects(l5.get("acceptance_metrics", [])):
+        l5["acceptance_metrics"] = [
+            {
+                "metric_id": "benchmark_pass",
+                "description": "All benchmark tests pass.",
+                "operator": "==",
+                "target_value": "1",
+                "metric_source": "sim_log",
+            }
+        ]
+    if not isinstance(l5.get("exclusions"), list):
+        l5["exclusions"] = []
+    if not str(l5.get("synthesis_target", "")).strip():
+        l5["synthesis_target"] = "fpga_generic"
+    return checklist
+
+
 def _require_gateway() -> object:
-    model_override = os.getenv("SPEC_HELPER_MODEL", "").strip() or None
+    model_override = get_runtime_config().llm.spec_helper_model
     gateway = init_llm_gateway(model_override=model_override)
     if not gateway:
         raise RuntimeError("Spec helper requires LLMs. Set USE_LLM=1 and provider keys.")
@@ -1185,11 +1674,14 @@ def _require_gateway() -> object:
 
 
 def _complete_checklist(
-    gateway: object,
+    gateway: object | None,
     spec_text: str,
     checklist: Dict[str, Any],
     interactive: bool,
     spec_path: Path | None = None,
+    *,
+    spec_profile: str = "engineer_fast",
+    append_notes: bool = True,
 ) -> Tuple[Dict[str, Any], str]:
     def _load_spec_text(current: str) -> str:
         if spec_path and spec_path.exists():
@@ -1206,6 +1698,8 @@ def _complete_checklist(
 
     def _append_note(label: str, content: str) -> None:
         nonlocal spec_text
+        if not append_notes:
+            return
         if spec_path:
             _append_spec_notes_to_file(spec_path, label, content)
             spec_text = _load_spec_text(spec_text)
@@ -1250,7 +1744,16 @@ def _complete_checklist(
 
     spec_text = _load_spec_text(spec_text)
     _sync_module_name_from_spec()
+    if not interactive and spec_profile == "benchmark":
+        checklist = _apply_benchmark_defaults(checklist, spec_text)
+        missing = list_missing_fields(checklist)
+        if missing:
+            fields = ", ".join(field.path for field in missing[:8])
+            raise RuntimeError(f"Benchmark spec normalization left unresolved fields: {fields}")
+        return checklist, spec_text
     _thinking()
+    if gateway is None:
+        raise RuntimeError("Spec helper LLM gateway unavailable for interactive/non-benchmark flow.")
     checklist = update_checklist_from_spec(gateway, spec_text, checklist)
     missing = list_missing_fields(checklist)
 
@@ -1429,11 +1932,41 @@ def _complete_checklist(
     return checklist, spec_text
 
 
+def _invoke_complete_checklist(
+    gateway: object | None,
+    spec_text: str,
+    checklist: Dict[str, Any],
+    *,
+    interactive: bool,
+    spec_path: Path | None,
+    spec_profile: str,
+    append_notes: bool,
+) -> Tuple[Dict[str, Any], str]:
+    kwargs: Dict[str, Any] = {
+        "interactive": interactive,
+        "spec_path": spec_path,
+    }
+    params = inspect.signature(_complete_checklist).parameters
+    if "spec_profile" in params:
+        kwargs["spec_profile"] = spec_profile
+    if "append_notes" in params:
+        kwargs["append_notes"] = append_notes
+    return _complete_checklist(
+        gateway,
+        spec_text,
+        checklist,
+        **kwargs,
+    )
+
+
 def _collect_multi_specs(
-    gateway: object,
+    gateway: object | None,
     spec_text: str,
     spec_path: Path,
     interactive: bool,
+    *,
+    spec_profile: str = "engineer_fast",
+    append_notes: bool = True,
 ) -> Dict[str, Any]:
     defaults_text, modules = _split_spec_modules(spec_text)
     if not modules:
@@ -1458,12 +1991,14 @@ def _collect_multi_specs(
 
         checklist = build_empty_checklist()
         checklist["module_name"] = module_name
-        checklist, module_spec_text = _complete_checklist(
+        checklist, module_spec_text = _invoke_complete_checklist(
             gateway,
             module_spec_text,
             checklist,
             interactive=interactive,
             spec_path=module_spec_path,
+            spec_profile=spec_profile,
+            append_notes=append_notes,
         )
         suffix = "" if module_name == top_module else f"_{module_name}"
         _write_artifacts(
@@ -1480,53 +2015,79 @@ def _collect_multi_specs(
 
     if top_checklist is None:
         raise RuntimeError(f"Top module '{top_module}' section was not processed.")
-    canonical_modules = _canonical_modules_from_top_checklist(top_checklist, top_module)
-    declared_modules = _ordered_unique_names(module_names)
-    missing_modules = [name for name in canonical_modules if name not in declared_modules]
-    extra_modules = [name for name in declared_modules if name not in canonical_modules]
-    if extra_modules:
-        raise RuntimeError(
-            "Spec/module mismatch between Module blocks and L4.block_diagram non-standard nodes; "
-            f"extra Module section(s): {', '.join(extra_modules)}. "
-            "Remove extra Module sections or add corresponding L4.block_diagram nodes."
-        )
-
-    if missing_modules:
-        for module_name in missing_modules:
-            scaffold_checklist = _build_autogenerated_child_checklist(top_checklist, module_name)
-            module_spec_text = (
-                f"Module: {module_name}\n"
-                "Title: Auto-generated child module scaffold\n\n"
-                f"L1\nRole summary: {scaffold_checklist['L1']['role_summary']}\n"
-            )
-            module_spec_path = _module_spec_path(spec_path, module_name)
-            module_spec_path.write_text(module_spec_text.strip() + "\n")
-            suffix = "" if module_name == top_module else f"_{module_name}"
-            _write_artifacts(
-                module_spec_text,
-                scaffold_checklist,
-                module_spec_path,
-                module_name=module_name,
-                spec_id=spec_id,
-                filename_suffix=suffix,
-            )
-
-    lock_modules = canonical_modules
+    lock_modules = _validate_module_inventory(
+        module_names=module_names,
+        top_module=top_module,
+        top_checklist=top_checklist,
+    )
     _write_lock(lock_modules, top_module, spec_id)
     return last_checklist
 
 
-def collect_specs_from_text(module_name: str, spec_text: str, interactive: bool = True) -> Dict[str, Any]:
+def _invoke_collect_multi_specs(
+    gateway: object | None,
+    spec_text: str,
+    spec_path: Path,
+    interactive: bool,
+    *,
+    spec_profile: str,
+    append_notes: bool,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {
+        "interactive": interactive,
+    }
+    params = inspect.signature(_collect_multi_specs).parameters
+    if "spec_profile" in params:
+        kwargs["spec_profile"] = spec_profile
+    if "append_notes" in params:
+        kwargs["append_notes"] = append_notes
+    return _collect_multi_specs(
+        gateway,
+        spec_text,
+        spec_path,
+        **kwargs,
+    )
+
+
+def collect_specs_from_text(
+    module_name: str,
+    spec_text: str,
+    interactive: bool = True,
+    spec_profile: str | None = None,
+    direct_parse: bool = False,
+) -> Dict[str, Any]:
     SPEC_DIR.mkdir(parents=True, exist_ok=True)
-    gateway = _require_gateway()
     spec_text = spec_text.strip()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     spec_path = SPEC_DIR / f"spec_input_{stamp}.txt"
     spec_path.write_text(spec_text.strip() + "\n")
 
-    defaults_text, modules = _split_spec_modules(spec_text)
+    _, modules = _split_spec_modules(spec_text)
+    if direct_parse:
+        if modules:
+            return _collect_multi_specs_direct(spec_text, spec_path)
+        checklist = _parse_direct_checklist(spec_text, module_name_override=module_name or None)
+        _ensure_single_module_contract(checklist, checklist.get("module_name", module_name or "demo_module"))
+        spec_id = _write_artifacts(spec_text, checklist, spec_path, module_name=checklist.get("module_name"))
+        module_value = checklist.get("module_name", "demo_module")
+        _write_lock([_sanitize_name(str(module_value))], _sanitize_name(str(module_value)), spec_id)
+        return checklist
+
+    profile = spec_profile or get_runtime_config().resolved_preset.spec_profile
+    benchmark_mode = profile == "benchmark"
+    gateway = None if benchmark_mode else _require_gateway()
+    interactive = interactive and not benchmark_mode
+    append_notes = not benchmark_mode
+
     if modules:
-        return _collect_multi_specs(gateway, spec_text, spec_path, interactive)
+        return _invoke_collect_multi_specs(
+            gateway,
+            spec_text,
+            spec_path,
+            interactive,
+            spec_profile=profile,
+            append_notes=append_notes,
+        )
 
     if module_name:
         spec_module = _extract_module_name(spec_text)
@@ -1542,12 +2103,14 @@ def collect_specs_from_text(module_name: str, spec_text: str, interactive: bool 
     if module_name:
         checklist["module_name"] = _sanitize_name(module_name)
 
-    checklist, spec_text = _complete_checklist(
+    checklist, spec_text = _invoke_complete_checklist(
         gateway,
         spec_text,
         checklist,
         interactive=interactive,
         spec_path=spec_path,
+        spec_profile=profile,
+        append_notes=append_notes,
     )
     _ensure_single_module_contract(checklist, checklist.get("module_name", module_name or "demo_module"))
     spec_id = _write_artifacts(spec_text, checklist, spec_path, module_name=checklist.get("module_name"))
@@ -1558,7 +2121,9 @@ def collect_specs_from_text(module_name: str, spec_text: str, interactive: bool 
 
 def collect_specs() -> None:
     _print_banner()
-    gateway = _require_gateway()
+    profile = get_runtime_config().resolved_preset.spec_profile
+    benchmark_mode = profile == "benchmark"
+    gateway = None if benchmark_mode else _require_gateway()
     spec_text, spec_path = _open_editor_for_spec()
     if not spec_text:
         print("No spec text provided; aborting.")
@@ -1566,7 +2131,14 @@ def collect_specs() -> None:
     defaults_text, modules = _split_spec_modules(spec_text)
     if modules:
         try:
-            _collect_multi_specs(gateway, spec_text, spec_path, interactive=True)
+            _invoke_collect_multi_specs(
+                gateway,
+                spec_text,
+                spec_path,
+                interactive=not benchmark_mode,
+                spec_profile=profile,
+                append_notes=not benchmark_mode,
+            )
         except KeyboardInterrupt:
             print("\nAborted.")
             return
@@ -1591,12 +2163,14 @@ def collect_specs() -> None:
 
     checklist = build_empty_checklist()
     try:
-        checklist, spec_text = _complete_checklist(
+        checklist, spec_text = _invoke_complete_checklist(
             gateway,
             spec_text,
             checklist,
-            interactive=True,
+            interactive=not benchmark_mode,
             spec_path=spec_path,
+            spec_profile=profile,
+            append_notes=not benchmark_mode,
         )
     except KeyboardInterrupt:
         print("\nAborted.")

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from pathlib import Path
 
 from core.schemas.contracts import AgentType, ReflectionInsights, ResultMessage, TaskMessage, TaskStatus
@@ -15,6 +14,7 @@ from agents.common.base import AgentWorkerBase
 from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, init_llm_gateway
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
+from core.runtime.config import get_runtime_config
 
 
 class ReflectionWorker(AgentWorkerBase):
@@ -81,9 +81,11 @@ class ReflectionWorker(AgentWorkerBase):
             Message(role=MessageRole.SYSTEM, content=system),
             Message(role=MessageRole.USER, content=user),
         ]
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS_REFLECT", "10000"))
-        temperature = float(os.getenv("LLM_TEMPERATURE_REFLECT", "0.2"))
-        cfg = GenerationConfig(temperature=temperature, max_tokens=max_tokens)
+        llm_cfg = get_runtime_config().llm
+        max_tokens = int(llm_cfg.max_tokens_reflect)
+        temperature = float(llm_cfg.temperature_reflect)
+        top_p = llm_cfg.top_p
+        cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
 
         try:
             resp = asyncio.run(self.gateway.generate(messages=msgs, config=cfg))  # type: ignore[arg-type]

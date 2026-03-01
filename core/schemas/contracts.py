@@ -111,6 +111,10 @@ class TaskMessage(BaseModel):
     """
     task_id: UUID = Field(default_factory=uuid4, description="Unique identifier for this specific task instance.")
     correlation_id: UUID = Field(default_factory=uuid4, description="Identifier to trace a chain of related tasks (e.g., implement -> test -> debug).")
+    run_id: Optional[str] = Field(
+        default=None,
+        description="Run-scoping identifier used to isolate result routing across concurrent runs.",
+    )
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp in UTC when the task was created.")
 
     priority: TaskPriority = Field(default=TaskPriority.MEDIUM, description="Execution priority.")
@@ -121,6 +125,10 @@ class TaskMessage(BaseModel):
 
     # Payload
     context: Dict[str, Any] = Field(..., description="The payload containing all necessary data for the task (e.g., node_id, specs, code paths). Will be specialized into specific models later.")
+    results_routing_key: str = Field(
+        default="RESULTS",
+        description="Routing key workers/agents must publish completion results to.",
+    )
 
 
 class ResultMessage(BaseModel):
@@ -130,6 +138,10 @@ class ResultMessage(BaseModel):
     """
     task_id: UUID = Field(..., description="The ID of the task this result corresponds to.")
     correlation_id: UUID = Field(..., description="The correlation ID from the original task for end-to-end tracing.")
+    run_id: Optional[str] = Field(
+        default=None,
+        description="Run-scoping identifier copied from task metadata for observability and queue isolation debugging.",
+    )
     completed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp in UTC when the task was completed.")
 
     status: TaskStatus = Field(..., description="The final outcome of the task.")

@@ -12,10 +12,9 @@ import pika
 
 from core.schemas.contracts import ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
-from core.runtime.retry import RetryableError, TaskInputError, get_retry_count, next_retry_headers, MAX_RETRIES
+from core.runtime.retry import RetryableError, TaskInputError, get_max_retries, get_retry_count, next_retry_headers
+from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE
 
-TASK_EXCHANGE = "tasks_exchange"
-RESULTS_ROUTING_KEY = "RESULTS"
 _SIM_FAIL_RE = re.compile(r"\b(FAIL|FAILURE|ERROR|FATAL|ASSERT|ASSERTION)\b", re.IGNORECASE)
 _SIM_PASS_RE = re.compile(r"\b(PASS|PASSED)\b", re.IGNORECASE)
 
@@ -50,7 +49,7 @@ class AcceptanceWorker(threading.Thread):
                     continue
                 except RetryableError:
                     retry_count = get_retry_count(props)
-                    if retry_count < MAX_RETRIES:
+                    if retry_count < get_max_retries():
                         headers = next_retry_headers(props)
                         ch.basic_publish(
                             exchange=TASK_EXCHANGE,
@@ -70,7 +69,7 @@ class AcceptanceWorker(threading.Thread):
                         artifacts_path=None,
                         log_output=f"Unhandled acceptance error: {exc}",
                     )
-                self._publish_result(ch, result)
+                self._publish_result(ch, task, result)
                 ch.basic_ack(method.delivery_tag)
 
     def handle_task(self, task: TaskMessage) -> ResultMessage:
@@ -80,6 +79,11 @@ class AcceptanceWorker(threading.Thread):
             raise TaskInputError("Missing node_id in task context.")
         attempt = _parse_attempt(ctx.get("attempt"))
         acceptance = ctx.get("acceptance") if isinstance(ctx.get("acceptance"), dict) else {}
+        execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
+        verification_scope = str(ctx.get("verification_scope", "")).strip()
+        strict_acceptance = verification_scope == "strict_tb_acceptance" or bool(
+            execution_policy.get("strict_acceptance", False)
+        )
         required = acceptance.get("required_artifacts") or []
         metrics = acceptance.get("acceptance_metrics") or []
 
@@ -111,7 +115,7 @@ class AcceptanceWorker(threading.Thread):
             msg = f"Missing required artifact '{name}'"
             if path:
                 msg += f" (expected {path})"
-            if _is_coverage_artifact(name) and sim_passed:
+            if _is_coverage_artifact(name) and sim_passed and not strict_acceptance:
                 warnings.append(f"{msg} (coverage gating deferred)")
             elif mandatory:
                 failures.append(msg)
@@ -126,7 +130,7 @@ class AcceptanceWorker(threading.Thread):
             if not metric_id or not operator:
                 failures.append(f"Invalid acceptance metric definition: {metric}")
                 continue
-            if _is_coverage_source(source) and sim_passed:
+            if _is_coverage_source(source) and sim_passed and not strict_acceptance:
                 warnings.append(
                     f"Skipping coverage metric '{metric_id}' (coverage gating deferred until coverage is generated)."
                 )
@@ -163,11 +167,17 @@ class AcceptanceWorker(threading.Thread):
             log_output="\n".join(log_lines),
         )
 
-    def _publish_result(self, ch: pika.adapters.blocking_connection.BlockingChannel, result: ResultMessage) -> None:
+    def _publish_result(
+        self,
+        ch: pika.adapters.blocking_connection.BlockingChannel,
+        task: TaskMessage,
+        result: ResultMessage,
+    ) -> None:
+        routed = result.model_copy(update={"run_id": result.run_id or task.run_id})
         ch.basic_publish(
             exchange=TASK_EXCHANGE,
-            routing_key=RESULTS_ROUTING_KEY,
-            body=result.model_dump_json().encode(),
+            routing_key=task.results_routing_key or DEFAULT_RESULTS_ROUTING_KEY,
+            body=routed.model_dump_json().encode(),
             properties=pika.BasicProperties(content_type="application/json"),
         )
 

@@ -232,6 +232,16 @@ def test_planner_dependency_direction_child_depends_on_parent(tmp_path: Path):
             "dependency_type": "structural",
         }
     ]
+    l4["connections"] = [
+        {
+            "src": {"node_id": "foo", "port": "in_data"},
+            "dst": {"node_id": "child_mod", "port": "in_data"},
+        },
+        {
+            "src": {"node_id": "child_mod", "port": "out_data"},
+            "dst": {"node_id": "foo", "port": "out_data"},
+        },
+    ]
     l4_path.write_text(json.dumps(l4, indent=2))
 
     # Provide child specs by reusing the top spec payloads.
@@ -283,6 +293,16 @@ def test_planner_infers_combinational_contract_for_comparator(tmp_path: Path):
         },
     ]
     l4["dependencies"] = [{"parent_id": "cmp", "child_id": "foo", "dependency_type": "structural"}]
+    l4["connections"] = [
+        {
+            "src": {"node_id": "foo", "port": "in_data"},
+            "dst": {"node_id": "cmp", "port": "in_data"},
+        },
+        {
+            "src": {"node_id": "cmp", "port": "out_data"},
+            "dst": {"node_id": "foo", "port": "out_data"},
+        },
+    ]
     l4_path.write_text(json.dumps(l4, indent=2))
 
     for base in ("L1_functional", "L2_interface", "L3_verification", "L5_acceptance"):
@@ -302,3 +322,102 @@ def test_planner_infers_combinational_contract_for_comparator(tmp_path: Path):
     cmp_contract = design_context["nodes"]["cmp"]["module_contract"]
     assert cmp_contract["style"] == "combinational"
     assert cmp_contract["forbid_edge_always"] is True
+
+
+def test_planner_requires_connections_when_generated_children_exist(tmp_path: Path):
+    spec_dir = tmp_path / "specs"
+    out_dir = tmp_path / "out"
+    write_specs(spec_dir)
+
+    l4_path = spec_dir / "L4_architecture.json"
+    l4 = json.loads(l4_path.read_text())
+    l4["block_diagram"] = [
+        {
+            "node_id": "foo",
+            "description": "top module",
+            "node_type": "top_level",
+            "interface_refs": ["foo_if"],
+            "uses_standard_component": False,
+            "notes": None,
+        },
+        {
+            "node_id": "child_mod",
+            "description": "child module",
+            "node_type": "module",
+            "interface_refs": ["child_if"],
+            "uses_standard_component": False,
+            "notes": None,
+        },
+    ]
+    l4["dependencies"] = [{"parent_id": "child_mod", "child_id": "foo", "dependency_type": "structural"}]
+    l4["connections"] = []
+    l4_path.write_text(json.dumps(l4, indent=2))
+
+    for base in ("L1_functional", "L2_interface", "L3_verification", "L5_acceptance"):
+        src = spec_dir / f"{base}.json"
+        dst = spec_dir / f"{base}_child_mod.json"
+        dst.write_text(src.read_text())
+
+    lock_path = spec_dir / "lock.json"
+    lock = json.loads(lock_path.read_text())
+    lock["modules"] = ["foo", "child_mod"]
+    lock["top_module"] = "foo"
+    lock_path.write_text(json.dumps(lock, indent=2))
+
+    try:
+        planner.generate_from_specs(spec_dir=spec_dir, out_dir=out_dir)
+        assert False, "Expected planner to fail when child dependencies have no L4.connections."
+    except RuntimeError as exc:
+        assert "L4.connections is empty" in str(exc)
+
+
+def test_planner_fails_when_connection_port_not_declared(tmp_path: Path):
+    spec_dir = tmp_path / "specs"
+    out_dir = tmp_path / "out"
+    write_specs(spec_dir)
+
+    l4_path = spec_dir / "L4_architecture.json"
+    l4 = json.loads(l4_path.read_text())
+    l4["block_diagram"] = [
+        {
+            "node_id": "foo",
+            "description": "top module",
+            "node_type": "top_level",
+            "interface_refs": ["foo_if"],
+            "uses_standard_component": False,
+            "notes": None,
+        },
+        {
+            "node_id": "child_mod",
+            "description": "child module",
+            "node_type": "module",
+            "interface_refs": ["child_if"],
+            "uses_standard_component": False,
+            "notes": None,
+        },
+    ]
+    l4["dependencies"] = [{"parent_id": "child_mod", "child_id": "foo", "dependency_type": "structural"}]
+    l4["connections"] = [
+        {
+            "src": {"node_id": "foo", "port": "in_data"},
+            "dst": {"node_id": "child_mod", "port": "missing_port"},
+        }
+    ]
+    l4_path.write_text(json.dumps(l4, indent=2))
+
+    for base in ("L1_functional", "L2_interface", "L3_verification", "L5_acceptance"):
+        src = spec_dir / f"{base}.json"
+        dst = spec_dir / f"{base}_child_mod.json"
+        dst.write_text(src.read_text())
+
+    lock_path = spec_dir / "lock.json"
+    lock = json.loads(lock_path.read_text())
+    lock["modules"] = ["foo", "child_mod"]
+    lock["top_module"] = "foo"
+    lock_path.write_text(json.dumps(lock, indent=2))
+
+    try:
+        planner.generate_from_specs(spec_dir=spec_dir, out_dir=out_dir)
+        assert False, "Expected planner to fail when L4.connections references unknown ports."
+    except RuntimeError as exc:
+        assert "does not exist in L2.signals" in str(exc)
