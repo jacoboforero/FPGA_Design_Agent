@@ -29,16 +29,19 @@ PYTHONPATH=. python3 apps/cli/cli.py --timeout 120 --config config/runtime.yaml 
 ```bash
 PYTHONPATH=. python3 apps/cli/cli.py doctor --preset engineer_fast
 PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark
+PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark --legacy-lightweight
 ```
 
 ## Notes
 - `benchmark` preset is for benchmark command usage, not interactive full flow.
+- `cli.py benchmark` defaults to orchestrated pipeline execution; use `--legacy-lightweight` for compatibility path.
 - Runtime behavior is YAML-driven (`config/runtime.yaml`), while secrets remain env-based.
+- Benchmark framework assets are vendored under `third_party/verilog-eval/`.
 
 ## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/apps/cli/cli.py`
-- `/home/jacobo/school/FPGA_Design_Agent/apps/cli/doctor.py`
-- `/home/jacobo/school/FPGA_Design_Agent/apps/cli/run_verilog_eval.py`
+- `apps/cli/cli.py`
+- `apps/cli/doctor.py`
+- `apps/cli/run_verilog_eval.py`
 
 ## Related Docs
 - [workflows/interactive-run.md](./workflows/interactive-run.md)

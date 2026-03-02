@@ -8,6 +8,42 @@ import pytest
 from apps.cli import spec_flow
 
 
+def _clear_theme_env(monkeypatch) -> None:
+    for name in ("CLI_THEME", "TERMINAL_BACKGROUND", "TERM_BACKGROUND", "COLORFGBG", "TERM_PROGRAM"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_terminal_theme_mode_honors_cli_theme_override(monkeypatch):
+    _clear_theme_env(monkeypatch)
+    monkeypatch.setenv("CLI_THEME", "light")
+    assert spec_flow._terminal_theme_mode() == "light"
+
+
+def test_terminal_theme_mode_uses_colorfgbg_dark_background(monkeypatch):
+    _clear_theme_env(monkeypatch)
+    monkeypatch.setenv("COLORFGBG", "15;0")
+    assert spec_flow._terminal_theme_mode() == "dark"
+
+
+def test_terminal_theme_mode_uses_colorfgbg_light_background(monkeypatch):
+    _clear_theme_env(monkeypatch)
+    monkeypatch.setenv("COLORFGBG", "0;15")
+    assert spec_flow._terminal_theme_mode() == "light"
+
+
+def test_terminal_theme_mode_defaults_to_light_for_apple_terminal(monkeypatch):
+    _clear_theme_env(monkeypatch)
+    monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
+    assert spec_flow._terminal_theme_mode() == "light"
+
+
+def test_terminal_theme_mode_defaults_to_neutral_on_darwin_without_hints(monkeypatch):
+    _clear_theme_env(monkeypatch)
+    monkeypatch.setattr(spec_flow.sys, "platform", "darwin")
+    monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+    assert spec_flow._terminal_theme_mode() == "neutral"
+
+
 def test_collect_specs_from_text_prefers_multimodule_flow_with_module_arg(tmp_path, monkeypatch):
     monkeypatch.setattr(spec_flow, "SPEC_DIR", tmp_path / "specs")
     monkeypatch.setattr(spec_flow, "_require_gateway", lambda: object())
@@ -58,6 +94,47 @@ def test_collect_specs_from_text_benchmark_skips_gateway(monkeypatch, tmp_path):
     )
     assert seen["gateway"] is None
     assert result["module_name"] == "demo"
+
+
+def test_apply_benchmark_defaults_keeps_clocking_empty_without_explicit_clock():
+    checklist = {
+        "module_name": "TopModule",
+        "L2": {
+            "signals": [{"name": "zero", "direction": "OUTPUT", "width_expr": "1"}],
+            "clocking": [],
+        },
+    }
+    updated = spec_flow._apply_benchmark_defaults(checklist, "Module: TopModule\n- output zero\n")
+    assert updated["L2"]["clocking"] == []
+
+
+def test_apply_benchmark_defaults_infers_clocking_only_with_explicit_clock_signal():
+    checklist = {
+        "module_name": "TopModule",
+        "L2": {
+            "signals": [
+                {"name": "clk", "direction": "INPUT", "width_expr": "1"},
+                {"name": "zero", "direction": "OUTPUT", "width_expr": "1"},
+            ],
+            "clocking": [],
+        },
+    }
+    updated = spec_flow._apply_benchmark_defaults(checklist, "Module: TopModule\n- input clk\n- output zero\n")
+    assert len(updated["L2"]["clocking"]) == 1
+    assert updated["L2"]["clocking"][0]["clock_name"] == "clk"
+
+
+def test_complete_checklist_benchmark_allows_clockless_interface():
+    checklist = spec_flow.build_empty_checklist()
+    updated, _ = spec_flow._complete_checklist(
+        gateway=None,
+        spec_text="Module: TopModule\n- output zero\nThe module should always output 0.\n",
+        checklist=checklist,
+        interactive=False,
+        spec_profile="benchmark",
+        append_notes=False,
+    )
+    assert updated["L2"]["clocking"] == []
 
 
 def test_validate_module_inventory_raises_when_l4_nodes_missing_module_sections():

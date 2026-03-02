@@ -66,6 +66,8 @@ Open the repo in a Dev Container to use the same pinned toolchain automatically.
 - `core/schemas/` — contracts and enums
 - `adapters/llm/` — gateway to OpenAI/Groq
 - `infrastructure/` — RabbitMQ compose files
+- `third_party/` — vendored external dependencies (including VerilogEval benchmark harness submodule)
+- `benchmarks/verilog_eval/` — repo-owned benchmark integration assets (docs, templates, optional overrides)
 - `artifacts/generated/` — design context + RTL/TB outputs
 - `artifacts/task_memory/` — per-stage logs and paths (cleared at each CLI run)
 - `artifacts/observability/` — per-run event logs (`*_events.jsonl`) and LLM cost summaries
@@ -75,6 +77,7 @@ Open the repo in a Dev Container to use the same pinned toolchain automatically.
 - Runtime behavior: `config/runtime.yaml` (override with `--config`, preset via `--preset`)
 - Secrets/credentials: environment variables (`OPENAI_API_KEY`, `GROQ_API_KEY`, AgentOps keys)
 - Broker/tool/LLM/lint/sim/debug policy knobs are YAML-driven in the runtime config.
+- Benchmark policy: upstream VerilogEval is vendored as a submodule under `third_party/verilog-eval`.
 
 ## Testing
 - Unit/schema: `pytest tests/core/schemas -q`

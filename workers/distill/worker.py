@@ -8,27 +8,31 @@ import json
 import re
 import threading
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pika
 from core.schemas.contracts import DistilledDataset, ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
 from core.runtime.retry import RetryableError, TaskInputError, get_max_retries, get_retry_count, next_retry_headers
-from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE
+from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE, resolve_task_queue
 from core.runtime.config import get_runtime_config
 
 
 class DistillWorker(threading.Thread):
+    queue_name = resolve_task_queue("DistillationWorker") or "process_tasks"
+
     def __init__(self, connection_params: pika.ConnectionParameters, stop_event: threading.Event):
         super().__init__(daemon=True)
         self.connection_params = connection_params
         self.stop_event = stop_event
+        self.worker_instance_id = f"worker_distill:{id(self):x}"
 
     def run(self) -> None:
         with pika.BlockingConnection(self.connection_params) as conn:
             ch = conn.channel()
             ch.basic_qos(prefetch_count=1)
-            for method, props, body in ch.consume("process_tasks", inactivity_timeout=0.5):
+            for method, props, body in ch.consume(self.queue_name, inactivity_timeout=0.5):
                 if self.stop_event.is_set():
                     break
                 if body is None:
@@ -40,8 +44,23 @@ class DistillWorker(threading.Thread):
                     continue
                 # Only handle distillation tasks (skip others)
                 if task.task_type.value != "DistillationWorker":
-                    ch.basic_nack(method.delivery_tag, requeue=True)
+                    ch.basic_nack(method.delivery_tag, requeue=False)
                     continue
+                received_at = datetime.now(timezone.utc)
+                emit_runtime_event(
+                    runtime="worker_distill",
+                    event_type="task_received",
+                    payload={
+                        "task_id": str(task.task_id),
+                        "node_id": task.context.get("node_id"),
+                        "task_type": task.task_type.value,
+                        "run_id": task.run_id,
+                        "received_ts": received_at.isoformat(),
+                        "worker_instance_id": self.worker_instance_id,
+                        "worker_thread_name": self.name,
+                        "queue_name": self.queue_name,
+                    },
+                )
                 try:
                     result = self.handle_task(task)
                 except TaskInputError:
@@ -68,7 +87,27 @@ class DistillWorker(threading.Thread):
                         status=TaskStatus.FAILURE,
                         log_output=f"Unhandled distillation error: {exc}",
                     )
+                result = result.model_copy(
+                    update={
+                        "received_at": result.received_at or received_at,
+                        "started_at": result.started_at or received_at,
+                    }
+                )
                 self._publish_result(ch, task, result)
+                emit_runtime_event(
+                    runtime="worker_distill",
+                    event_type="task_result_published",
+                    payload={
+                        "task_id": str(task.task_id),
+                        "node_id": task.context.get("node_id"),
+                        "task_type": task.task_type.value,
+                        "status": result.status.value,
+                        "run_id": task.run_id,
+                        "worker_instance_id": self.worker_instance_id,
+                        "worker_thread_name": self.name,
+                        "queue_name": self.queue_name,
+                    },
+                )
                 ch.basic_ack(method.delivery_tag)
 
     def handle_task(self, task: TaskMessage) -> ResultMessage:

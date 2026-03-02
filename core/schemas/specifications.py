@@ -142,7 +142,8 @@ class L2Specification(SpecificationDocument):
 
     level: Literal[SpecificationLevel.L2] = SpecificationLevel.L2
     clocking: List[ClockingInfo] = Field(
-        ..., min_length=1, description="One or more clock/reset domains applicable to this module."
+        default_factory=list,
+        description="Clock/reset domains applicable to this module. Empty for purely combinational interfaces.",
     )
     signals: List[SignalDefinition] = Field(..., min_length=1)
     handshake_semantics: List[HandshakeProtocol] = Field(default_factory=list)

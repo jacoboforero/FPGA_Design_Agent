@@ -11,6 +11,8 @@ import json
 import re
 import shutil
 import time
+from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -23,12 +25,15 @@ from core.schemas.contracts import (
     TaskStatus,
     WorkerType,
 )
+from core.observability.agentops_tracker import get_tracker
 from core.observability.emitter import emit_runtime_event
+from core.observability.execution_metrics import ExecutionMetricsRecorder
 from core.observability.run_artifacts import get_run_artifacts_dir, mirror_directory
 from core.runtime.broker import (
     DEFAULT_RESULTS_ROUTING_KEY,
     TASK_EXCHANGE,
     declare_results_queue,
+    resolve_task_routing,
 )
 from core.runtime.config import get_runtime_config
 
@@ -124,16 +129,25 @@ class DemoOrchestrator:
             run_id=self.run_id,
             results_routing_key=self.results_routing_key,
         )
+        routing_key = resolve_task_routing(entity.value, task.task_type.value)
         ch.basic_publish(
             exchange=TASK_EXCHANGE,
-            routing_key=entity.value,
+            routing_key=routing_key,
             body=task.model_dump_json().encode(),
             properties=pika.BasicProperties(content_type="application/json"),
         )
         emit_runtime_event(
             runtime="orchestrator",
             event_type="task_published",
-            payload={"node_id": node_id, "task_id": str(task.task_id), "entity": entity.value, "task_type": task_type.value},
+            payload={
+                "node_id": node_id,
+                "task_id": str(task.task_id),
+                "entity": entity.value,
+                "task_type": task_type.value,
+                "routing_key": routing_key,
+                "run_id": task.run_id,
+                "published_ts": datetime.now(timezone.utc).isoformat(),
+            },
         )
         return task
 
@@ -149,7 +163,7 @@ class DemoOrchestrator:
         if self.state_callback:
             self.state_callback(node_id, new_state.value)
 
-    def run(self, timeout_s: float = 30.0) -> None:
+    def run(self, timeout_s: float = 30.0) -> dict[str, str]:
         if timeout_s <= 0:
             timeout_s = float("inf")
         with pika.BlockingConnection(self.connection_params) as conn:
@@ -162,10 +176,16 @@ class DemoOrchestrator:
 
             node_ids = list(self.nodes.keys())
             tasks: Dict[str, Dict[str, TaskMessage]] = {}
+            task_lookup: Dict[str, tuple[str, str]] = {}
             pending_nodes = set(node_ids)
             active_nodes = set()
             done_nodes = set()
             succeeded_nodes = set()
+            tracker = get_tracker()
+            metrics = ExecutionMetricsRecorder(
+                run_id=self.run_id,
+                run_name=str(self.execution_policy.get("run_name") or getattr(tracker, "run_name", "run")),
+            )
             configured_retries = int(get_runtime_config().debug.max_retries)
             max_debug_retries = int(
                 self.execution_policy.get("debug_max_retries", configured_retries)
@@ -177,6 +197,7 @@ class DemoOrchestrator:
             pending_debug: dict[str, dict[str, Any]] = {}
             attempt_history_by_node: dict[str, dict[int, dict[str, Any]]] = {}
             obs_run_dir = get_run_artifacts_dir()
+            results_consume_mode = str(get_runtime_config().broker.results_consume_mode or "consume").strip().lower()
 
             def _dump_model(payload: Any) -> Any:
                 if payload is None:
@@ -205,6 +226,20 @@ class DemoOrchestrator:
                 if suffix.isdigit():
                     return kind, int(suffix)
                 return kind, None
+
+            def _register_task(node_id: str, stage_key: str, task: TaskMessage) -> None:
+                tasks.setdefault(node_id, {})
+                tasks[node_id][stage_key] = task
+                task_lookup[str(task.task_id)] = (node_id, stage_key)
+                stage_kind, attempt = _parse_stage_key(stage_key)
+                metrics.record_published(
+                    task_id=str(task.task_id),
+                    node_id=node_id,
+                    stage_kind=stage_kind,
+                    attempt=attempt,
+                    task_type=task.task_type.value,
+                    published_ts=datetime.now(timezone.utc),
+                )
 
             def _short_log_excerpt(text: str, limit: int = 280) -> str:
                 stripped = (text or "").strip()
@@ -429,7 +464,7 @@ class DemoOrchestrator:
                 attempt_history_by_node[node_id] = {}
                 self._advance(node_id, NodeState.IMPLEMENTING)
                 impl_task = self._publish_task(ch, EntityType.REASONING, AgentType.IMPLEMENTATION, node_id)
-                tasks[node_id] = {"impl": impl_task}
+                _register_task(node_id, "impl", impl_task)
                 pending_nodes.discard(node_id)
                 active_nodes.add(node_id)
 
@@ -479,29 +514,89 @@ class DemoOrchestrator:
                 raise RuntimeError("No DAG roots available to start. Check dependency graph for cycles or missing nodes.")
 
             start = time.time()
+            consume_buffer: deque[tuple[int, bytes]] = deque()
+            if results_consume_mode == "consume":
+                def _on_result_message(
+                    _channel: pika.adapters.blocking_connection.BlockingChannel,
+                    method: pika.spec.Basic.Deliver,
+                    _props: pika.BasicProperties,
+                    body: bytes,
+                ) -> None:
+                    consume_buffer.append((method.delivery_tag, body))
+
+                ch.basic_consume(
+                    queue=results_queue,
+                    on_message_callback=_on_result_message,
+                    auto_ack=False,
+                )
 
             while time.time() - start < timeout_s and len(done_nodes) < len(node_ids):
-                method, props, body = ch.basic_get(queue=results_queue, auto_ack=False)
-                if body is None:
-                    time.sleep(0.1)
-                    continue
+                delivery_tag = None
+                body = None
+                if results_consume_mode == "consume":
+                    if not consume_buffer:
+                        conn.process_data_events(time_limit=0.1)
+                        continue
+                    delivery_tag, body = consume_buffer.popleft()
+                else:
+                    method, props, body = ch.basic_get(queue=results_queue, auto_ack=False)
+                    if body is None:
+                        time.sleep(0.1)
+                        continue
+                    delivery_tag = method.delivery_tag
+
                 result = ResultMessage.model_validate_json(body)
-                target_node = None
-                stage = None
-                for node_id, bundle in tasks.items():
-                    for key, t in bundle.items():
-                        if t.task_id == result.task_id:
-                            target_node = node_id
-                            stage = key
-                            break
-                    if target_node:
-                        break
+                task_ref = task_lookup.get(str(result.task_id))
+                target_node = task_ref[0] if task_ref else None
+                stage = task_ref[1] if task_ref else None
                 if not target_node:
-                    ch.basic_nack(method.delivery_tag, requeue=True)
+                    ch.basic_nack(delivery_tag, requeue=True)
                     continue
-                ch.basic_ack(method.delivery_tag)
+                task_meta = tasks.get(target_node, {}).get(stage)
+                runtime_name = None
+                if task_meta:
+                    task_type = task_meta.task_type.value
+                    if task_type == AgentType.IMPLEMENTATION.value:
+                        runtime_name = "agent_implementation"
+                    elif task_type == AgentType.TESTBENCH.value:
+                        runtime_name = "agent_testbench"
+                    elif task_type == AgentType.REFLECTION.value:
+                        runtime_name = "agent_reflection"
+                    elif task_type == AgentType.DEBUG.value:
+                        runtime_name = "agent_debug"
+                    elif task_type == AgentType.PLANNER.value:
+                        runtime_name = "agent_planner"
+                    elif task_type == AgentType.SPECIFICATION_HELPER.value:
+                        runtime_name = "agent_spec_helper"
+                    elif task_type == WorkerType.LINTER.value:
+                        runtime_name = "worker_lint"
+                    elif task_type == WorkerType.TESTBENCH_LINTER.value:
+                        runtime_name = "worker_tb_lint"
+                    elif task_type == WorkerType.SIMULATOR.value:
+                        runtime_name = "worker_sim"
+                    elif task_type == WorkerType.ACCEPTANCE.value:
+                        runtime_name = "worker_acceptance"
+                    elif task_type == WorkerType.DISTILLATION.value:
+                        runtime_name = "worker_distill"
 
                 kind, stage_attempt = _parse_stage_key(stage)
+                now_utc = datetime.now(timezone.utc)
+                metrics.record_received(
+                    task_id=str(result.task_id),
+                    runtime=runtime_name,
+                    received_ts=result.received_at or result.started_at,
+                )
+                metrics.record_completed(
+                    task_id=str(result.task_id),
+                    completed_ts=result.completed_at,
+                    status=result.status.value,
+                )
+                reaction_ms = None
+                if result.completed_at is not None:
+                    reaction_ms = max(0.0, (now_utc - result.completed_at).total_seconds() * 1000.0)
+                metrics.record_reaction(task_id=str(result.task_id), orchestrator_reaction_ms=reaction_ms)
+                metrics.finalize_record(str(result.task_id))
+
                 self.task_memory.record_log(target_node, stage, result.log_output)
                 if result.artifacts_path:
                     self.task_memory.record_artifact_path(target_node, stage, result.artifacts_path)
@@ -529,12 +624,27 @@ class DemoOrchestrator:
                         "stage_kind": kind,
                         "attempt": stage_attempt,
                         "status": result.status.value,
+                        "orchestrator_reaction_ms": reaction_ms,
                         "log_output": result.log_output,
                         "artifacts_path": result.artifacts_path,
                         "reflections": result.reflections,
                         "reflection_insights": _dump_model(result.reflection_insights),
                     },
                 )
+                emit_runtime_event(
+                    runtime="orchestrator",
+                    event_type="result_processed",
+                    payload={
+                        "task_id": str(result.task_id),
+                        "node_id": target_node,
+                        "stage_kind": kind,
+                        "attempt": stage_attempt,
+                        "status": result.status.value,
+                        "orchestrator_reaction_ms": reaction_ms,
+                        "run_id": self.run_id,
+                    },
+                )
+                ch.basic_ack(delivery_tag)
 
                 if result.status is not TaskStatus.SUCCESS:
                     if not self.allow_repair_loop and kind in {"lint", "tb_lint", "sim", "distill", "reflect", "debug"}:
@@ -576,7 +686,7 @@ class DemoOrchestrator:
                             attempt=attempt,
                             extra_ctx=debug_extra_ctx,
                         )
-                        tasks[target_node][debug_key] = debug
+                        _register_task(target_node, debug_key, debug)
                         continue
 
                     if kind == "sim":
@@ -592,7 +702,7 @@ class DemoOrchestrator:
                             target_node,
                             attempt=stage_attempt,
                         )
-                        tasks[target_node][distill_key] = distill
+                        _register_task(target_node, distill_key, distill)
                         continue
 
                     if kind == "tb_lint":
@@ -631,7 +741,7 @@ class DemoOrchestrator:
                             attempt=attempt,
                             extra_ctx=debug_extra_ctx,
                         )
-                        tasks[target_node][debug_key] = debug
+                        _register_task(target_node, debug_key, debug)
                         continue
 
                     _finish_failed(target_node)
@@ -649,13 +759,13 @@ class DemoOrchestrator:
                         target_node,
                         attempt=attempt,
                     )
-                    tasks[target_node][lint_key] = lint_task
+                    _register_task(target_node, lint_key, lint_task)
                 elif kind == "lint":
                     _reset_debug_attempts(target_node, "rtl_lint")
                     if not tb_generated_by_node.get(target_node, False):
                         self._advance(target_node, NodeState.TESTBENCHING)
                         tb_task = self._publish_task(ch, EntityType.REASONING, AgentType.TESTBENCH, target_node)
-                        tasks[target_node]["tb"] = tb_task
+                        _register_task(target_node, "tb", tb_task)
                         continue
                     # Retry lint: decide whether to run TB lint or go straight to sim.
                     next_kind = post_lint_next_kind.pop(target_node, "sim")
@@ -670,7 +780,7 @@ class DemoOrchestrator:
                             target_node,
                             attempt=attempt,
                         )
-                        tasks[target_node][tb_lint_key] = tb_lint_task
+                        _register_task(target_node, tb_lint_key, tb_lint_task)
                     else:
                         self._advance(target_node, NodeState.SIMULATING)
                         sim_key = _stage_key("sim", attempt)
@@ -681,7 +791,7 @@ class DemoOrchestrator:
                             target_node,
                             attempt=attempt,
                         )
-                        tasks[target_node][sim_key] = sim_task
+                        _register_task(target_node, sim_key, sim_task)
                 elif kind == "tb":
                     tb_generated_by_node[target_node] = True
                     attempt = attempt_by_node.get(target_node, 1)
@@ -694,7 +804,7 @@ class DemoOrchestrator:
                         target_node,
                         attempt=attempt,
                     )
-                    tasks[target_node][tb_lint_key] = tb_lint_task
+                    _register_task(target_node, tb_lint_key, tb_lint_task)
                 elif kind == "tb_lint":
                     _reset_debug_attempts(target_node, "tb_lint")
                     attempt = stage_attempt or attempt_by_node.get(target_node, 1)
@@ -707,7 +817,7 @@ class DemoOrchestrator:
                         target_node,
                         attempt=attempt,
                     )
-                    tasks[target_node][sim_key] = sim_task
+                    _register_task(target_node, sim_key, sim_task)
                 elif kind == "sim":
                     _reset_debug_attempts(target_node, "sim")
                     attempt = stage_attempt or attempt_by_node.get(target_node, 1)
@@ -720,7 +830,7 @@ class DemoOrchestrator:
                         target_node,
                         attempt=attempt,
                     )
-                    tasks[target_node][accept_key] = accept_task
+                    _register_task(target_node, accept_key, accept_task)
                 elif kind == "acceptance":
                     _finish_done(target_node)
                 elif kind == "distill":
@@ -740,7 +850,7 @@ class DemoOrchestrator:
                         attempt=attempt,
                         extra_ctx=reflect_extra_ctx,
                     )
-                    tasks[target_node][reflect_key] = reflect
+                    _register_task(target_node, reflect_key, reflect)
                 elif kind == "reflect":
                     attempt = stage_attempt
                     if attempt is None:
@@ -780,7 +890,7 @@ class DemoOrchestrator:
                         attempt=attempt,
                         extra_ctx=debug_extra_ctx,
                     )
-                    tasks[target_node][debug_key] = debug
+                    _register_task(target_node, debug_key, debug)
                 elif kind == "debug":
                     meta = pending_debug.pop(target_node, None)
                     if not meta:
@@ -815,7 +925,7 @@ class DemoOrchestrator:
                             target_node,
                             attempt=next_attempt,
                         )
-                        tasks[target_node][lint_key] = lint_task
+                        _register_task(target_node, lint_key, lint_task)
                     elif tb_changed:
                         self._advance(target_node, NodeState.TB_LINTING)
                         tb_lint_key = _stage_key("tb_lint", next_attempt)
@@ -826,7 +936,7 @@ class DemoOrchestrator:
                             target_node,
                             attempt=next_attempt,
                         )
-                        tasks[target_node][tb_lint_key] = tb_lint_task
+                        _register_task(target_node, tb_lint_key, tb_lint_task)
 
             if len(done_nodes) < len(node_ids):
                 self._emit_progress(
@@ -834,3 +944,18 @@ class DemoOrchestrator:
                     event_type="execution_note",
                     payload={"reason": "timeout", "done_nodes": len(done_nodes), "total_nodes": len(node_ids)},
                 )
+
+            try:
+                metrics_path = metrics.write(costs_log_path=str(get_tracker().cost_log_path))
+                emit_runtime_event(
+                    runtime="orchestrator",
+                    event_type="execution_metrics_written",
+                    payload={"path": str(metrics_path), "run_id": self.run_id},
+                )
+            except Exception as exc:  # noqa: BLE001
+                emit_runtime_event(
+                    runtime="orchestrator",
+                    event_type="execution_metrics_write_failed",
+                    payload={"run_id": self.run_id, "error": str(exc)},
+                )
+            return {node_id: self.nodes[node_id].state.value for node_id in node_ids}

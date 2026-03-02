@@ -26,8 +26,12 @@ PYTHONPATH=. python3 apps/cli/cli.py --config config/runtime.yaml --preset engin
 ```
 
 ## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/config/runtime.yaml`
-- `/home/jacobo/school/FPGA_Design_Agent/core/runtime/config.py`
+- `config/runtime.yaml`
+- `core/runtime/config.py`
+
+## Benchmark Defaults
+- `benchmark.verilog_eval_root`: `third_party/verilog-eval`
+- `benchmark.prompts_dir`: `third_party/verilog-eval/dataset_spec-to-rtl`
 
 ## Related Docs
 - [../config-migration.md](../config-migration.md)

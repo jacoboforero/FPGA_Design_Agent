@@ -72,6 +72,102 @@
       }
     },
     {
+      "name": "agent_planner_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-max-priority": 3,
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
+      "name": "agent_impl_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-max-priority": 3,
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
+      "name": "agent_tb_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-max-priority": 3,
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
+      "name": "agent_reflect_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-max-priority": 3,
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
+      "name": "agent_debug_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-max-priority": 3,
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
+      "name": "agent_spec_helper_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-max-priority": 3,
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
+      "name": "process_lint_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
+      "name": "process_tb_lint_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
+      "name": "process_acceptance_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
+      "name": "process_distill_tasks",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "tasks_dlx"
+      }
+    },
+    {
       "name": "dead_letter_queue",
       "vhost": "/",
       "durable": true,
@@ -109,6 +205,94 @@
       "destination": "simulation_tasks",
       "destination_type": "queue",
       "routing_key": "HEAVY_DETERMINISTIC",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "agent_planner_tasks",
+      "destination_type": "queue",
+      "routing_key": "task.agent.planner",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "agent_impl_tasks",
+      "destination_type": "queue",
+      "routing_key": "task.agent.implementation",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "agent_tb_tasks",
+      "destination_type": "queue",
+      "routing_key": "task.agent.testbench",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "agent_reflect_tasks",
+      "destination_type": "queue",
+      "routing_key": "task.agent.reflection",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "agent_debug_tasks",
+      "destination_type": "queue",
+      "routing_key": "task.agent.debug",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "agent_spec_helper_tasks",
+      "destination_type": "queue",
+      "routing_key": "task.agent.spec_helper",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "process_lint_tasks",
+      "destination_type": "queue",
+      "routing_key": "task.process.lint",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "process_tb_lint_tasks",
+      "destination_type": "queue",
+      "routing_key": "task.process.tb_lint",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "process_acceptance_tasks",
+      "destination_type": "queue",
+      "routing_key": "task.process.acceptance",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "process_distill_tasks",
+      "destination_type": "queue",
+      "routing_key": "task.process.distill",
+      "arguments": {}
+    },
+    {
+      "source": "tasks_exchange",
+      "vhost": "/",
+      "destination": "simulation_tasks",
+      "destination_type": "queue",
+      "routing_key": "task.process.simulation",
       "arguments": {}
     },
     {

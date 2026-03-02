@@ -20,6 +20,13 @@ from core.runtime.retry import RetryableError, TaskInputError, is_transient_erro
 from core.runtime.config import get_runtime_config
 
 
+def _truncate_prompt_text(text: str, *, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    omitted = len(text) - max_chars
+    return f"{text[:max_chars]}\n... [truncated {omitted} char(s) for prompt efficiency]"
+
+
 class TestbenchWorker(AgentWorkerBase):
     handled_types = {AgentType.TESTBENCH}
     runtime_name = "agent_testbench"
@@ -367,7 +374,8 @@ class TestbenchWorker(AgentWorkerBase):
                 width_decl = ""
             ports.append(f"{dir_kw} {base_type} {width_decl}{name}")
         verification = ctx.get("verification", {})
-        behavior = ctx.get("demo_behavior", "")
+        behavior = _truncate_prompt_text(str(ctx.get("demo_behavior", "")), max_chars=4000)
+        verification_summary = _truncate_prompt_text(self._verification_summary(verification), max_chars=4000)
         clocking = self._normalize_clocking(ctx.get("clocking"))
         tb_module = f"tb_{node_id}"
         system = (
@@ -431,7 +439,7 @@ class TestbenchWorker(AgentWorkerBase):
             f"- reset_is_async: {clocking['reset_is_async']}\n"
             f"- reset_active_expr: {clocking['reset_active_expr']}\n\n"
             f"Behavior summary:\n{behavior}\n\n"
-            f"Verification summary:\n{self._verification_summary(verification)}\n\n"
+            f"Verification summary:\n{verification_summary}\n\n"
             "Generate the full testbench now."
         )
         msgs: List[Message] = [
@@ -439,7 +447,7 @@ class TestbenchWorker(AgentWorkerBase):
             Message(role=MessageRole.USER, content=user),
         ]
         llm_cfg = get_runtime_config().llm
-        max_tokens = int(llm_cfg.max_tokens)
+        max_tokens = int(min(llm_cfg.max_tokens, llm_cfg.max_tokens_spec))
         temperature = float(llm_cfg.temperature)
         top_p = llm_cfg.top_p
         cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)

@@ -9,8 +9,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import queue
 import re
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -482,3 +484,132 @@ class ExecutionNarrator:
             return None
         except Exception:
             return None
+
+
+class NarratorDispatcher:
+    """
+    Async dispatcher for narrator events.
+
+    Strict mode preserves event sequence exactly while keeping orchestration
+    non-blocking. Best-effort mode prioritizes forward progress over ordering.
+    """
+
+    _TERMINAL_STAGE_STATUSES = {"SUCCESS", "FAILURE", "ESCALATED_TO_HUMAN"}
+
+    def __init__(
+        self,
+        narrator: ExecutionNarrator,
+        *,
+        async_enabled: bool = True,
+        order_mode: str = "strict",
+        queue_max_events: int = 256,
+    ) -> None:
+        self.narrator = narrator
+        self.async_enabled = bool(async_enabled)
+        self.order_mode = str(order_mode or "strict").strip().lower()
+        self.queue_max_events = max(1, int(queue_max_events))
+        self._queue: queue.Queue[tuple[int, str, dict[str, Any]]] = queue.Queue(maxsize=self.queue_max_events)
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._seq = 0
+        self._next_seq = 1
+        self._lock = threading.Lock()
+        self._pending_by_seq: dict[int, tuple[str, dict[str, Any]]] = {}
+        self._coalesced: dict[tuple[str, str, int], tuple[int, str, dict[str, Any]]] = {}
+        if self.async_enabled:
+            self._thread = threading.Thread(target=self._run, name="execution-narrator", daemon=True)
+            self._thread.start()
+
+    def emit(self, event_type: str, payload: dict[str, Any]) -> None:
+        payload = dict(payload or {})
+        if not self.async_enabled:
+            self.narrator.handle_event(event_type, payload)
+            return
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
+        event = (seq, event_type, payload)
+        if self._try_queue_put(event):
+            return
+
+        # Queue pressure policy: coalesce only non-terminal stage duplicates.
+        if self._is_coalescible_stage_result(event_type, payload):
+            key = self._coalesce_key(payload)
+            with self._lock:
+                self._coalesced[key] = event
+
+    def close(self) -> None:
+        if not self.async_enabled:
+            return
+        self._stop_event.set()
+        if self._thread is not None:
+            while self._thread.is_alive():
+                self._thread.join(timeout=0.2)
+
+    def _try_queue_put(self, event: tuple[int, str, dict[str, Any]]) -> bool:
+        try:
+            self._queue.put_nowait(event)
+            return True
+        except queue.Full:
+            return False
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set() or not self._queue.empty() or self._coalesced:
+            self._flush_coalesced_once()
+            try:
+                seq, event_type, payload = self._queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if self.order_mode == "strict":
+                with self._lock:
+                    self._pending_by_seq[seq] = (event_type, payload)
+                self._drain_strict()
+            else:
+                self.narrator.handle_event(event_type, payload)
+            self._queue.task_done()
+
+        # Final strict drain for any pending sequence gaps resolved during shutdown.
+        self._drain_strict(force=True)
+
+    def _drain_strict(self, *, force: bool = False) -> None:
+        while True:
+            with self._lock:
+                item = self._pending_by_seq.pop(self._next_seq, None)
+                if item is None:
+                    if force and self._pending_by_seq:
+                        next_seq = min(self._pending_by_seq.keys())
+                        item = self._pending_by_seq.pop(next_seq)
+                        self._next_seq = next_seq
+                    else:
+                        return
+                event_type, payload = item
+                self._next_seq += 1
+            self.narrator.handle_event(event_type, payload)
+
+    def _flush_coalesced_once(self) -> None:
+        if self._queue.full():
+            return
+        with self._lock:
+            if not self._coalesced:
+                return
+            # Preserve monotonic ordering for strict mode by releasing lowest seq first.
+            key = min(self._coalesced.keys(), key=lambda k: self._coalesced[k][0])
+            event = self._coalesced.pop(key)
+        self._try_queue_put(event)
+
+    def _is_coalescible_stage_result(self, event_type: str, payload: dict[str, Any]) -> bool:
+        if event_type != "stage_result":
+            return False
+        status = str(payload.get("status", "")).strip().upper()
+        return status not in self._TERMINAL_STAGE_STATUSES
+
+    @staticmethod
+    def _coalesce_key(payload: dict[str, Any]) -> tuple[str, str, int]:
+        node_id = str(payload.get("node_id", "")).strip()
+        stage_kind = str(payload.get("stage_kind", "")).strip()
+        attempt_raw = payload.get("attempt")
+        try:
+            attempt = int(attempt_raw) if attempt_raw is not None else 0
+        except Exception:
+            attempt = 0
+        return (node_id, stage_kind, attempt)

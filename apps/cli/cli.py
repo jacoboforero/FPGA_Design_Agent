@@ -36,13 +36,20 @@ from workers.distill.worker import DistillWorker
 # Orchestrator
 from orchestrator.orchestrator_service import DemoOrchestrator
 from apps.cli import spec_flow
-from apps.cli.execution_narrator import ExecutionNarrator
+from apps.cli.execution_narrator import ExecutionNarrator, NarratorDispatcher
 
 # Schema models
 from core.observability.setup import configure_observability
 from core.observability.agentops_tracker import get_tracker
 from core.schemas.contracts import AgentType, EntityType, ResultMessage, TaskMessage, TaskStatus
-from core.runtime.broker import TASK_EXCHANGE, RunRouting, create_run_routing, declare_results_queue
+from core.runtime.broker import (
+    TASK_EXCHANGE,
+    RunRouting,
+    create_run_routing,
+    declare_results_queue,
+    declare_task_topology,
+    resolve_task_routing,
+)
 from core.runtime.config import DEFAULT_CONFIG_PATH, get_runtime_config, initialize_runtime_config
 
 
@@ -108,9 +115,28 @@ connection_params_from_env = connection_params_from_config
 def _purge_broker_queues(params: pika.ConnectionParameters) -> None:
     if not get_runtime_config().broker.purge_queues_on_start:
         return
-    queues = ("agent_tasks", "process_tasks", "simulation_tasks", "results")
+    queues = (
+        "agent_tasks",
+        "process_tasks",
+        "simulation_tasks",
+        "agent_planner_tasks",
+        "agent_impl_tasks",
+        "agent_tb_tasks",
+        "agent_reflect_tasks",
+        "agent_debug_tasks",
+        "agent_spec_helper_tasks",
+        "process_lint_tasks",
+        "process_tb_lint_tasks",
+        "process_acceptance_tasks",
+        "process_distill_tasks",
+        "results",
+    )
     with pika.BlockingConnection(params) as conn:
         ch = conn.channel()
+        try:
+            declare_task_topology(ch, include_legacy_bindings=True)
+        except Exception:
+            pass
         for queue_name in queues:
             try:
                 ch.queue_purge(queue=queue_name)
@@ -119,18 +145,29 @@ def _purge_broker_queues(params: pika.ConnectionParameters) -> None:
 
 
 def start_workers(params: pika.ConnectionParameters, stop_event: threading.Event) -> List[threading.Thread]:
-    workers: List[threading.Thread] = [
-        ImplementationWorker(params, stop_event),
-        TestbenchWorker(params, stop_event),
-        ReflectionWorker(params, stop_event),
-        DebugWorker(params, stop_event),
-        SpecHelperWorker(params, stop_event),
-        LintWorker(params, stop_event),
-        TestbenchLintWorker(params, stop_event),
-        AcceptanceWorker(params, stop_event),
-        DistillWorker(params, stop_event),
-        SimulationWorker(params, stop_event),
+    cfg = get_runtime_config()
+    pool = cfg.workers.pool_sizes
+    worker_specs = [
+        (ImplementationWorker, int(pool.implementation)),
+        (TestbenchWorker, int(pool.testbench)),
+        (ReflectionWorker, int(pool.reflection)),
+        (DebugWorker, int(pool.debug)),
+        (SpecHelperWorker, int(pool.spec_helper)),
+        (LintWorker, int(pool.lint)),
+        (TestbenchLintWorker, int(pool.tb_lint)),
+        (AcceptanceWorker, int(pool.acceptance)),
+        (DistillWorker, int(pool.distill)),
+        (SimulationWorker, int(pool.simulation)),
     ]
+    workers: List[threading.Thread] = []
+    for worker_cls, count in worker_specs:
+        for _ in range(max(1, count)):
+            workers.append(worker_cls(params, stop_event))
+
+    with pika.BlockingConnection(params) as conn:
+        ch = conn.channel()
+        declare_task_topology(ch, include_legacy_bindings=True)
+
     for w in workers:
         w.start()
     return workers
@@ -139,7 +176,8 @@ def start_workers(params: pika.ConnectionParameters, stop_event: threading.Event
 def stop_workers(workers: Iterable[threading.Thread], stop_event: threading.Event) -> None:
     stop_event.set()
     for w in workers:
-        w.join(timeout=1.0)
+        while w.is_alive():
+            w.join(timeout=0.5)
 
 
 def _run_planner_task(
@@ -166,13 +204,15 @@ def _run_planner_task(
     )
     with pika.BlockingConnection(params) as conn:
         ch = conn.channel()
+        declare_task_topology(ch, include_legacy_bindings=True)
         results_queue = declare_results_queue(
             ch,
             results_routing_key=run_routing.results_routing_key,
         )
+        routing_key = resolve_task_routing(task.entity_type.value, task.task_type.value)
         ch.basic_publish(
             exchange=TASK_EXCHANGE,
-            routing_key=task.entity_type.value,
+            routing_key=routing_key,
             body=task.model_dump_json().encode(),
             properties=pika.BasicProperties(content_type="application/json"),
         )
@@ -251,6 +291,7 @@ def run_full(args: argparse.Namespace) -> None:
     }
 
     run_name = args.run_name or _default_run_name("cli_full")
+    execution_policy["run_name"] = run_name
     _purge_task_memory(REPO_ROOT / "artifacts" / "task_memory")
     configure_observability(run_name=run_name, default_tags=["cli", "full", f"preset:{cfg.active_preset}"])
     # 1) Collect specs interactively
@@ -307,8 +348,15 @@ def run_full(args: argparse.Namespace) -> None:
     task_memory_root = REPO_ROOT / "artifacts" / "task_memory"
     narrative_mode = args.narrative_mode or cfg.cli.default_narrative_mode
     narrator = None
+    narrator_dispatcher = None
     if narrative_mode != "off":
         narrator = ExecutionNarrator(task_memory_root=task_memory_root, mode=narrative_mode)
+        narrator_dispatcher = NarratorDispatcher(
+            narrator,
+            async_enabled=bool(cfg.cli.execution_narrator_async),
+            order_mode=str(cfg.cli.execution_narrator_order_mode),
+            queue_max_events=int(cfg.cli.execution_narrator_queue_max_events),
+        )
         print(f"Narrative output enabled ({narrative_mode}).")
     stop_event = threading.Event()
     workers = start_workers(params, stop_event)
@@ -319,7 +367,7 @@ def run_full(args: argparse.Namespace) -> None:
             dag_path,
             rtl_root,
             task_memory_root,
-            event_callback=narrator.handle_event if narrator else None,
+            event_callback=(narrator_dispatcher.emit if narrator_dispatcher else (narrator.handle_event if narrator else None)),
             raw_progress=narrative_mode == "off",
             run_id=run_routing.run_id,
             results_routing_key=run_routing.results_routing_key,
@@ -328,6 +376,8 @@ def run_full(args: argparse.Namespace) -> None:
         ).run(timeout_s=args.timeout)
     finally:
         stop_workers(workers, stop_event)
+        if narrator_dispatcher is not None:
+            narrator_dispatcher.close()
         get_tracker().finalize()
 
     # 4) Show RTL paths and contents

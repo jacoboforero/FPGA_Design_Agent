@@ -142,6 +142,14 @@ class ResultMessage(BaseModel):
         default=None,
         description="Run-scoping identifier copied from task metadata for observability and queue isolation debugging.",
     )
+    received_at: Optional[datetime] = Field(
+        default=None,
+        description="Timestamp in UTC when the worker/agent received the task for execution.",
+    )
+    started_at: Optional[datetime] = Field(
+        default=None,
+        description="Timestamp in UTC when task service began (defaults to received_at when omitted).",
+    )
     completed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp in UTC when the task was completed.")
 
     status: TaskStatus = Field(..., description="The final outcome of the task.")

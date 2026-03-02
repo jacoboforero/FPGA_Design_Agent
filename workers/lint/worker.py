@@ -7,13 +7,14 @@ import re
 import shutil
 import subprocess
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pika
 from core.schemas.contracts import ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
 from core.runtime.retry import RetryableError, TaskInputError, get_max_retries, get_retry_count, next_retry_headers
-from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE
+from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE, resolve_task_queue
 from core.runtime.config import get_runtime_config
 
 
@@ -109,18 +110,21 @@ def _run_verilator_lint(
 
 
 class LintWorker(threading.Thread):
+    queue_name = resolve_task_queue("LinterWorker") or "process_tasks"
+
     def __init__(self, connection_params: pika.ConnectionParameters, stop_event: threading.Event):
         super().__init__(daemon=True)
         self.connection_params = connection_params
         self.stop_event = stop_event
         runtime_cfg = get_runtime_config()
         self.verilator = runtime_cfg.tools.verilator_path or shutil.which("verilator")
+        self.worker_instance_id = f"worker_lint:{id(self):x}"
 
     def run(self) -> None:
         with pika.BlockingConnection(self.connection_params) as conn:
             ch = conn.channel()
             ch.basic_qos(prefetch_count=1)
-            for method, props, body in ch.consume("process_tasks", inactivity_timeout=0.5):
+            for method, props, body in ch.consume(self.queue_name, inactivity_timeout=0.5):
                 if self.stop_event.is_set():
                     break
                 if body is None:
@@ -130,10 +134,24 @@ class LintWorker(threading.Thread):
                 except Exception:
                     ch.basic_nack(method.delivery_tag, requeue=False)
                     continue
-                # Skip non-lint tasks
                 if task.task_type.value != "LinterWorker":
-                    ch.basic_nack(method.delivery_tag, requeue=True)
+                    ch.basic_nack(method.delivery_tag, requeue=False)
                     continue
+                received_at = datetime.now(timezone.utc)
+                emit_runtime_event(
+                    runtime="worker_lint",
+                    event_type="task_received",
+                    payload={
+                        "task_id": str(task.task_id),
+                        "node_id": task.context.get("node_id"),
+                        "task_type": task.task_type.value,
+                        "run_id": task.run_id,
+                        "received_ts": received_at.isoformat(),
+                        "worker_instance_id": self.worker_instance_id,
+                        "worker_thread_name": self.name,
+                        "queue_name": self.queue_name,
+                    },
+                )
                 try:
                     result = self.handle_task(task)
                 except TaskInputError:
@@ -161,7 +179,27 @@ class LintWorker(threading.Thread):
                         artifacts_path=None,
                         log_output=f"Unhandled lint error: {exc}",
                     )
+                result = result.model_copy(
+                    update={
+                        "received_at": result.received_at or received_at,
+                        "started_at": result.started_at or received_at,
+                    }
+                )
                 self._publish_result(ch, task, result)
+                emit_runtime_event(
+                    runtime="worker_lint",
+                    event_type="task_result_published",
+                    payload={
+                        "task_id": str(task.task_id),
+                        "node_id": task.context.get("node_id"),
+                        "task_type": task.task_type.value,
+                        "status": result.status.value,
+                        "run_id": task.run_id,
+                        "worker_instance_id": self.worker_instance_id,
+                        "worker_thread_name": self.name,
+                        "queue_name": self.queue_name,
+                    },
+                )
                 ch.basic_ack(method.delivery_tag)
 
     def handle_task(self, task: TaskMessage) -> ResultMessage:

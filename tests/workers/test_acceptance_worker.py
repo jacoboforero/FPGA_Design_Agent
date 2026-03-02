@@ -61,3 +61,34 @@ def test_acceptance_defers_coverage_when_sim_passed(tmp_path, monkeypatch):
     assert result.status is TaskStatus.SUCCESS
     assert "Acceptance warnings" in result.log_output
     assert "coverage gating deferred" in result.log_output
+
+
+def test_acceptance_benchmark_pass_metric_reads_sim_log_pass_fail(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    node_id = "benchmark_case"
+    sim_log = Path("artifacts/task_memory") / node_id / "sim_attempt1" / "log.txt"
+    sim_log.parent.mkdir(parents=True, exist_ok=True)
+    sim_log.write_text("PASS: simulation complete\n")
+
+    worker = AcceptanceWorker(connection_params=None, stop_event=None)
+    task = TaskMessage(
+        priority=TaskPriority.MEDIUM,
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.ACCEPTANCE,
+        context={
+            "node_id": node_id,
+            "attempt": 1,
+            "acceptance": {
+                "acceptance_metrics": [
+                    {
+                        "metric_id": "benchmark_pass",
+                        "operator": "==",
+                        "target_value": "1",
+                        "metric_source": "sim_log",
+                    }
+                ]
+            },
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS

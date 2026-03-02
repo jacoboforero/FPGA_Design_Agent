@@ -73,6 +73,13 @@ class DebugWorker(AgentWorkerBase):
         tb_lint_log = _read_optional_text(task_memory_root / _stage_dir("tb_lint", sim_attempt) / "log.txt")
         distilled = _read_optional_text(task_memory_root / _stage_dir("distill", sim_attempt) / "distilled_dataset.json")
         reflection = _read_optional_text(task_memory_root / _stage_dir("reflect", sim_attempt) / "reflection_insights.json")
+        rtl_prompt = _truncate_prompt_text(rtl_text, max_chars=18000)
+        tb_prompt = _truncate_prompt_text(tb_text, max_chars=18000)
+        lint_log_prompt = _truncate_prompt_text(lint_log, max_chars=8000)
+        sim_log_prompt = _truncate_prompt_text(sim_log, max_chars=8000)
+        tb_lint_log_prompt = _truncate_prompt_text(tb_lint_log, max_chars=8000)
+        distilled_prompt = _truncate_prompt_text(distilled, max_chars=10000)
+        reflection_prompt = _truncate_prompt_text(reflection, max_chars=10000)
 
         system = (
             "You are a Debug Agent for an RTL design pipeline. Your job is to PATCH CODE.\n"
@@ -109,19 +116,19 @@ class DebugWorker(AgentWorkerBase):
             f"Debug reason: {debug_reason}\n"
             f"Context:\n{json.dumps(ctx, indent=2)}\n\n"
             "Current RTL (verbatim):\n"
-            f"{rtl_text}\n\n"
+            f"{rtl_prompt}\n\n"
             "Current testbench (verbatim):\n"
-            f"{tb_text}\n\n"
+            f"{tb_prompt}\n\n"
             "RTL lint log (if any):\n"
-            f"{lint_log}\n\n"
+            f"{lint_log_prompt}\n\n"
             "Simulation log (if any):\n"
-            f"{sim_log}\n\n"
+            f"{sim_log_prompt}\n\n"
             "Testbench lint log (if any):\n"
-            f"{tb_lint_log}\n\n"
+            f"{tb_lint_log_prompt}\n\n"
             "Distilled dataset (if any):\n"
-            f"{distilled}\n\n"
+            f"{distilled_prompt}\n\n"
             "Reflection insights (if any):\n"
-            f"{reflection}\n"
+            f"{reflection_prompt}\n"
         )
         msgs = [
             Message(role=MessageRole.SYSTEM, content=system),
@@ -308,6 +315,15 @@ def _safe_json(text: str):
         except Exception:
             return None
     return None
+
+
+def _truncate_prompt_text(text: str, *, max_chars: int) -> str:
+    if text is None:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    omitted = len(text) - max_chars
+    return f"{text[:max_chars]}\n... [truncated {omitted} char(s) for prompt efficiency]"
 
 
 _NO_FENCE_PREFIXES = ("```", "`systemverilog")

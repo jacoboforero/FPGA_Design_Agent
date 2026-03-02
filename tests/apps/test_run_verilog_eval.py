@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+import contextlib
 import subprocess
 from pathlib import Path
 
@@ -7,16 +9,23 @@ import pytest
 
 from apps.cli.run_verilog_eval import (
     PromptCase,
+    _assert_generated_interface_matches,
     _discover_prompt_cases,
     _ensure_framework,
     _load_oracle_manifest,
     _run_official_analyze,
+    _script_cmd,
+    _run_mode,
     _run_sample_test,
+    _write_generate_log,
     _resolve_target_interface,
     _resolve_target_module_name,
     _summary_metrics,
     _summary_rows,
+    build_parser,
+    run_from_args,
 )
+from core.runtime.config import load_runtime_config
 
 
 def test_summary_metrics_parses_official_kv_lines(tmp_path: Path):
@@ -58,15 +67,36 @@ def test_summary_rows_parses_problem_rows(tmp_path: Path):
     assert rows[1]["problem_id"] == "Prob002"
 
 
-def test_discover_prompt_cases_maps_processed_prompts_to_dataset(tmp_path: Path):
-    prompts_dir = tmp_path / "processed_prompts"
+def test_script_cmd_uses_python3_for_env_python_when_python_missing(tmp_path: Path, monkeypatch):
+    script = tmp_path / "sv-iv-analyze"
+    script.write_text("#!/usr/bin/env python\nprint('ok')\n", encoding="utf-8")
+    script.chmod(0o755)
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval.shutil.which", lambda name: None if name == "python" else "/usr/bin/python3")
+    cmd = _script_cmd(script, ["--csv=summary.csv"])
+    assert cmd[:2] == ["python3", str(script)]
+
+
+def test_script_cmd_keeps_executable_when_python_available(tmp_path: Path, monkeypatch):
+    script = tmp_path / "sv-iv-analyze"
+    script.write_text("#!/usr/bin/env python\nprint('ok')\n", encoding="utf-8")
+    script.chmod(0o755)
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval.shutil.which", lambda name: "/usr/bin/python" if name == "python" else "/usr/bin/python3")
+    cmd = _script_cmd(script, ["--csv=summary.csv"])
+    assert cmd[0] == str(script)
+
+
+def test_discover_prompt_cases_maps_official_prompts_to_dataset(tmp_path: Path):
+    prompts_dir = tmp_path / "prompts"
     dataset_dir = tmp_path / "dataset_spec-to-rtl"
     prompts_dir.mkdir()
     dataset_dir.mkdir()
 
-    (prompts_dir / "Prob079_fsm3onehot.txt").write_text("prompt A\n")
-    (prompts_dir / "Prob020_mt2015_eq2.txt").write_text("prompt B\n")
+    (prompts_dir / "Prob079_fsm3onehot_prompt.txt").write_text("prompt A\n")
+    (prompts_dir / "Prob020_mt2015_eq2_prompt.txt").write_text("prompt B\n")
     (prompts_dir / "readme.txt").write_text("not a problem prompt\n")
+    (prompts_dir / "problems.txt").write_text("Prob020_mt2015_eq2\nProb079_fsm3onehot\n")
 
     (dataset_dir / "Prob079_test.sv").write_text("module tb; endmodule\n")
     (dataset_dir / "Prob079_ref.sv").write_text("module ref; endmodule\n")
@@ -80,12 +110,33 @@ def test_discover_prompt_cases_maps_processed_prompts_to_dataset(tmp_path: Path)
         max_problems=0,
     )
     assert [case.problem_id for case in cases] == ["Prob020", "Prob079"]
-    assert cases[0].prompt_path.name == "Prob020_mt2015_eq2.txt"
-    assert cases[1].prompt_path.name == "Prob079_fsm3onehot.txt"
+    assert cases[0].prompt_path.name == "Prob020_mt2015_eq2_prompt.txt"
+    assert cases[1].prompt_path.name == "Prob079_fsm3onehot_prompt.txt"
 
 
-def test_discover_prompt_cases_resolves_suffix_dataset_assets(tmp_path: Path):
-    prompts_dir = tmp_path / "processed_prompts"
+def test_discover_prompt_cases_prefers_official_prompt_names(tmp_path: Path):
+    prompts_dir = tmp_path / "prompts"
+    dataset_dir = tmp_path / "dataset_spec-to-rtl"
+    prompts_dir.mkdir()
+    dataset_dir.mkdir()
+
+    (prompts_dir / "Prob079_fsm3onehot_prompt.txt").write_text("official prompt\n")
+    (prompts_dir / "Prob079_fsm3onehot.txt").write_text("legacy prompt\n")
+    (dataset_dir / "Prob079_test.sv").write_text("module tb; endmodule\n")
+    (dataset_dir / "Prob079_ref.sv").write_text("module ref; endmodule\n")
+
+    cases = _discover_prompt_cases(
+        prompts_dir=prompts_dir,
+        dataset_dir=dataset_dir,
+        only_problem=[],
+        max_problems=0,
+    )
+    assert len(cases) == 1
+    assert cases[0].prompt_path.name == "Prob079_fsm3onehot_prompt.txt"
+
+
+def test_discover_prompt_cases_falls_back_to_legacy_prompt_names(tmp_path: Path):
+    prompts_dir = tmp_path / "prompts"
     dataset_dir = tmp_path / "dataset_spec-to-rtl"
     prompts_dir.mkdir()
     dataset_dir.mkdir()
@@ -107,7 +158,7 @@ def test_discover_prompt_cases_resolves_suffix_dataset_assets(tmp_path: Path):
 
 
 def test_discover_prompt_cases_missing_requested_problem_raises(tmp_path: Path):
-    prompts_dir = tmp_path / "processed_prompts"
+    prompts_dir = tmp_path / "prompts"
     dataset_dir = tmp_path / "dataset_spec-to-rtl"
     prompts_dir.mkdir()
     dataset_dir.mkdir()
@@ -125,12 +176,12 @@ def test_discover_prompt_cases_missing_requested_problem_raises(tmp_path: Path):
 
 
 def test_discover_prompt_cases_uses_oracle_manifest(tmp_path: Path):
-    prompts_dir = tmp_path / "processed_prompts"
+    prompts_dir = tmp_path / "prompts"
     dataset_dir = tmp_path / "dataset_spec-to-rtl"
     prompts_dir.mkdir()
     dataset_dir.mkdir()
 
-    (prompts_dir / "Prob010_demo.txt").write_text("prompt\n")
+    (prompts_dir / "Prob010_demo_prompt.txt").write_text("prompt\n")
     (dataset_dir / "custom" / "p10_test.sv").parent.mkdir(parents=True)
     (dataset_dir / "custom" / "p10_test.sv").write_text("module tb; endmodule\n")
     (dataset_dir / "custom" / "p10_ref.sv").write_text("module ref; endmodule\n")
@@ -283,3 +334,243 @@ def test_resolve_target_interface_parses_ref_module_ports(tmp_path: Path):
         {"name": "in_a", "direction": "INPUT", "width": 8},
         {"name": "out_z", "direction": "OUTPUT", "width": 8},
     ]
+
+
+def test_assert_generated_interface_matches_accepts_matching_interface(tmp_path: Path):
+    rtl_path = tmp_path / "TopModule.sv"
+    rtl_path.write_text(
+        "\n".join(
+            [
+                "module TopModule (",
+                "  output zero",
+                ");",
+                "  assign zero = 1'b0;",
+                "endmodule",
+            ]
+        )
+        + "\n"
+    )
+    _assert_generated_interface_matches(
+        rtl_path=rtl_path,
+        module_name="TopModule",
+        expected_signals=[{"name": "zero", "direction": "OUTPUT", "width": 1}],
+    )
+
+
+def test_assert_generated_interface_matches_rejects_extra_ports(tmp_path: Path):
+    rtl_path = tmp_path / "TopModule.sv"
+    rtl_path.write_text(
+        "\n".join(
+            [
+                "module TopModule (",
+                "  output reg zero,",
+                "  input clk",
+                ");",
+                "always @(posedge clk) zero <= 1'b0;",
+                "endmodule",
+            ]
+        )
+        + "\n"
+    )
+    with pytest.raises(RuntimeError, match="extra ports: clk"):
+        _assert_generated_interface_matches(
+            rtl_path=rtl_path,
+            module_name="TopModule",
+            expected_signals=[{"name": "zero", "direction": "OUTPUT", "width": 1}],
+        )
+
+
+def test_build_parser_includes_orchestrated_flags():
+    parser = build_parser()
+    args = parser.parse_args([])
+    assert hasattr(args, "legacy_lightweight")
+    assert hasattr(args, "pipeline_timeout")
+    assert args.legacy_lightweight is False
+    assert args.pipeline_timeout == 180.0
+
+
+def _benchmark_fixture_tree(tmp_path: Path) -> tuple[Path, Path]:
+    root = tmp_path / "verilog_eval"
+    prompts_dir = root / "dataset_spec-to-rtl"
+    scripts_dir = root / "scripts"
+    scripts_dir.mkdir(parents=True)
+    prompts_dir.mkdir(parents=True)
+    (scripts_dir / "sv-iv-analyze").write_text("#!/usr/bin/env bash\n")
+    (root / "Makefile.in").write_text("all:\n")
+    (prompts_dir / "Prob001_demo_prompt.txt").write_text("Module: demo\n")
+    (prompts_dir / "Prob001_test.sv").write_text("module tb; endmodule\n")
+    (prompts_dir / "Prob001_ref.sv").write_text("module ref; endmodule\n")
+    return root, prompts_dir
+
+
+def test_run_from_args_defaults_to_orchestrated_mode(tmp_path: Path, monkeypatch):
+    framework_root, prompts_dir = _benchmark_fixture_tree(tmp_path)
+    cfg = load_runtime_config()
+    cfg.benchmark.verilog_eval_root = str(framework_root)
+    cfg.benchmark.prompts_dir = str(prompts_dir)
+    cfg.benchmark.output_root = str(tmp_path / "out")
+    cfg.tools.verilator_path = "true"
+    cfg.tools.iverilog_path = "true"
+    cfg.tools.vvp_path = "true"
+
+    captured = {}
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval.get_runtime_config", lambda: cfg)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._has_langchain_schema", lambda: True)
+    monkeypatch.setattr("apps.cli.run_verilog_eval.connection_params_from_config", lambda: object())
+    monkeypatch.setattr("apps.cli.run_verilog_eval._ensure_broker_connection", lambda params: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._resolve_tool", lambda configured, default_name: "/bin/true")
+
+    def fake_run_mode(**kwargs):  # noqa: ANN001
+        captured["legacy"] = kwargs["legacy_lightweight"]
+        out_dir = kwargs["out_dir"]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "summary.txt").write_text("pass_rate = 1.0\n")
+        (out_dir / "summary.csv").write_text("Prob001,1,1,1.0,.\n")
+        (out_dir / "aggregate.json").write_text("{}\n")
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_mode", fake_run_mode)
+
+    args = argparse.Namespace(
+        config="config/runtime.yaml",
+        preset="benchmark",
+        sampled=False,
+        legacy_lightweight=False,
+        pipeline_timeout=180.0,
+        build_dir=None,
+        max_problems=0,
+        only_problem=[],
+    )
+    run_from_args(args)
+    assert captured["legacy"] is False
+
+
+def test_run_from_args_legacy_flag_uses_legacy_mode(tmp_path: Path, monkeypatch):
+    framework_root, prompts_dir = _benchmark_fixture_tree(tmp_path)
+    cfg = load_runtime_config()
+    cfg.benchmark.verilog_eval_root = str(framework_root)
+    cfg.benchmark.prompts_dir = str(prompts_dir)
+    cfg.benchmark.output_root = str(tmp_path / "out")
+    cfg.tools.iverilog_path = "true"
+    cfg.tools.vvp_path = "true"
+
+    captured = {}
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval.get_runtime_config", lambda: cfg)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._has_langchain_schema", lambda: True)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._resolve_tool", lambda configured, default_name: "/bin/true")
+
+    def fake_run_mode(**kwargs):  # noqa: ANN001
+        captured["legacy"] = kwargs["legacy_lightweight"]
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_mode", fake_run_mode)
+
+    args = argparse.Namespace(
+        config="config/runtime.yaml",
+        preset="benchmark",
+        sampled=False,
+        legacy_lightweight=True,
+        pipeline_timeout=180.0,
+        build_dir=None,
+        max_problems=0,
+        only_problem=[],
+    )
+    run_from_args(args)
+    assert captured["legacy"] is True
+
+
+def test_run_mode_fail_fast_on_orchestrated_failure(tmp_path: Path, monkeypatch):
+    prompt_path = tmp_path / "Prob001_prompt.txt"
+    test_sv = tmp_path / "Prob001_test.sv"
+    ref_sv = tmp_path / "Prob001_ref.sv"
+    prompt_path.write_text("prompt\n")
+    test_sv.write_text("module tb; endmodule\n")
+    ref_sv.write_text("module ref; endmodule\n")
+    case = PromptCase(problem_id="Prob001", prompt_path=prompt_path, test_sv=test_sv, ref_sv=ref_sv)
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval.connection_params_from_config", lambda: object())
+    monkeypatch.setattr("apps.cli.run_verilog_eval._ensure_broker_connection", lambda params: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._purge_benchmark_queues", lambda params: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval.start_workers", lambda params, stop_event: [])
+    monkeypatch.setattr("apps.cli.run_verilog_eval.stop_workers", lambda workers, stop_event: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._isolated_task_memory", lambda path: contextlib.nullcontext())
+    monkeypatch.setattr(
+        "apps.cli.run_verilog_eval._generate_one_sample_orchestrated",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("orchestrated failure")),
+    )
+    called = {"sample_test": 0}
+
+    def fake_sample_test(**kwargs):  # noqa: ANN001
+        called["sample_test"] += 1
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_sample_test", fake_sample_test)
+
+    with pytest.raises(RuntimeError, match="orchestrated failure"):
+        _run_mode(
+            root=tmp_path,
+            out_dir=tmp_path / "out",
+            cases=[case],
+            sample_cfg={"n": 1, "temperature": 0.0, "top_p": 0.01},
+            run_label="canonical",
+            iverilog_bin="/bin/true",
+            vvp_bin="/bin/true",
+            legacy_lightweight=False,
+            pipeline_timeout_s=5.0,
+        )
+    assert called["sample_test"] == 0
+
+
+def test_run_mode_fail_fast_when_orchestrator_reports_failed_node(tmp_path: Path, monkeypatch):
+    prompt_path = tmp_path / "Prob001_prompt.txt"
+    test_sv = tmp_path / "Prob001_test.sv"
+    ref_sv = tmp_path / "Prob001_ref.sv"
+    prompt_path.write_text("prompt\n")
+    test_sv.write_text("module tb; endmodule\n")
+    ref_sv.write_text("module RefModule(output zero); endmodule\n")
+    case = PromptCase(problem_id="Prob001", prompt_path=prompt_path, test_sv=test_sv, ref_sv=ref_sv)
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval.connection_params_from_config", lambda: object())
+    monkeypatch.setattr("apps.cli.run_verilog_eval._ensure_broker_connection", lambda params: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._purge_benchmark_queues", lambda params: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval.start_workers", lambda params, stop_event: [])
+    monkeypatch.setattr("apps.cli.run_verilog_eval.stop_workers", lambda workers, stop_event: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._isolated_task_memory", lambda path: contextlib.nullcontext())
+
+    def fake_generate(**kwargs):  # noqa: ANN001
+        sample_dir = kwargs["sample_dir"]
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{kwargs['case'].problem_id}_sample{kwargs['sample_index']:02d}"
+        (sample_dir / f"{name}.sv").write_text("module TopModule(output zero); assign zero = 1'b0; endmodule\n")
+        raise RuntimeError("Pipeline did not complete successfully for all nodes: TopModule=FAILED")
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval._generate_one_sample_orchestrated", fake_generate)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_sample_test", lambda **kwargs: None)
+
+    with pytest.raises(RuntimeError, match="TopModule=FAILED"):
+        _run_mode(
+            root=tmp_path,
+            out_dir=tmp_path / "out",
+            cases=[case],
+            sample_cfg={"n": 1, "temperature": 0.0, "top_p": 0.01},
+            run_label="canonical",
+            iverilog_bin="/bin/true",
+            vvp_bin="/bin/true",
+            legacy_lightweight=False,
+            pipeline_timeout_s=5.0,
+        )
+
+
+def test_write_generate_log_uses_resp_tokens_key(tmp_path: Path):
+    log_path = tmp_path / "sample.log"
+    _write_generate_log(
+        path=log_path,
+        status="SUCCESS",
+        prompt_tokens=123,
+        resp_tokens=45,
+        cost_usd=0.123456,
+        details="ok",
+    )
+    text = log_path.read_text()
+    assert "prompt_tokens = 123" in text
+    assert "resp_tokens = 45" in text
+    assert "response_tokens" not in text

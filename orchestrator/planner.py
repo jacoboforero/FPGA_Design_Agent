@@ -23,6 +23,7 @@ from core.schemas.specifications import (
     L4Specification,
     L5Specification,
 )
+from orchestrator.preplan_validator import ValidationIssue, validate_preplan_inputs
 
 SPEC_DIR = Path("artifacts/task_memory/specs")
 OUT_DIR = Path("artifacts/generated")
@@ -47,6 +48,26 @@ def _module_spec_paths(spec_dir: Path, module_name: str) -> Dict[str, Path]:
         "L3": spec_dir / f"L3_verification{suffix}",
         "L5": spec_dir / f"L5_acceptance{suffix}",
     }
+
+
+def _format_validation_issue(issue: ValidationIssue) -> str:
+    if not issue.context:
+        return f"[{issue.code}] {issue.message}"
+    context_parts: List[str] = []
+    for key in sorted(issue.context):
+        value = issue.context[key]
+        if isinstance(value, (dict, list)):
+            rendered = json.dumps(value, sort_keys=True)
+        else:
+            rendered = str(value)
+        context_parts.append(f"{key}={rendered}")
+    context_text = ", ".join(context_parts)
+    return f"[{issue.code}] {issue.message} ({context_text})"
+
+
+def _raise_preplan_validation_errors(errors: List[ValidationIssue]) -> None:
+    issue_lines = [f"- {_format_validation_issue(issue)}" for issue in errors]
+    raise RuntimeError("Pre-plan validation failed:\n" + "\n".join(issue_lines))
 
 
 def _extract_module_nodes(l4: L4Specification, default_module: str) -> List[str]:
@@ -299,6 +320,27 @@ def generate_from_specs(
         l3_by_module[module] = L3Specification.model_validate_json(paths["L3"].read_text())
         l5_by_module[module] = L5Specification.model_validate_json(paths["L5"].read_text())
 
+    top_specs = {"L1": l1, "L2": l2, "L3": l3, "L5": l5}
+    child_specs = {
+        module: {
+            "L1": l1_by_module[module],
+            "L2": l2_by_module[module],
+            "L3": l3_by_module[module],
+            "L5": l5_by_module[module],
+        }
+        for module in module_nodes
+        if module != top_module
+    }
+    preplan_validation = validate_preplan_inputs(
+        lock=lock,
+        top_specs=top_specs,
+        child_specs=child_specs,
+        l4=l4,
+        execution_policy=execution_policy,
+    )
+    if preplan_validation.errors:
+        _raise_preplan_validation_errors(preplan_validation.errors)
+
     port_index = _module_port_index(l2_by_module)
     _validate_l4_connection_endpoints(module_nodes=module_nodes, l4=l4, port_index=port_index)
     _validate_child_connection_coverage(module_nodes=module_nodes, deps_map=deps_map, l4=l4)
@@ -402,6 +444,19 @@ def generate_from_specs(
         "connections": [conn.model_dump() for conn in l4.connections],
         "execution_policy": execution_policy,
     }
+    if preplan_validation.warnings:
+        design_context["preplan_validation"] = {
+            "profile": preplan_validation.profile,
+            "warnings": [
+                {
+                    "code": warning.code,
+                    "severity": warning.severity,
+                    "message": warning.message,
+                    "context": warning.context,
+                }
+                for warning in preplan_validation.warnings
+            ],
+        }
     design_context["design_context_hash"] = _hash_dict(design_context["nodes"])
 
     dag = {

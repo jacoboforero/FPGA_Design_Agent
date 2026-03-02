@@ -28,11 +28,40 @@ class BrokerConfig(BaseModel):
     task_max_retries: int = 1
     purge_queues_on_start: bool = True
     planner_timeout_s: float = 60.0
+    results_consume_mode: str = "consume"
 
 
 class CliConfig(BaseModel):
     default_narrative_mode: str = "llm"
     narrative_show_state: bool = False
+    execution_narrator_async: bool = True
+    execution_narrator_order_mode: str = "strict"
+    execution_narrator_queue_max_events: int = 256
+
+
+class WorkerPoolSizesConfig(BaseModel):
+    implementation: int = 1
+    testbench: int = 1
+    reflection: int = 1
+    debug: int = 1
+    spec_helper: int = 1
+    lint: int = 1
+    tb_lint: int = 1
+    acceptance: int = 1
+    distill: int = 1
+    simulation: int = 1
+
+
+class WorkersConfig(BaseModel):
+    pool_sizes: WorkerPoolSizesConfig = Field(default_factory=WorkerPoolSizesConfig)
+
+
+class LlmRateControlConfig(BaseModel):
+    adaptive_enabled: bool = True
+    max_in_flight_min: int = 1
+    max_in_flight_default: int = 4
+    max_in_flight_max: int = 8
+    backoff_on_429: bool = True
 
 
 class LlmConfig(BaseModel):
@@ -47,19 +76,20 @@ class LlmConfig(BaseModel):
     max_tokens: int = 10000
     temperature: float = 0.2
     top_p: Optional[float] = None
-    max_tokens_spec: int = 10000
+    max_tokens_spec: int = 4000
     temperature_spec: float = 0.2
-    max_tokens_spec_question: int = 10000
+    max_tokens_spec_question: int = 1500
     temperature_spec_question: float = 0.3
-    max_tokens_spec_draft: int = 10000
+    max_tokens_spec_draft: int = 2500
     temperature_spec_draft: float = 0.4
-    max_tokens_reflect: int = 10000
+    max_tokens_reflect: int = 6000
     temperature_reflect: float = 0.2
-    max_tokens_debug: int = 10000
+    max_tokens_debug: int = 7000
     temperature_debug: float = 0.2
     narrative_temperature: float = 0.5
     narrative_max_tokens: int = 220
     narrative_timeout_s: float = 10.0
+    rate_control: LlmRateControlConfig = Field(default_factory=LlmRateControlConfig)
 
 
 class ToolConfig(BaseModel):
@@ -100,8 +130,8 @@ class BenchmarkSampleConfig(BaseModel):
 
 
 class BenchmarkConfig(BaseModel):
-    verilog_eval_root: str = "verilog_eval"
-    prompts_dir: str = "processed_prompts"
+    verilog_eval_root: str = "third_party/verilog-eval"
+    prompts_dir: str = "third_party/verilog-eval/dataset_spec-to-rtl"
     output_root: str = "artifacts/benchmarks/verilog_eval"
     oracle_manifest: Optional[str] = None
     canonical: BenchmarkSampleConfig = Field(
@@ -125,6 +155,7 @@ class RuntimeConfig(BaseModel):
     presets: Dict[str, PresetConfig] = Field(default_factory=dict)
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
     cli: CliConfig = Field(default_factory=CliConfig)
+    workers: WorkersConfig = Field(default_factory=WorkersConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
     tools: ToolConfig = Field(default_factory=ToolConfig)
     lint: LintConfig = Field(default_factory=LintConfig)
@@ -164,13 +195,14 @@ def _default_runtime_dict() -> Dict[str, Any]:
             "benchmark": {
                 "spec_profile": "benchmark",
                 "verification_profile": "oracle_compare",
-                "allow_repair_loop": False,
+                "allow_repair_loop": True,
                 "interactive_spec_helper": False,
                 "benchmark_mode": True,
             },
         },
         "broker": {},
         "cli": {},
+        "workers": {},
         "llm": {},
         "tools": {},
         "lint": {},
@@ -231,7 +263,10 @@ __all__ = [
     "DEFAULT_CONFIG_PATH",
     "BrokerConfig",
     "CliConfig",
+    "WorkersConfig",
+    "WorkerPoolSizesConfig",
     "LlmConfig",
+    "LlmRateControlConfig",
     "ToolConfig",
     "LintConfig",
     "SimConfig",

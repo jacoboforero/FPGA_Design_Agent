@@ -2,6 +2,8 @@ from pathlib import Path
 import json
 from uuid import uuid4
 
+import pytest
+
 from orchestrator import planner
 from core.schemas.specifications import (
     AcceptanceMetric,
@@ -421,3 +423,109 @@ def test_planner_fails_when_connection_port_not_declared(tmp_path: Path):
         assert False, "Expected planner to fail when L4.connections references unknown ports."
     except RuntimeError as exc:
         assert "does not exist in L2.signals" in str(exc)
+
+
+def _set_signal_width(spec_dir: Path, signal_name: str, width_expr: str) -> None:
+    l2_path = spec_dir / "L2_interface.json"
+    l2 = json.loads(l2_path.read_text())
+    for signal in l2["signals"]:
+        if signal["name"] == signal_name:
+            signal["width_expr"] = width_expr
+            break
+    l2_path.write_text(json.dumps(l2, indent=2))
+
+
+def _set_single_loopback_connection(
+    spec_dir: Path,
+    *,
+    src_slice: str | None = None,
+    dst_slice: str | None = None,
+    width: str | None = None,
+) -> None:
+    l4_path = spec_dir / "L4_architecture.json"
+    l4 = json.loads(l4_path.read_text())
+    connection = {
+        "src": {"node_id": "foo", "port": "in_data"},
+        "dst": {"node_id": "foo", "port": "out_data"},
+    }
+    if src_slice is not None:
+        connection["src"]["slice"] = src_slice
+    if dst_slice is not None:
+        connection["dst"]["slice"] = dst_slice
+    if width is not None:
+        connection["width"] = width
+    l4["connections"] = [connection]
+    l4_path.write_text(json.dumps(l4, indent=2))
+
+
+def test_planner_fails_fast_on_non_frozen_spec(tmp_path: Path):
+    spec_dir = tmp_path / "specs"
+    out_dir = tmp_path / "out"
+    write_specs(spec_dir)
+
+    l3_path = spec_dir / "L3_verification.json"
+    l3 = json.loads(l3_path.read_text())
+    l3["state"] = "APPROVED"
+    l3_path.write_text(json.dumps(l3, indent=2))
+
+    with pytest.raises(RuntimeError, match="Pre-plan validation failed"):
+        planner.generate_from_specs(spec_dir=spec_dir, out_dir=out_dir)
+
+
+def test_planner_fails_fast_on_spec_id_mismatch(tmp_path: Path):
+    spec_dir = tmp_path / "specs"
+    out_dir = tmp_path / "out"
+    write_specs(spec_dir)
+
+    lock_path = spec_dir / "lock.json"
+    lock = json.loads(lock_path.read_text())
+    lock["spec_id"] = str(uuid4())
+    lock_path.write_text(json.dumps(lock, indent=2))
+
+    with pytest.raises(RuntimeError, match="PLV204"):
+        planner.generate_from_specs(spec_dir=spec_dir, out_dir=out_dir)
+
+
+def test_planner_fails_on_numeric_width_mismatch_preplan(tmp_path: Path):
+    spec_dir = tmp_path / "specs"
+    out_dir = tmp_path / "out"
+    write_specs(spec_dir)
+    _set_signal_width(spec_dir, "out_data", "4")
+    _set_single_loopback_connection(spec_dir)
+
+    with pytest.raises(RuntimeError, match="PLV304"):
+        planner.generate_from_specs(spec_dir=spec_dir, out_dir=out_dir)
+
+
+def test_planner_allows_symbolic_width_in_non_strict_and_persists_warnings(tmp_path: Path):
+    spec_dir = tmp_path / "specs"
+    out_dir = tmp_path / "out"
+    write_specs(spec_dir)
+    _set_signal_width(spec_dir, "in_data", "DATA_W")
+    _set_signal_width(spec_dir, "out_data", "PAYLOAD_W")
+    _set_single_loopback_connection(spec_dir)
+
+    planner.generate_from_specs(spec_dir=spec_dir, out_dir=out_dir)
+
+    design_context = json.loads((out_dir / "design_context.json").read_text())
+    preplan = design_context.get("preplan_validation", {})
+    warnings = preplan.get("warnings", [])
+    assert preplan.get("profile") == "hybrid_scoreboard"
+    assert isinstance(warnings, list) and warnings
+    assert any(issue.get("code") == "PLV306" for issue in warnings)
+
+
+def test_planner_fails_on_symbolic_width_in_strict_profile(tmp_path: Path):
+    spec_dir = tmp_path / "specs"
+    out_dir = tmp_path / "out"
+    write_specs(spec_dir)
+    _set_signal_width(spec_dir, "in_data", "DATA_W")
+    _set_signal_width(spec_dir, "out_data", "PAYLOAD_W")
+    _set_single_loopback_connection(spec_dir)
+
+    with pytest.raises(RuntimeError, match="PLV306"):
+        planner.generate_from_specs(
+            spec_dir=spec_dir,
+            out_dir=out_dir,
+            execution_policy={"verification_profile": "strict_tb_acceptance"},
+        )

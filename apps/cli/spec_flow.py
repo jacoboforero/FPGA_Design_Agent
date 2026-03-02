@@ -94,11 +94,160 @@ def _colors_enabled() -> bool:
 
 _COLOR = _colors_enabled()
 
+_CLI_THEME_ENV = "CLI_THEME"
+_TERM_BG_HINT_ENV_VARS = ("TERMINAL_BACKGROUND", "TERM_BACKGROUND")
+
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
-_WHITE = "\033[97m"
-_MINT = "\033[38;5;121m"
+
+
+def _supports_truecolor() -> bool:
+    return os.getenv("COLORTERM", "").lower() in {"truecolor", "24bit"}
+
+
+def _rgb_fg(r: int, g: int, b: int, fallback: str) -> str:
+    if _supports_truecolor():
+        return f"\033[38;2;{r};{g};{b}m"
+    return fallback
+
+
+def _rgb_bg(r: int, g: int, b: int, fallback: str = "") -> str:
+    if _supports_truecolor():
+        return f"\033[48;2;{r};{g};{b}m"
+    return fallback
+
+
+def _ansi256_to_rgb(index: int) -> Tuple[int, int, int] | None:
+    if index < 0 or index > 255:
+        return None
+    ansi16 = {
+        0: (0, 0, 0),
+        1: (128, 0, 0),
+        2: (0, 128, 0),
+        3: (128, 128, 0),
+        4: (0, 0, 128),
+        5: (128, 0, 128),
+        6: (0, 128, 128),
+        7: (192, 192, 192),
+        8: (128, 128, 128),
+        9: (255, 0, 0),
+        10: (0, 255, 0),
+        11: (255, 255, 0),
+        12: (0, 0, 255),
+        13: (255, 0, 255),
+        14: (0, 255, 255),
+        15: (255, 255, 255),
+    }
+    if index <= 15:
+        return ansi16[index]
+    if index <= 231:
+        offset = index - 16
+        r_idx = offset // 36
+        g_idx = (offset % 36) // 6
+        b_idx = offset % 6
+        levels = [0, 95, 135, 175, 215, 255]
+        return (levels[r_idx], levels[g_idx], levels[b_idx])
+    shade = 8 + (index - 232) * 10
+    return (shade, shade, shade)
+
+
+def _theme_from_ansi_bg(index: int) -> str | None:
+    rgb = _ansi256_to_rgb(index)
+    if rgb is None:
+        return None
+    r, g, b = rgb
+    luminance = (0.2126 * r) + (0.7152 * g) + (0.0722 * b)
+    return "light" if luminance >= 128 else "dark"
+
+
+def _theme_from_colorfgbg(value: str) -> str | None:
+    if not value:
+        return None
+    # COLORFGBG commonly looks like "<fg>;<bg>".
+    for token in reversed(re.split(r"[;:]", value)):
+        candidate = token.strip()
+        if not candidate.isdigit():
+            continue
+        theme = _theme_from_ansi_bg(int(candidate))
+        if theme:
+            return theme
+    return None
+
+
+def _terminal_theme_mode() -> str:
+    requested = os.getenv(_CLI_THEME_ENV, "auto").strip().lower()
+    if requested in {"light", "dark", "neutral"}:
+        return requested
+
+    for env_name in _TERM_BG_HINT_ENV_VARS:
+        hint = os.getenv(env_name, "").strip().lower()
+        if hint in {"light", "dark"}:
+            return hint
+
+    fg_bg_hint = _theme_from_colorfgbg(os.getenv("COLORFGBG", ""))
+    if fg_bg_hint:
+        return fg_bg_hint
+
+    term_program = os.getenv("TERM_PROGRAM", "").strip().lower()
+    # Apple Terminal defaults to a light profile on many setups.
+    if term_program == "apple_terminal":
+        return "light"
+    # On macOS terminals without explicit color hints, avoid forcing light-on-dark
+    # colors; use a neutral style that keeps terminal default foreground.
+    if sys.platform == "darwin":
+        return "neutral"
+
+    return "dark"
+
+
+def _build_theme(mode: str) -> Dict[str, str]:
+    if mode == "neutral":
+        accent = _rgb_fg(30, 146, 125, "\033[36m")
+        accent_soft = _rgb_fg(84, 123, 115, "\033[36m")
+        muted = _rgb_fg(96, 110, 104, "\033[90m")
+        return {
+            "accent": accent,
+            "accent_soft": accent_soft,
+            "text": "",
+            "muted": muted,
+            "surface": "",
+            "surface_alt": "",
+        }
+
+    if mode == "light":
+        accent = _rgb_fg(14, 120, 100, "\033[36m")
+        accent_soft = _rgb_fg(60, 111, 98, "\033[36m")
+        text = _rgb_fg(22, 31, 29, "\033[30m")
+        muted = _rgb_fg(91, 109, 102, "\033[90m")
+        return {
+            "accent": accent,
+            "accent_soft": accent_soft,
+            "text": text,
+            "muted": muted,
+            "surface": _rgb_bg(244, 248, 246),
+            "surface_alt": _rgb_bg(236, 242, 239),
+        }
+
+    accent = _rgb_fg(124, 237, 204, "\033[38;5;121m")
+    accent_soft = _rgb_fg(102, 193, 166, "\033[38;5;121m")
+    text = _rgb_fg(241, 248, 246, "\033[97m")
+    muted = _rgb_fg(166, 197, 188, "\033[38;5;121m")
+    return {
+        "accent": accent,
+        "accent_soft": accent_soft,
+        "text": text,
+        "muted": muted,
+        "surface": _rgb_bg(22, 27, 28),
+        "surface_alt": _rgb_bg(27, 33, 34),
+    }
+
+
+_THEME_MODE = _terminal_theme_mode()
+_THEME = _build_theme(_THEME_MODE)
+
+_WHITE = _THEME["text"]
+_MINT = _THEME["accent"]
 _RED = "\033[31m"
 _GREEN = _MINT
 _YELLOW = "\033[33m"
@@ -106,31 +255,21 @@ _BLUE = _MINT
 _MAGENTA = _MINT
 _CYAN = _MINT
 
-
-def _rgb_fg(r: int, g: int, b: int, fallback: str) -> str:
-    if os.getenv("COLORTERM", "").lower() in {"truecolor", "24bit"}:
-        return f"\033[38;2;{r};{g};{b}m"
-    return fallback
-
-
-def _rgb_bg(r: int, g: int, b: int, fallback: str = "") -> str:
-    if os.getenv("COLORTERM", "").lower() in {"truecolor", "24bit"}:
-        return f"\033[48;2;{r};{g};{b}m"
-    return fallback
-
-
-_THEME_ACCENT = _rgb_fg(124, 237, 204, _MINT)
-_THEME_ACCENT_SOFT = _rgb_fg(102, 193, 166, _MINT)
-_THEME_TEXT = _rgb_fg(241, 248, 246, _WHITE)
-_THEME_MUTED = _rgb_fg(166, 197, 188, _MINT)
-_THEME_SURFACE = _rgb_bg(22, 27, 28)
-_THEME_SURFACE_ALT = _rgb_bg(27, 33, 34)
+_THEME_ACCENT = _THEME["accent"]
+_THEME_ACCENT_SOFT = _THEME["accent_soft"]
+_THEME_TEXT = _THEME["text"]
+_THEME_MUTED = _THEME["muted"]
+_THEME_SURFACE = _THEME["surface"]
+_THEME_SURFACE_ALT = _THEME["surface_alt"]
 
 
 def _style(text: str, *codes: str) -> str:
     if not _COLOR or not codes:
         return text
-    return "".join(codes) + text + _RESET
+    active = [code for code in codes if code]
+    if not active:
+        return text
+    return "".join(active) + text + _RESET
 
 
 def _terminal_width(default: int = 108) -> int:
@@ -959,7 +1098,7 @@ def _write_artifacts(
         open_questions=_clean_list(l1.get("open_questions", [])),
     )
 
-    clocking_items = _require_list_of_objects(l2.get("clocking", []), "L2.clocking")
+    clocking_items = _clean_list_of_objects(l2.get("clocking", []))
     clocking = []
     for item in clocking_items:
         clocking.append(
@@ -1578,9 +1717,12 @@ def _apply_benchmark_defaults(checklist: Dict[str, Any], spec_text: str) -> Dict
     clocking = _clean_list_of_objects(l2.get("clocking", []))
     if not clocking:
         signal_names = {str(item.get("name", "")).lower() for item in signals if isinstance(item, dict)}
-        clk_name = "clk" if "clk" in signal_names else ("clock" if "clock" in signal_names else "clk")
-        rst_name = "rst_n" if "rst_n" in signal_names else ("reset" if "reset" in signal_names else None)
-        clocking = [{"clock_name": clk_name, "clock_polarity": "POSEDGE", "reset_name": rst_name}]
+        clk_name = "clk" if "clk" in signal_names else ("clock" if "clock" in signal_names else "")
+        if clk_name:
+            rst_name = "rst_n" if "rst_n" in signal_names else ("reset" if "reset" in signal_names else None)
+            clocking = [{"clock_name": clk_name, "clock_polarity": "POSEDGE", "reset_name": rst_name}]
+        else:
+            clocking = []
     l2["clocking"] = clocking
     if not str(l2.get("transaction_unit", "")).strip():
         l2["transaction_unit"] = "Prompt-defined update unit."
@@ -1665,6 +1807,13 @@ def _apply_benchmark_defaults(checklist: Dict[str, Any], spec_text: str) -> Dict
     return checklist
 
 
+def _benchmark_clocking_optional(checklist: Dict[str, Any]) -> bool:
+    l2 = checklist.get("L2") if isinstance(checklist.get("L2"), dict) else {}
+    signals = l2.get("signals") if isinstance(l2, dict) else []
+    signal_names = {str(item.get("name", "")).lower() for item in signals if isinstance(item, dict)}
+    return "clk" not in signal_names and "clock" not in signal_names
+
+
 def _require_gateway() -> object:
     model_override = get_runtime_config().llm.spec_helper_model
     gateway = init_llm_gateway(model_override=model_override)
@@ -1747,6 +1896,8 @@ def _complete_checklist(
     if not interactive and spec_profile == "benchmark":
         checklist = _apply_benchmark_defaults(checklist, spec_text)
         missing = list_missing_fields(checklist)
+        if _benchmark_clocking_optional(checklist):
+            missing = [field for field in missing if field.path != "L2.clocking"]
         if missing:
             fields = ", ".join(field.path for field in missing[:8])
             raise RuntimeError(f"Benchmark spec normalization left unresolved fields: {fields}")
