@@ -666,9 +666,129 @@ def _write_generate_log(
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _sample_name(case: PromptCase, sample_index: int) -> str:
+    return f"{case.problem_id}_sample{sample_index:02d}"
+
+
+def _sample_sv_path(case: PromptCase, sample_index: int, sample_dir: Path) -> Path:
+    return sample_dir / f"{_sample_name(case, sample_index)}.sv"
+
+
+def _sample_generate_log_path(case: PromptCase, sample_index: int, sample_dir: Path) -> Path:
+    return sample_dir / f"{_sample_name(case, sample_index)}-sv-generate.log"
+
+
+def _sample_iv_log_path(case: PromptCase, sample_index: int, sample_dir: Path) -> Path:
+    return sample_dir / f"{_sample_name(case, sample_index)}-sv-iv-test.log"
+
+
+def _ensure_generate_failure_log(
+    *,
+    case: PromptCase,
+    sample_index: int,
+    sample_dir: Path,
+    error: Exception,
+) -> None:
+    path = _sample_generate_log_path(case, sample_index, sample_dir)
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_generate_log(
+        path=path,
+        status=TaskStatus.FAILURE,
+        prompt_tokens=0,
+        resp_tokens=0,
+        cost_usd=0.0,
+        details=f"pipeline_status = failure\nerror = {error}",
+    )
+
+
+def _ensure_placeholder_sample_sv(case: PromptCase, sample_index: int, sample_dir: Path) -> Path:
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    sample_sv = _sample_sv_path(case, sample_index, sample_dir)
+    if sample_sv.exists():
+        return sample_sv
+    try:
+        prompt_text = case.prompt_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:  # noqa: BLE001
+        prompt_text = ""
+    module_name = _resolve_target_module_name(case, prompt_text).strip() or case.problem_id
+    sample_sv.write_text(
+        "\n".join(
+            [
+                f"module {module_name}();",
+                f"  // placeholder emitted after generation failure for {case.problem_id} sample {sample_index:02d}",
+                "endmodule",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return sample_sv
+
+
+def _append_sample_failure_log(
+    *,
+    case: PromptCase,
+    sample_index: int,
+    sample_dir: Path,
+    stage: str,
+    error: Exception,
+) -> None:
+    iv_log_path = _sample_iv_log_path(case, sample_index, sample_dir)
+    chunks: list[str] = []
+    if iv_log_path.exists():
+        existing = iv_log_path.read_text(encoding="utf-8", errors="ignore").strip()
+        if existing:
+            chunks.append(existing)
+    message = str(error).strip() or repr(error)
+    chunks.append(f"RUNNER_ERROR stage={stage}")
+    chunks.append(f"exception = {error.__class__.__name__}: {message}")
+    iv_log_path.write_text("\n".join(chunks) + "\n", encoding="utf-8")
+
+
 def _reset_dir(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
     path.mkdir(parents=True, exist_ok=True)
+
+
+def _bind_benchmark_oracle_assets(
+    *,
+    design_context_path: Path,
+    target_module_name: str,
+    test_sv: Path,
+    ref_sv: Path,
+) -> tuple[str, str, str]:
+    if not design_context_path.exists():
+        raise RuntimeError(f"design_context.json not found: {design_context_path}")
+    if not test_sv.exists():
+        raise RuntimeError(f"Benchmark testbench not found: {test_sv}")
+    if not ref_sv.exists():
+        raise RuntimeError(f"Benchmark reference RTL not found: {ref_sv}")
+
+    payload = json.loads(design_context_path.read_text(encoding="utf-8"))
+    nodes = payload.get("nodes") if isinstance(payload.get("nodes"), dict) else {}
+    if not nodes:
+        raise RuntimeError(f"No nodes found in design context: {design_context_path}")
+
+    bound_node = target_module_name if target_module_name in nodes else str(payload.get("top_module") or "")
+    if bound_node not in nodes:
+        bound_node = next(iter(nodes.keys()))
+    node = nodes[bound_node]
+
+    test_path = str(test_sv.resolve())
+    ref_path = str(ref_sv.resolve())
+    node["testbench_file"] = test_path
+    node["oracle_ref_file"] = ref_path
+
+    execution_policy = payload.get("execution_policy") if isinstance(payload.get("execution_policy"), dict) else {}
+    execution_policy.setdefault("disable_tb_generation", True)
+    execution_policy.setdefault("debug_rtl_only", True)
+    execution_policy.setdefault("benchmark_use_public_testbench", True)
+    payload["execution_policy"] = execution_policy
+
+    design_context_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return bound_node, test_path, ref_path
 
 
 def _copy_tree(src: Path, dst: Path) -> None:
@@ -728,7 +848,13 @@ def _snapshot_pipeline_trace(
 def _isolated_task_memory(task_memory_root: Path):
     backup_path = task_memory_root.with_name(f"{task_memory_root.name}.benchmark_backup")
     if backup_path.exists():
-        shutil.rmtree(backup_path, ignore_errors=True)
+        try:
+            shutil.rmtree(backup_path, ignore_errors=False)
+        except Exception:
+            suffix = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+            backup_path = task_memory_root.with_name(f"{task_memory_root.name}.benchmark_backup_{suffix}")
+            if backup_path.exists():
+                shutil.rmtree(backup_path, ignore_errors=True)
     had_original = task_memory_root.exists()
     if had_original:
         task_memory_root.rename(backup_path)
@@ -913,6 +1039,17 @@ def _generate_one_sample_orchestrated(
             dag_path = generated_root / "dag.json"
             if not design_context_path.exists() or not dag_path.exists():
                 raise RuntimeError("Planner did not produce design_context.json and dag.json")
+            bound_node, oracle_testbench_path, oracle_ref_path = _bind_benchmark_oracle_assets(
+                design_context_path=design_context_path,
+                target_module_name=target_module_name,
+                test_sv=case.test_sv,
+                ref_sv=case.ref_sv,
+            )
+            metadata["oracle_context"] = {
+                "bound_node": bound_node,
+                "testbench_path": oracle_testbench_path,
+                "ref_path": oracle_ref_path,
+            }
 
             final_states = DemoOrchestrator(
                 connection_params,
@@ -1109,6 +1246,9 @@ def _run_mode(
             "verification_profile": "oracle_compare",
             "allow_repair_loop": True,
             "benchmark_mode": True,
+            "benchmark_use_public_testbench": True,
+            "disable_tb_generation": True,
+            "debug_rtl_only": True,
             "debug_max_retries": int(get_runtime_config().debug.max_retries),
         }
 
@@ -1116,31 +1256,67 @@ def _run_mode(
             for case in cases:
                 sample_dir = out_dir / case.problem_id
                 for sample_index in range(1, n_samples + 1):
-                    if legacy_lightweight:
-                        _generate_one_sample_legacy(
-                            worker=worker,
+                    generation_error: Exception | None = None
+                    try:
+                        if legacy_lightweight:
+                            _generate_one_sample_legacy(
+                                worker=worker,
+                                case=case,
+                                sample_index=sample_index,
+                                sample_dir=sample_dir,
+                            )
+                        else:
+                            _generate_one_sample_orchestrated(
+                                connection_params=connection_params,
+                                case=case,
+                                sample_index=sample_index,
+                                sample_dir=sample_dir,
+                                pipeline_timeout_s=pipeline_timeout_s,
+                                execution_policy=execution_policy,
+                                task_memory_root=task_memory_root,
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        generation_error = exc
+                        _ensure_generate_failure_log(
                             case=case,
                             sample_index=sample_index,
                             sample_dir=sample_dir,
+                            error=exc,
                         )
-                    else:
-                        _generate_one_sample_orchestrated(
-                            connection_params=connection_params,
-                            case=case,
-                            sample_index=sample_index,
-                            sample_dir=sample_dir,
-                            pipeline_timeout_s=pipeline_timeout_s,
-                            execution_policy=execution_policy,
-                            task_memory_root=task_memory_root,
+                        _ensure_placeholder_sample_sv(case, sample_index, sample_dir)
+                        print(
+                            f"[WARN] {case.problem_id} sample {sample_index:02d} generation failed; "
+                            f"marked as failed and continuing: {exc}"
                         )
 
-                    _run_sample_test(
-                        case=case,
-                        sample_index=sample_index,
-                        sample_dir=sample_dir,
-                        iverilog_bin=iverilog_bin,
-                        vvp_bin=vvp_bin,
-                    )
+                    try:
+                        _run_sample_test(
+                            case=case,
+                            sample_index=sample_index,
+                            sample_dir=sample_dir,
+                            iverilog_bin=iverilog_bin,
+                            vvp_bin=vvp_bin,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        _append_sample_failure_log(
+                            case=case,
+                            sample_index=sample_index,
+                            sample_dir=sample_dir,
+                            stage="sample_test",
+                            error=exc,
+                        )
+                        print(
+                            f"[WARN] {case.problem_id} sample {sample_index:02d} sample-test failed; "
+                            f"marked as failed and continuing: {exc}"
+                        )
+                    if generation_error is not None:
+                        _append_sample_failure_log(
+                            case=case,
+                            sample_index=sample_index,
+                            sample_dir=sample_dir,
+                            stage="generation",
+                            error=generation_error,
+                        )
 
         summary_txt, summary_csv = _run_official_analyze(root, out_dir)
         _run_optional_failure_reports(root, out_dir, summary_csv)

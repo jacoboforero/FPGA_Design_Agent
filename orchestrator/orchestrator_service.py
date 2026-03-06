@@ -190,6 +190,7 @@ class DemoOrchestrator:
             max_debug_retries = int(
                 self.execution_policy.get("debug_max_retries", configured_retries)
             )
+            disable_tb_generation = bool(self.execution_policy.get("disable_tb_generation", False))
             attempt_by_node: dict[str, int] = {}
             debug_attempts_by_node: dict[str, dict[str, int]] = {}
             tb_generated_by_node: dict[str, bool] = {}
@@ -460,7 +461,7 @@ class DemoOrchestrator:
             def start_node(node_id: str) -> None:
                 attempt_by_node[node_id] = 1
                 debug_attempts_by_node[node_id] = {}
-                tb_generated_by_node[node_id] = False
+                tb_generated_by_node[node_id] = disable_tb_generation
                 attempt_history_by_node[node_id] = {}
                 self._advance(node_id, NodeState.IMPLEMENTING)
                 impl_task = self._publish_task(ch, EntityType.REASONING, AgentType.IMPLEMENTATION, node_id)

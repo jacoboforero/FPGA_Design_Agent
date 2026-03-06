@@ -92,3 +92,67 @@ def test_acceptance_benchmark_pass_metric_reads_sim_log_pass_fail(tmp_path, monk
     )
     result = worker.handle_task(task)
     assert result.status is TaskStatus.SUCCESS
+
+
+def test_acceptance_benchmark_pass_metric_fails_on_nonzero_mismatches(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    node_id = "benchmark_case_mismatch"
+    sim_log = Path("artifacts/task_memory") / node_id / "sim_attempt1" / "log.txt"
+    sim_log.parent.mkdir(parents=True, exist_ok=True)
+    sim_log.write_text("Simulation finished.\nMismatches: 12 in 41 samples\n")
+
+    worker = AcceptanceWorker(connection_params=None, stop_event=None)
+    task = TaskMessage(
+        priority=TaskPriority.MEDIUM,
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.ACCEPTANCE,
+        context={
+            "node_id": node_id,
+            "attempt": 1,
+            "acceptance": {
+                "acceptance_metrics": [
+                    {
+                        "metric_id": "benchmark_pass",
+                        "operator": "==",
+                        "target_value": "1",
+                        "metric_source": "sim_log",
+                    }
+                ]
+            },
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "Metric 'benchmark_pass' failed" in result.log_output
+
+
+def test_acceptance_benchmark_pass_metric_fails_on_timeout_marker(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    node_id = "benchmark_case_timeout"
+    sim_log = Path("artifacts/task_memory") / node_id / "sim_attempt1" / "log.txt"
+    sim_log.parent.mkdir(parents=True, exist_ok=True)
+    sim_log.write_text("TIMEOUT\nMismatches: 0 in 41 samples\n")
+
+    worker = AcceptanceWorker(connection_params=None, stop_event=None)
+    task = TaskMessage(
+        priority=TaskPriority.MEDIUM,
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.ACCEPTANCE,
+        context={
+            "node_id": node_id,
+            "attempt": 1,
+            "acceptance": {
+                "acceptance_metrics": [
+                    {
+                        "metric_id": "benchmark_pass",
+                        "operator": "==",
+                        "target_value": "1",
+                        "metric_source": "sim_log",
+                    }
+                ]
+            },
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "Metric 'benchmark_pass' failed" in result.log_output

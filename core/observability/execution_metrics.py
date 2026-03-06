@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -55,7 +56,12 @@ class ExecutionMetricsRecorder:
         self.run_id = run_id
         self.run_name = run_name or "run"
         self.records: Dict[str, Dict[str, Any]] = {}
-        self.out_dir = Path(out_dir or "artifacts/observability")
+        default_dir = (
+            os.getenv("OBSERVABILITY_ARTIFACTS_DIR")
+            or os.getenv("AGENTOPS_ARTIFACTS_DIR")
+            or "artifacts/observability"
+        )
+        self.out_dir = Path(out_dir or default_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
     def ensure_record(self, task_id: str) -> Dict[str, Any]:
@@ -187,4 +193,3 @@ class ExecutionMetricsRecorder:
         path = self.out_dir / f"{_slug(self.run_name)}_execution_metrics.json"
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return path
-

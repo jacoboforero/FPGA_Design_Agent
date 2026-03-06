@@ -18,6 +18,12 @@ from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
 from core.runtime.config import get_runtime_config
 
+_NO_FENCE_PREFIXES = ("`systemverilog", "```")
+_ALWAYS_FF_RE = re.compile(r"\balways_ff\b")
+_ALWAYS_COMB_RE = re.compile(r"\balways_comb\b")
+_OUTPUT_LOGIC_RE = re.compile(r"\boutput\s+logic\b")
+_LOGIC_RE = re.compile(r"\blogic\b")
+
 
 class ImplementationWorker(AgentWorkerBase):
     handled_types = {AgentType.IMPLEMENTATION}
@@ -107,18 +113,7 @@ class ImplementationWorker(AgentWorkerBase):
             )
 
         # Sanitize for Verilog-only toolchains.
-        lines = []
-        for line in rtl_source.splitlines():
-            stripped = line.strip()
-            if stripped.startswith(("`systemverilog", "```")):
-                continue
-            lines.append(line)
-        rtl_source = "\n".join(lines)
-        rtl_source = rtl_source.replace("always_ff", "always")
-        rtl_source = rtl_source.replace("always_comb", "always @*")
-        if "always" in rtl_source:
-            rtl_source = rtl_source.replace("output logic", "output reg")
-        rtl_source = rtl_source.replace("logic", "wire")
+        rtl_source = _sanitize_rtl_for_verilog(rtl_source)
         rtl_source = _extract_target_module_source(rtl_source, node_id)
 
         try:
@@ -318,6 +313,22 @@ class ImplementationWorker(AgentWorkerBase):
 
 _MODULE_DECL_RE = re.compile(r"^\s*module\s+([A-Za-z_][A-Za-z0-9_]*)\b")
 _ENDMODULE_RE = re.compile(r"^\s*endmodule\b")
+
+
+def _sanitize_rtl_for_verilog(source: str) -> str:
+    lines = []
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(_NO_FENCE_PREFIXES):
+            continue
+        lines.append(line)
+    text = "\n".join(lines)
+    text = _ALWAYS_FF_RE.sub("always", text)
+    text = _ALWAYS_COMB_RE.sub("always @*", text)
+    if "always" in text:
+        text = _OUTPUT_LOGIC_RE.sub("output reg", text)
+    text = _LOGIC_RE.sub("wire", text)
+    return text
 
 
 def _extract_target_module_source(source: str, module_name: str) -> str:

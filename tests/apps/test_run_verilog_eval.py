@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
+import apps.cli.run_verilog_eval as run_verilog_eval
 from apps.cli.run_verilog_eval import (
     PromptCase,
     _assert_generated_interface_matches,
+    _bind_benchmark_oracle_assets,
     _discover_prompt_cases,
     _ensure_framework,
     _load_oracle_manifest,
@@ -20,6 +23,7 @@ from apps.cli.run_verilog_eval import (
     _write_generate_log,
     _resolve_target_interface,
     _resolve_target_module_name,
+    _isolated_task_memory,
     _summary_metrics,
     _summary_rows,
     build_parser,
@@ -380,6 +384,51 @@ def test_assert_generated_interface_matches_rejects_extra_ports(tmp_path: Path):
         )
 
 
+def test_bind_benchmark_oracle_assets_repoints_design_context(tmp_path: Path):
+    test_sv = tmp_path / "Prob001_test.sv"
+    ref_sv = tmp_path / "Prob001_ref.sv"
+    test_sv.write_text("module tb; endmodule\n")
+    ref_sv.write_text("module RefModule; endmodule\n")
+
+    design_context_path = tmp_path / "design_context.json"
+    design_context_path.write_text(
+        """
+{
+  "design_context_hash": "abc123",
+  "nodes": {
+    "TopModule": {
+      "rtl_file": "rtl/TopModule.sv",
+      "testbench_file": "rtl/TopModule_tb.sv"
+    }
+  },
+  "top_module": "TopModule",
+  "execution_policy": {
+    "preset": "benchmark"
+  }
+}
+""".strip()
+        + "\n"
+    )
+
+    bound_node, bound_tb, bound_ref = _bind_benchmark_oracle_assets(
+        design_context_path=design_context_path,
+        target_module_name="TopModule",
+        test_sv=test_sv,
+        ref_sv=ref_sv,
+    )
+    assert bound_node == "TopModule"
+    assert bound_tb == str(test_sv.resolve())
+    assert bound_ref == str(ref_sv.resolve())
+
+    payload = json.loads(design_context_path.read_text())
+    node = payload["nodes"]["TopModule"]
+    assert node["testbench_file"] == str(test_sv.resolve())
+    assert node["oracle_ref_file"] == str(ref_sv.resolve())
+    assert payload["execution_policy"]["disable_tb_generation"] is True
+    assert payload["execution_policy"]["debug_rtl_only"] is True
+    assert payload["execution_policy"]["benchmark_use_public_testbench"] is True
+
+
 def test_build_parser_includes_orchestrated_flags():
     parser = build_parser()
     args = parser.parse_args([])
@@ -479,7 +528,7 @@ def test_run_from_args_legacy_flag_uses_legacy_mode(tmp_path: Path, monkeypatch)
     assert captured["legacy"] is True
 
 
-def test_run_mode_fail_fast_on_orchestrated_failure(tmp_path: Path, monkeypatch):
+def test_run_mode_continues_on_orchestrated_failure(tmp_path: Path, monkeypatch):
     prompt_path = tmp_path / "Prob001_prompt.txt"
     test_sv = tmp_path / "Prob001_test.sv"
     ref_sv = tmp_path / "Prob001_ref.sv"
@@ -504,23 +553,40 @@ def test_run_mode_fail_fast_on_orchestrated_failure(tmp_path: Path, monkeypatch)
         called["sample_test"] += 1
 
     monkeypatch.setattr("apps.cli.run_verilog_eval._run_sample_test", fake_sample_test)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_optional_failure_reports", lambda root, build_dir, summary_csv: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._write_internal_summary", lambda **kwargs: None)
 
-    with pytest.raises(RuntimeError, match="orchestrated failure"):
-        _run_mode(
-            root=tmp_path,
-            out_dir=tmp_path / "out",
-            cases=[case],
-            sample_cfg={"n": 1, "temperature": 0.0, "top_p": 0.01},
-            run_label="canonical",
-            iverilog_bin="/bin/true",
-            vvp_bin="/bin/true",
-            legacy_lightweight=False,
-            pipeline_timeout_s=5.0,
-        )
-    assert called["sample_test"] == 0
+    def fake_analyze(root, out_dir):  # noqa: ANN001
+        summary_txt = out_dir / "summary.txt"
+        summary_csv = out_dir / "summary.csv"
+        summary_txt.write_text("pass_rate = 0.0\n")
+        summary_csv.write_text("Prob001,0,1,0.0,runner_error\n")
+        return summary_txt, summary_csv
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_official_analyze", fake_analyze)
+
+    _run_mode(
+        root=tmp_path,
+        out_dir=tmp_path / "out",
+        cases=[case],
+        sample_cfg={"n": 1, "temperature": 0.0, "top_p": 0.01},
+        run_label="canonical",
+        iverilog_bin="/bin/true",
+        vvp_bin="/bin/true",
+        legacy_lightweight=False,
+        pipeline_timeout_s=5.0,
+    )
+    assert called["sample_test"] == 1
+    sample_dir = tmp_path / "out" / "Prob001"
+    assert (sample_dir / "Prob001_sample01.sv").exists()
+    assert (sample_dir / "Prob001_sample01-sv-generate.log").exists()
+    iv_log = sample_dir / "Prob001_sample01-sv-iv-test.log"
+    assert iv_log.exists()
+    assert "RUNNER_ERROR stage=generation" in iv_log.read_text()
+    assert "orchestrated failure" in iv_log.read_text()
 
 
-def test_run_mode_fail_fast_when_orchestrator_reports_failed_node(tmp_path: Path, monkeypatch):
+def test_run_mode_continues_when_orchestrator_reports_failed_node(tmp_path: Path, monkeypatch):
     prompt_path = tmp_path / "Prob001_prompt.txt"
     test_sv = tmp_path / "Prob001_test.sv"
     ref_sv = tmp_path / "Prob001_ref.sv"
@@ -544,20 +610,99 @@ def test_run_mode_fail_fast_when_orchestrator_reports_failed_node(tmp_path: Path
         raise RuntimeError("Pipeline did not complete successfully for all nodes: TopModule=FAILED")
 
     monkeypatch.setattr("apps.cli.run_verilog_eval._generate_one_sample_orchestrated", fake_generate)
+    called = {"sample_test": 0}
+
+    def fake_sample_test(**kwargs):  # noqa: ANN001
+        called["sample_test"] += 1
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_sample_test", fake_sample_test)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_optional_failure_reports", lambda root, build_dir, summary_csv: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._write_internal_summary", lambda **kwargs: None)
+
+    def fake_analyze(root, out_dir):  # noqa: ANN001
+        summary_txt = out_dir / "summary.txt"
+        summary_csv = out_dir / "summary.csv"
+        summary_txt.write_text("pass_rate = 0.0\n")
+        summary_csv.write_text("Prob001,0,1,0.0,pipeline_failed\n")
+        return summary_txt, summary_csv
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_official_analyze", fake_analyze)
+
+    _run_mode(
+        root=tmp_path,
+        out_dir=tmp_path / "out",
+        cases=[case],
+        sample_cfg={"n": 1, "temperature": 0.0, "top_p": 0.01},
+        run_label="canonical",
+        iverilog_bin="/bin/true",
+        vvp_bin="/bin/true",
+        legacy_lightweight=False,
+        pipeline_timeout_s=5.0,
+    )
+    assert called["sample_test"] == 1
+    iv_log = tmp_path / "out" / "Prob001" / "Prob001_sample01-sv-iv-test.log"
+    assert iv_log.exists()
+    assert "RUNNER_ERROR stage=generation" in iv_log.read_text()
+    assert "TopModule=FAILED" in iv_log.read_text()
+
+
+def test_run_mode_orchestrated_uses_public_tb_execution_policy(tmp_path: Path, monkeypatch):
+    prompt_path = tmp_path / "Prob001_prompt.txt"
+    test_sv = tmp_path / "Prob001_test.sv"
+    ref_sv = tmp_path / "Prob001_ref.sv"
+    prompt_path.write_text("prompt\n")
+    test_sv.write_text("module tb; endmodule\n")
+    ref_sv.write_text("module ref; endmodule\n")
+    case = PromptCase(problem_id="Prob001", prompt_path=prompt_path, test_sv=test_sv, ref_sv=ref_sv)
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval.connection_params_from_config", lambda: object())
+    monkeypatch.setattr("apps.cli.run_verilog_eval._ensure_broker_connection", lambda params: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._purge_benchmark_queues", lambda params: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval.start_workers", lambda params, stop_event: [])
+    monkeypatch.setattr("apps.cli.run_verilog_eval.stop_workers", lambda workers, stop_event: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._isolated_task_memory", lambda path: contextlib.nullcontext())
+
+    captured = {}
+
+    def fake_generate(**kwargs):  # noqa: ANN001
+        captured["execution_policy"] = kwargs["execution_policy"]
+        sample_dir = kwargs["sample_dir"]
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{kwargs['case'].problem_id}_sample{kwargs['sample_index']:02d}"
+        (sample_dir / f"{name}.sv").write_text("module TopModule; endmodule\n")
+        (sample_dir / f"{name}-sv-generate.log").write_text("status = SUCCESS\n")
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval._generate_one_sample_orchestrated", fake_generate)
     monkeypatch.setattr("apps.cli.run_verilog_eval._run_sample_test", lambda **kwargs: None)
 
-    with pytest.raises(RuntimeError, match="TopModule=FAILED"):
-        _run_mode(
-            root=tmp_path,
-            out_dir=tmp_path / "out",
-            cases=[case],
-            sample_cfg={"n": 1, "temperature": 0.0, "top_p": 0.01},
-            run_label="canonical",
-            iverilog_bin="/bin/true",
-            vvp_bin="/bin/true",
-            legacy_lightweight=False,
-            pipeline_timeout_s=5.0,
-        )
+    def fake_analyze(root, out_dir):  # noqa: ANN001
+        summary_txt = out_dir / "summary.txt"
+        summary_csv = out_dir / "summary.csv"
+        summary_txt.write_text("pass_rate = 1.0\n")
+        summary_csv.write_text("Prob001,1,1,1.0,.\n")
+        return summary_txt, summary_csv
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_official_analyze", fake_analyze)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_optional_failure_reports", lambda root, build_dir, summary_csv: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._write_internal_summary", lambda **kwargs: None)
+
+    _run_mode(
+        root=tmp_path,
+        out_dir=tmp_path / "out",
+        cases=[case],
+        sample_cfg={"n": 1, "temperature": 0.0, "top_p": 0.01},
+        run_label="canonical",
+        iverilog_bin="/bin/true",
+        vvp_bin="/bin/true",
+        legacy_lightweight=False,
+        pipeline_timeout_s=5.0,
+    )
+
+    policy = captured["execution_policy"]
+    assert policy["benchmark_mode"] is True
+    assert policy["benchmark_use_public_testbench"] is True
+    assert policy["disable_tb_generation"] is True
+    assert policy["debug_rtl_only"] is True
 
 
 def test_write_generate_log_uses_resp_tokens_key(tmp_path: Path):
@@ -574,3 +719,30 @@ def test_write_generate_log_uses_resp_tokens_key(tmp_path: Path):
     assert "prompt_tokens = 123" in text
     assert "resp_tokens = 45" in text
     assert "response_tokens" not in text
+
+
+def test_isolated_task_memory_falls_back_when_default_backup_is_not_removable(tmp_path: Path, monkeypatch):
+    task_memory_root = tmp_path / "task_memory"
+    default_backup = tmp_path / "task_memory.benchmark_backup"
+    task_memory_root.mkdir()
+    default_backup.mkdir()
+    (task_memory_root / "original.txt").write_text("keep\n", encoding="utf-8")
+    (default_backup / "foreign.txt").write_text("preserve\n", encoding="utf-8")
+
+    original_rmtree = run_verilog_eval.shutil.rmtree
+
+    def fake_rmtree(path, ignore_errors=False):  # noqa: ANN001
+        if Path(path) == default_backup and not ignore_errors:
+            raise PermissionError("simulated permission denied")
+        return original_rmtree(path, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(run_verilog_eval.shutil, "rmtree", fake_rmtree)
+
+    with _isolated_task_memory(task_memory_root):
+        assert task_memory_root.exists()
+        assert not (task_memory_root / "original.txt").exists()
+        (task_memory_root / "ephemeral.txt").write_text("temp\n", encoding="utf-8")
+
+    assert (task_memory_root / "original.txt").read_text(encoding="utf-8") == "keep\n"
+    assert not (task_memory_root / "ephemeral.txt").exists()
+    assert (default_backup / "foreign.txt").read_text(encoding="utf-8") == "preserve\n"

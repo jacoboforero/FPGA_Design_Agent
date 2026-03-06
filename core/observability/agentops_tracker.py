@@ -25,7 +25,11 @@ try:  # Optional dependency
 except Exception:  # noqa: BLE001
     agentops = None  # type: ignore
 
-ARTIFACTS_DIR = Path("artifacts/observability")
+ARTIFACTS_DIR = Path(
+    os.getenv("OBSERVABILITY_ARTIFACTS_DIR")
+    or os.getenv("AGENTOPS_ARTIFACTS_DIR")
+    or "artifacts/observability"
+)
 
 
 def _now_iso() -> str:

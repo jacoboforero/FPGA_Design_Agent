@@ -13,7 +13,8 @@ Prerequisites, runtime configuration, command semantics, artifact layout, and tr
 The benchmark runner executes this sequence:
 1. Load prompt cases from `benchmark.prompts_dir` (default `third_party/verilog-eval/dataset_spec-to-rtl`, IDs like `Prob079`).
 2. For each sample, run local benchmark planning (`spec_flow` + `planner.generate_from_specs`) as a decoupled planning phase.
-3. Execute the full orchestrated pipeline (queues/workers/orchestrator, including repair loop) to produce RTL.
+3. Execute the orchestrated pipeline (queues/workers/orchestrator, including repair loop) to produce RTL.
+   In benchmark mode, TB generation/edit stages are disabled; the run uses benchmark-provided testbench/reference assets for feedback.
 4. Compile and simulate each generated sample with `iverilog` + `vvp` against official test/reference SV files.
 5. Run official VerilogEval analyzer (`third_party/verilog-eval/scripts/sv-iv-analyze`) to produce `summary.txt` and `summary.csv`.
 6. Write local `aggregate.json` as a machine-friendly rollup of official artifacts.
@@ -31,7 +32,7 @@ Expected files:
 - `third_party/verilog-eval/dataset_spec-to-rtl/`
 
 ### 2) LLM credentials
-Benchmark generation uses orchestrated agent workers (implementation/testbench/debug/reflection as needed):
+Benchmark generation uses orchestrated agent workers (implementation/debug/reflection as needed):
 - if `llm.provider: openai`, set `OPENAI_API_KEY`
 - if `llm.provider: groq`, set `GROQ_API_KEY`
 
@@ -39,7 +40,7 @@ Benchmark generation uses orchestrated agent workers (implementation/testbench/d
 RabbitMQ must be reachable for orchestrated benchmark execution (same requirement as full pipeline runs).
 
 ### 4) Toolchain
-`verilator` must be available for orchestrated lint/tb_lint stages.
+`verilator` must be available for orchestrated RTL lint stages.
 
 ### 5) Simulation tools
 `iverilog` and `vvp` must be available either on PATH or explicitly configured:
@@ -97,7 +98,7 @@ benchmark:
 - `benchmark.oracle_manifest`: optional JSON mapping problem IDs to explicit test/ref paths.
 - `benchmark.canonical.*`: sample count and decode settings used in the canonical run.
 - `benchmark.sampled.*`: sample count and decode settings used when `--sampled` is passed.
-- `tools.verilator_path`: explicit path for orchestrated benchmark lint stages.
+- `tools.verilator_path`: explicit path for orchestrated benchmark RTL lint stages.
 - `tools.iverilog_path` and `tools.vvp_path`: explicit tool paths if PATH lookup is not enough.
 - `llm.provider` and provider credentials: required for sample generation.
 - `llm.default_model`: model used by benchmark agent workers.
@@ -205,7 +206,7 @@ How to read results:
 
 ## Performance and Cost Expectations
 - Total sample executions = `number_of_cases * n` where `n` is from selected sample config.
-- Each sample executes the full orchestrated pipeline (and can trigger repair-loop retries), so cost/runtime are materially higher than the legacy lightweight path.
+- Each sample executes the orchestrated pipeline (and can trigger repair-loop retries), so cost/runtime are materially higher than the legacy lightweight path.
 - Canonical (`n=1`) is best for quick correctness checks.
 - Sampled (`n=20` by default) is much slower and more expensive because it multiplies LLM calls and compile/sim runs.
 

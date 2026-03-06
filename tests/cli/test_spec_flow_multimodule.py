@@ -124,6 +124,30 @@ def test_apply_benchmark_defaults_infers_clocking_only_with_explicit_clock_signa
     assert updated["L2"]["clocking"][0]["clock_name"] == "clk"
 
 
+def test_apply_benchmark_defaults_preserves_full_role_summary_text():
+    checklist = {
+        "module_name": "TopModule",
+        "L1": {"role_summary": ""},
+        "L2": {"signals": [], "clocking": []},
+    }
+    spec_text = "\n".join(
+        [
+            "Module: TopModule",
+            "I would like you to implement a module named TopModule.",
+            "This intentionally long benchmark prompt line should not be truncated.",
+            "Another line with additional details about behavior and corner cases.",
+            "Include full state-machine transitions, arithmetic corner cases, and all timing assumptions.",
+            "Do not drop any text from this prompt because later lines define required behavior.",
+            "- input clk",
+            "- output out",
+        ]
+    )
+    expected = " ".join(line.strip() for line in spec_text.splitlines() if line.strip())
+    updated = spec_flow._apply_benchmark_defaults(checklist, spec_text)
+    assert updated["L1"]["role_summary"] == expected
+    assert len(updated["L1"]["role_summary"]) > 280
+
+
 def test_complete_checklist_benchmark_allows_clockless_interface():
     checklist = spec_flow.build_empty_checklist()
     updated, _ = spec_flow._complete_checklist(

@@ -18,6 +18,8 @@ from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE, reso
 
 _SIM_FAIL_RE = re.compile(r"\b(FAIL|FAILURE|ERROR|FATAL|ASSERT|ASSERTION)\b", re.IGNORECASE)
 _SIM_PASS_RE = re.compile(r"\b(PASS|PASSED)\b", re.IGNORECASE)
+_SIM_TIMEOUT_RE = re.compile(r"\bTIMEOUT\b", re.IGNORECASE)
+_SIM_MISMATCH_RE = re.compile(r"\bMismatches:\s*(\d+)\b", re.IGNORECASE)
 
 
 class AcceptanceWorker(threading.Thread):
@@ -274,10 +276,26 @@ def _sim_passed(node_id: str, attempt: int | None) -> bool:
     text = path.read_text()
     if _SIM_FAIL_RE.search(text):
         return False
+    if _SIM_TIMEOUT_RE.search(text):
+        return False
+    mismatch_count = _extract_mismatch_count(text)
+    if mismatch_count is not None and mismatch_count > 0:
+        return False
     if _SIM_PASS_RE.search(text) or "Simulation passed." in text:
+        return True
+    if mismatch_count == 0:
         return True
     # If sim ran without explicit PASS markers, treat it as passed unless a failure marker was seen.
     return True
+
+
+def _extract_mismatch_count(text: str | None) -> int | None:
+    if not text:
+        return None
+    match = _SIM_MISMATCH_RE.search(text)
+    if not match:
+        return None
+    return int(match.group(1))
 
 
 def _load_metric_value(metric_id: str, source: str | None, node_id: str, attempt: int | None):

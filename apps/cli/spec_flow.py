@@ -1692,7 +1692,7 @@ def _apply_benchmark_defaults(checklist: Dict[str, Any], spec_text: str) -> Dict
     role_summary = str(l1.get("role_summary", "")).strip()
     if not role_summary:
         compact = " ".join(line.strip() for line in spec_text.splitlines() if line.strip())
-        l1["role_summary"] = compact[:280] if compact else f"Implements module {module_name}."
+        l1["role_summary"] = compact if compact else f"Implements module {module_name}."
     key_rules = _clean_list(l1.get("key_rules", []))
     if not key_rules:
         l1["key_rules"] = ["Implement behavior exactly as described in the prompt."]

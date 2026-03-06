@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import threading
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 import pika
@@ -111,6 +112,7 @@ class SimulationWorker(threading.Thread):
         vvp = runtime_cfg.tools.vvp_path or shutil.which("vvp")
         rtl_path = task.context.get("rtl_path")
         tb_path = task.context.get("tb_path")
+        oracle_ref_path = task.context.get("oracle_ref_path")
         node_id = task.context.get("node_id")
         attempt = _parse_attempt(task.context.get("attempt"))
         if not iverilog or not vvp:
@@ -132,88 +134,134 @@ class SimulationWorker(threading.Thread):
         missing_rtl = [path for path in rtl_paths if not Path(path).exists()]
         if missing_rtl:
             raise TaskInputError(f"RTL missing: {missing_rtl}")
+        oracle_ref = None
+        if oracle_ref_path:
+            oracle_ref = Path(str(oracle_ref_path))
+            if not oracle_ref.exists():
+                raise TaskInputError(f"Oracle reference RTL missing: {oracle_ref}")
         try:
             sources = list(dict.fromkeys(rtl_paths))
             if tb_path:
                 sources.append(tb_path)
-            cmd = [iverilog, "-g2012", "-g2005-sv", "-o", "/tmp/sim.out", *sources]
-            log_lines = []
-            log_lines.append("[build]")
-            log_lines.append(f"cmd: {' '.join(cmd)}")
-            build = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if build.returncode != 0:
-                output = "\n".join(part for part in [build.stdout, build.stderr] if part).strip()
-                if output:
-                    log_lines.append(output)
-                return ResultMessage(
-                    task_id=task.task_id,
-                    correlation_id=task.correlation_id,
-                    status=TaskStatus.FAILURE,
-                    artifacts_path=None,
-                    log_output="\n".join(log_lines),
+            if oracle_ref is not None:
+                sources.append(str(oracle_ref))
+            sources = list(dict.fromkeys(sources))
+            stage_dir = Path("artifacts/task_memory") / str(node_id or "node") / _stage_dir("sim", attempt)
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix=f"sim_{str(node_id or 'node')}_") as tmpdir:
+                workdir = Path(tmpdir)
+                sim_bin = workdir / "sim.out"
+                cmd = [iverilog, "-g2012", "-g2005-sv", "-o", str(sim_bin), *sources]
+                log_lines = []
+                log_lines.append("[build]")
+                log_lines.append(f"cmd: {' '.join(cmd)}")
+                log_lines.append(f"cwd: {workdir}")
+                build = _run_subprocess(cmd, timeout=30, cwd=workdir)
+                if build.returncode != 0:
+                    output = "\n".join(part for part in [build.stdout, build.stderr] if part).strip()
+                    if output:
+                        log_lines.append(output)
+                    return ResultMessage(
+                        task_id=task.task_id,
+                        correlation_id=task.correlation_id,
+                        status=TaskStatus.FAILURE,
+                        artifacts_path=None,
+                        log_output="\n".join(log_lines),
+                    )
+                run_cmd = [vvp, str(sim_bin)]
+                run = _run_subprocess(run_cmd, timeout=30, cwd=workdir)
+                run_output = "\n".join(part for part in [run.stdout, run.stderr] if part).strip()
+                ctx = task.context if isinstance(task.context, dict) else {}
+                execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
+                verification_scope = str(ctx.get("verification_scope", "")).strip()
+                benchmark_mode = bool(execution_policy.get("benchmark_mode")) or verification_scope == "oracle_compare"
+                has_failure_marker = _has_failure_marker(run_output)
+                benchmark_failure_reason = _benchmark_failure_reason(run_output) if benchmark_mode else None
+                if run.returncode != 0 or has_failure_marker or benchmark_failure_reason:
+                    log_lines.append("[run]")
+                    log_lines.append(f"cmd: {' '.join(run_cmd)}")
+                    log_lines.append(f"cwd: {workdir}")
+                    if run_output:
+                        log_lines.append(run_output)
+                    cycle, time_val = _extract_failure_info(run_output)
+                    log_lines.append("[analysis]")
+                    if run.returncode != 0:
+                        log_lines.append(f"Simulation failed (exit code {run.returncode}).")
+                    elif benchmark_failure_reason:
+                        log_lines.append(
+                            f"Benchmark oracle comparison reported failure ({benchmark_failure_reason}); treating as failure."
+                        )
+                    else:
+                        log_lines.append("Simulation reported failure marker in output; treating as failure.")
+                    if cycle is not None or time_val is not None:
+                        cycle_msg = str(cycle) if cycle is not None else "unknown"
+                        time_msg = str(time_val) if time_val is not None else "unknown"
+                        log_lines.append(f"Detected failure cycle={cycle_msg} time={time_msg}.")
+                    else:
+                        log_lines.append("No failure cycle/time found in log output.")
+
+                    artifacts_path = None
+                    rerun_log = _maybe_rerun_with_dump(
+                        vvp=vvp,
+                        sim_bin=sim_bin,
+                        node_id=node_id,
+                        attempt=attempt,
+                        cycle=cycle,
+                        log_lines=log_lines,
+                        workdir=workdir,
+                        stage_dir=stage_dir,
+                    )
+                    if rerun_log.get("waveform_path"):
+                        artifacts_path = rerun_log["waveform_path"]
+
+                    # Preserve plain wave.vcd produced by benches so debugging can inspect it.
+                    wave_vcd = workdir / "wave.vcd"
+                    if wave_vcd.exists():
+                        default_wave = stage_dir / "wave.vcd"
+                        try:
+                            shutil.copy2(wave_vcd, default_wave)
+                            if artifacts_path is None:
+                                artifacts_path = str(default_wave)
+                        except Exception:
+                            pass
+
+                    return ResultMessage(
+                        task_id=task.task_id,
+                        correlation_id=task.correlation_id,
+                        status=TaskStatus.FAILURE,
+                        artifacts_path=artifacts_path,
+                        log_output="\n".join(log_lines),
+                    )
+                emit_runtime_event(
+                    runtime="worker_sim",
+                    event_type="task_completed",
+                    payload={"task_id": str(task.task_id)},
                 )
-            run_cmd = [vvp, "/tmp/sim.out"]
-            run = subprocess.run(run_cmd, capture_output=True, text=True, timeout=30)
-            run_output = "\n".join(part for part in [run.stdout, run.stderr] if part).strip()
-            ctx = task.context if isinstance(task.context, dict) else {}
-            execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
-            verification_scope = str(ctx.get("verification_scope", "")).strip()
-            benchmark_mode = bool(execution_policy.get("benchmark_mode")) or verification_scope == "oracle_compare"
-            has_failure_marker = False if benchmark_mode else _has_failure_marker(run_output)
-            if run.returncode != 0 or has_failure_marker:
                 log_lines.append("[run]")
                 log_lines.append(f"cmd: {' '.join(run_cmd)}")
+                log_lines.append(f"cwd: {workdir}")
                 if run_output:
                     log_lines.append(run_output)
-                cycle, time_val = _extract_failure_info(run_output)
-                log_lines.append("[analysis]")
-                if run.returncode != 0:
-                    log_lines.append(f"Simulation failed (exit code {run.returncode}).")
                 else:
-                    log_lines.append("Simulation reported failure marker in output; treating as failure.")
-                if cycle is not None or time_val is not None:
-                    cycle_msg = str(cycle) if cycle is not None else "unknown"
-                    time_msg = str(time_val) if time_val is not None else "unknown"
-                    log_lines.append(f"Detected failure cycle={cycle_msg} time={time_msg}.")
-                else:
-                    log_lines.append("No failure cycle/time found in log output.")
+                    log_lines.append("Simulation passed.")
 
                 artifacts_path = None
-                rerun_log = _maybe_rerun_with_dump(
-                    vvp=vvp,
-                    node_id=node_id,
-                    attempt=attempt,
-                    cycle=cycle,
-                    log_lines=log_lines,
-                )
-                if rerun_log.get("waveform_path"):
-                    artifacts_path = rerun_log["waveform_path"]
+                wave_vcd = workdir / "wave.vcd"
+                if wave_vcd.exists():
+                    default_wave = stage_dir / "wave.vcd"
+                    try:
+                        shutil.copy2(wave_vcd, default_wave)
+                        artifacts_path = str(default_wave)
+                    except Exception:
+                        artifacts_path = None
 
                 return ResultMessage(
                     task_id=task.task_id,
                     correlation_id=task.correlation_id,
-                    status=TaskStatus.FAILURE,
+                    status=TaskStatus.SUCCESS,
                     artifacts_path=artifacts_path,
                     log_output="\n".join(log_lines),
                 )
-            emit_runtime_event(
-                runtime="worker_sim",
-                event_type="task_completed",
-                payload={"task_id": str(task.task_id)},
-            )
-            log_lines.append("[run]")
-            log_lines.append(f"cmd: {' '.join(run_cmd)}")
-            if run_output:
-                log_lines.append(run_output)
-            else:
-                log_lines.append("Simulation passed.")
-            return ResultMessage(
-                task_id=task.task_id,
-                correlation_id=task.correlation_id,
-                status=TaskStatus.SUCCESS,
-                artifacts_path=None,
-                log_output="\n".join(log_lines),
-            )
         except subprocess.TimeoutExpired as exc:
             return ResultMessage(
                 task_id=task.task_id,
@@ -249,6 +297,8 @@ class SimulationWorker(threading.Thread):
 _FAIL_CYCLE_RE = re.compile(r"\bcycle\b\s*=?\s*(\d+)", re.IGNORECASE)
 _FAIL_TIME_RE = re.compile(r"\btime\b\s*=?\s*(\d+)", re.IGNORECASE)
 _FAIL_MARKER_RE = re.compile(r"\b(FAIL|FAILURE|ERROR|FATAL|ASSERT|ASSERTION)\b", re.IGNORECASE)
+_TIMEOUT_RE = re.compile(r"\bTIMEOUT\b", re.IGNORECASE)
+_MISMATCH_RE = re.compile(r"\bMismatches:\s*(\d+)\b", re.IGNORECASE)
 
 
 def _extract_failure_info(text: str | None) -> tuple[int | None, int | None]:
@@ -280,13 +330,32 @@ def _has_failure_marker(text: str | None) -> bool:
     return _FAIL_MARKER_RE.search(text) is not None
 
 
+def _benchmark_failure_reason(text: str | None) -> str | None:
+    if not text:
+        return None
+    reasons: list[str] = []
+    if _TIMEOUT_RE.search(text):
+        reasons.append("timeout reported by benchmark harness")
+    mismatch_match = _MISMATCH_RE.search(text)
+    if mismatch_match:
+        mismatch_count = int(mismatch_match.group(1))
+        if mismatch_count > 0:
+            reasons.append(f"nonzero mismatches={mismatch_count}")
+    if not reasons:
+        return None
+    return "; ".join(reasons)
+
+
 def _maybe_rerun_with_dump(
     *,
     vvp: str,
+    sim_bin: Path,
     node_id: str | None,
     attempt: int | None,
     cycle: int | None,
     log_lines: list[str],
+    workdir: Path,
+    stage_dir: Path,
 ) -> dict:
     if not node_id:
         log_lines.append("[rerun]")
@@ -302,13 +371,13 @@ def _maybe_rerun_with_dump(
     after = int(sim_cfg.fail_window_after)
     start_cycle = max(0, cycle - before)
     end_cycle = cycle + after
-    waveform_path = Path("artifacts/task_memory") / node_id / _stage_dir("sim", attempt) / "waveform.vcd"
+    waveform_path = stage_dir / "waveform.vcd"
     waveform_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Many benches gate dumping with $dumpoff/$dumpon and (incorrectly) treat DUMP_START=0 as "disabled".
     # If we want to start at cycle 0, omit DUMP_START/DUMP_END entirely so the bench dumps from time 0.
     use_window = start_cycle > 0
-    rerun_cmd = [vvp, "/tmp/sim.out", "+DUMP", f"+DUMP_FILE={waveform_path}"]
+    rerun_cmd = [vvp, str(sim_bin), "+DUMP", f"+DUMP_FILE={waveform_path}"]
     if use_window:
         rerun_cmd.extend([f"+DUMP_START={start_cycle}", f"+DUMP_END={end_cycle}"])
     log_lines.append("[rerun]")
@@ -317,8 +386,9 @@ def _maybe_rerun_with_dump(
     else:
         log_lines.append("Re-running for waveform capture from cycle 0 (window omitted; DUMP_START=0 can break some benches).")
     log_lines.append(f"cmd: {' '.join(rerun_cmd)}")
+    log_lines.append(f"cwd: {workdir}")
     try:
-        rerun = subprocess.run(rerun_cmd, capture_output=True, text=True, timeout=30)
+        rerun = _run_subprocess(rerun_cmd, timeout=30, cwd=workdir)
     except Exception as exc:  # noqa: BLE001
         log_lines.append(f"Waveform rerun failed: {exc}")
         return {}
@@ -346,3 +416,15 @@ def _stage_dir(kind: str, attempt: int | None) -> str:
     if attempt is None:
         return kind
     return f"{kind}_attempt{attempt}"
+
+
+def _run_subprocess(cmd: list[str], *, timeout: float, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    kwargs = {"capture_output": True, "text": True, "timeout": timeout}
+    if cwd is not None:
+        kwargs["cwd"] = str(cwd)
+    try:
+        return subprocess.run(cmd, **kwargs)
+    except TypeError:
+        # Test doubles in unit tests may not accept cwd kwarg.
+        kwargs.pop("cwd", None)
+        return subprocess.run(cmd, **kwargs)

@@ -31,6 +31,14 @@ class DemoContextBuilder:
             tb_path = rtl_path.with_name(f"{node_id}_tb.sv")
         else:
             tb_path = self.rtl_root / tb_path
+        oracle_ref_path = node.get("oracle_ref_file")
+        if oracle_ref_path:
+            oracle_ref_path = Path(str(oracle_ref_path))
+            if not oracle_ref_path.is_absolute():
+                oracle_ref_path = self.rtl_root / oracle_ref_path
+            oracle_ref_text = str(oracle_ref_path)
+        else:
+            oracle_ref_text = None
         connections = node.get("connections")
         if connections is None:
             connections = self._context.get("connections", [])
@@ -41,6 +49,7 @@ class DemoContextBuilder:
             "rtl_path": str(rtl_path),
             "rtl_paths": rtl_paths,
             "tb_path": str(tb_path),
+            "oracle_ref_path": oracle_ref_text,
             "design_context_hash": self._context["design_context_hash"],
             "coverage_goals": node.get("coverage_goals", {}),
             "clocking": node.get("clocking", {}),

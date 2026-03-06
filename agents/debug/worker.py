@@ -30,6 +30,9 @@ from core.runtime.config import get_runtime_config
 
 _VERILATOR_QUIET_UNSUPPORTED_RE = re.compile(r"invalid option:\s*--quiet", re.IGNORECASE)
 _SIM_FAIL_MARKER_RE = re.compile(r"\b(FAIL|FAILURE|ERROR|FATAL|ASSERT|ASSERTION)\b", re.IGNORECASE)
+_ALWAYS_FF_RE = re.compile(r"\balways_ff\b")
+_ALWAYS_COMB_RE = re.compile(r"\balways_comb\b")
+_LOGIC_RE = re.compile(r"\blogic\b")
 
 
 class DebugWorker(AgentWorkerBase):
@@ -62,6 +65,8 @@ class DebugWorker(AgentWorkerBase):
 
         sim_attempt = _parse_attempt(ctx.get("attempt"))
         debug_reason = str(ctx.get("debug_reason", "")).strip().lower() or "sim"
+        execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
+        rtl_only_debug = bool(execution_policy.get("debug_rtl_only", False))
         task_memory_root = Path("artifacts/task_memory") / node_id
 
         rtl_text = rtl_path.read_text() if rtl_path.exists() else ""
@@ -110,6 +115,11 @@ class DebugWorker(AgentWorkerBase):
             "- If the context includes child modules and connection wiring, preserve the integration structure; only fix wiring or glue logic as needed.\n"
             "- Your patch is accepted only if local deterministic validation passes (tb_lint for TB changes; lint for RTL changes; sim check for smoke-child sim failures).\n"
         )
+        if rtl_only_debug:
+            system += (
+                "- RTL-only debug mode is active: do not modify testbench files.\n"
+                "  touched_files MUST include only 'rtl' and tb_lines MUST be null.\n"
+            )
         user = (
             f"Node: {node_id}\n"
             f"Attempt: {sim_attempt if sim_attempt is not None else 'unknown'}\n"
@@ -202,6 +212,7 @@ class DebugWorker(AgentWorkerBase):
                         attempt=sim_attempt,
                         rtl_path=rtl_path,
                         tb_path=tb_path,
+                        allow_tb_edits=not rtl_only_debug,
                         payload=parsed,
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -363,11 +374,11 @@ def _sanitize_verilog(source: str, *, kind: str) -> str:
         lines.append(line)
     text = "\n".join(lines)
     if kind == "rtl":
-        text = text.replace("always_ff", "always")
-        text = text.replace("always_comb", "always @*")
+        text = _ALWAYS_FF_RE.sub("always", text)
+        text = _ALWAYS_COMB_RE.sub("always @*", text)
         return text
     if kind == "tb":
-        text = text.replace("logic", "reg")
+        text = _LOGIC_RE.sub("reg", text)
         text = re.sub(r"\$stop\s*(\([^;]*\))?\s*;", "$finish;", text)
         # Fix common LLM mistake: $value$plusargs("DUMP") is invalid for Icarus.
         text = re.sub(r"\$value\$plusargs\s*\(\s*(['\"])DUMP\1\s*\)", r"$test$plusargs(\1DUMP\1)", text)
@@ -385,6 +396,7 @@ def _apply_debug_patch(
     attempt: int | None,
     rtl_path: Path,
     tb_path: Path,
+    allow_tb_edits: bool,
     payload: dict,
 ) -> dict:
     touched = payload.get("touched_files") or []
@@ -398,6 +410,8 @@ def _apply_debug_patch(
         if val in ("rtl", "tb"):
             touched_norm.append(val)
     touched_norm = sorted(set(touched_norm))
+    if not allow_tb_edits:
+        touched_norm = [entry for entry in touched_norm if entry != "tb"]
 
     wrote_rtl = False
     wrote_tb = False

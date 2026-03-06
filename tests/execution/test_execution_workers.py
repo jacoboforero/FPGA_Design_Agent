@@ -102,6 +102,42 @@ def test_implementation_worker_success_sanitizes(tmp_path):
     assert "output reg" in contents
 
 
+def test_implementation_worker_sanitize_preserves_identifier_names(tmp_path):
+    worker = ImplementationWorker(connection_params=None, stop_event=None)
+    worker.gateway = FakeGateway(
+        FakeResponse(
+            content=(
+                "module demo(\n"
+                "  input logic clk,\n"
+                "  output logic out_always_comb,\n"
+                "  output logic out_always_ff\n"
+                ");\n"
+                "always_comb begin\n"
+                "  out_always_comb = clk;\n"
+                "end\n"
+                "always_ff @(posedge clk) begin\n"
+                "  out_always_ff <= clk;\n"
+                "end\n"
+                "endmodule\n"
+            )
+        )
+    )
+    rtl_path = tmp_path / "demo.sv"
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.IMPLEMENTATION,
+        context={"node_id": "demo", "rtl_path": str(rtl_path), "interface": {"signals": _iface_signals()}},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    contents = rtl_path.read_text()
+    assert "out_always_comb" in contents
+    assert "out_always_ff" in contents
+    assert "out_always @*" not in contents
+    assert "always @* begin" in contents
+    assert "always @(posedge clk)" in contents
+
+
 def test_implementation_worker_rejects_integration_without_connections(tmp_path):
     worker = ImplementationWorker(connection_params=None, stop_event=None)
     worker.gateway = FakeGateway(FakeResponse(content="module demo; endmodule\n"))
@@ -1099,6 +1135,111 @@ def test_debug_worker_noop_patch_fails(sandbox, monkeypatch):
         entity_type=EntityType.REASONING,
         task_type=AgentType.DEBUG,
         context={"node_id": "demo", "rtl_path": str(rtl), "tb_path": str(tb), "attempt": 1},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "no patch" in result.log_output.lower()
+
+
+def test_debug_worker_rtl_patch_preserves_identifier_names(sandbox, monkeypatch):
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.debug.max_attempts = 1
+    set_runtime_config(cfg)
+    monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
+
+    def fake_run(cmd, timeout_s):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("agents.debug.worker._run_subprocess", fake_run)
+
+    worker = DebugWorker(connection_params=None, stop_event=None)
+    worker.gateway = FakeGateway(
+        FakeResponse(
+            content=json.dumps(
+                {
+                    "summary": "fix rtl",
+                    "touched_files": ["rtl"],
+                    "rtl_lines": [
+                        "module demo(",
+                        "  input clk,",
+                        "  output out_always_comb,",
+                        "  output out_always_ff",
+                        ");",
+                        "always_comb begin",
+                        "  out_always_comb = clk;",
+                        "end",
+                        "always_ff @(posedge clk) begin",
+                        "  out_always_ff <= clk;",
+                        "end",
+                        "endmodule",
+                    ],
+                    "tb_lines": None,
+                    "risks": [],
+                    "next_steps": ["retry"],
+                }
+            )
+        )
+    )
+    rtl = Path("demo.sv")
+    tb = Path("demo_tb.sv")
+    rtl.write_text("module demo(input clk, output out); assign out = clk; endmodule\n")
+    tb.write_text("module tb_demo; initial $finish; endmodule\n")
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.DEBUG,
+        context={"node_id": "demo", "rtl_path": str(rtl), "tb_path": str(tb), "attempt": 1, "debug_reason": "rtl_lint"},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    contents = rtl.read_text()
+    assert "out_always_comb" in contents
+    assert "out_always_ff" in contents
+    assert "out_always @*" not in contents
+    assert "always @* begin" in contents
+    assert "always @(posedge clk)" in contents
+
+
+def test_debug_worker_rtl_only_mode_rejects_tb_only_patch(sandbox):
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.debug.max_attempts = 1
+    set_runtime_config(cfg)
+
+    worker = DebugWorker(connection_params=None, stop_event=None)
+    worker.gateway = FakeGateway(
+        FakeResponse(
+            content=json.dumps(
+                {
+                    "summary": "tb only",
+                    "touched_files": ["tb"],
+                    "rtl_lines": None,
+                    "tb_lines": [
+                        "module tb_demo;",
+                        "  initial begin",
+                        '    $display(\"new\");',
+                        "    $finish;",
+                        "  end",
+                        "endmodule",
+                    ],
+                    "risks": [],
+                    "next_steps": ["retry"],
+                }
+            )
+        )
+    )
+    rtl = Path("demo.sv")
+    tb = Path("demo_tb.sv")
+    rtl.write_text("module demo; endmodule\n")
+    tb.write_text('module tb_demo; initial begin $display("old"); $finish; end endmodule\n')
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.DEBUG,
+        context={
+            "node_id": "demo",
+            "rtl_path": str(rtl),
+            "tb_path": str(tb),
+            "attempt": 1,
+            "execution_policy": {"debug_rtl_only": True},
+        },
     )
     result = worker.handle_task(task)
     assert result.status is TaskStatus.FAILURE
