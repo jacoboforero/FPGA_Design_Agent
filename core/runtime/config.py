@@ -64,11 +64,17 @@ class LlmRateControlConfig(BaseModel):
     backoff_on_429: bool = True
 
 
+class LlmAgentOverrideConfig(BaseModel):
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+
 class LlmConfig(BaseModel):
     enabled: bool = True
     provider: str = "openai"
     default_model: str = "gpt-4.1-mini"
     request_timeout_s: float = 120.0
+    agent_overrides: Dict[str, LlmAgentOverrideConfig] = Field(default_factory=dict)
     spec_helper_model: Optional[str] = None
     narrative_model: Optional[str] = None
     narrative_fallback_model: str = "gpt-4.1-mini"
@@ -266,6 +272,7 @@ __all__ = [
     "WorkersConfig",
     "WorkerPoolSizesConfig",
     "LlmConfig",
+    "LlmAgentOverrideConfig",
     "LlmRateControlConfig",
     "ToolConfig",
     "LintConfig",

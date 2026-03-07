@@ -31,7 +31,7 @@ class ImplementationWorker(AgentWorkerBase):
 
     def __init__(self, connection_params, stop_event):
         super().__init__(connection_params, stop_event)
-        self.gateway = init_llm_gateway()
+        self.gateway = init_llm_gateway("implementation")
 
     def _width_expr(self, sig) -> str:
         raw = sig.get("width", 1)

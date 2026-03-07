@@ -58,6 +58,7 @@ llm:
   provider: openai
   default_model: gpt-4.1-mini
   request_timeout_s: 120.0
+  agent_overrides: {}
   narrative_fallback_model: gpt-4.1-mini
   json_mode: true
   max_tokens: 10000

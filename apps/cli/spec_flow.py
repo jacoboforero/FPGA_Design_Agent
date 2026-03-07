@@ -1816,7 +1816,7 @@ def _benchmark_clocking_optional(checklist: Dict[str, Any]) -> bool:
 
 def _require_gateway() -> object:
     model_override = get_runtime_config().llm.spec_helper_model
-    gateway = init_llm_gateway(model_override=model_override)
+    gateway = init_llm_gateway("spec_helper", model_override=model_override)
     if not gateway:
         raise RuntimeError("Spec helper requires LLMs. Set USE_LLM=1 and provider keys.")
     return gateway
