@@ -10,6 +10,7 @@ from agents.debug.worker import DebugWorker
 from agents.implementation.worker import ImplementationWorker
 from agents.reflection.worker import ReflectionWorker
 from agents.testbench.worker import TestbenchWorker
+from core.tools.registry import LintConfig, SimulationConfig, ToolRegistry
 from core.runtime.config import get_runtime_config, set_runtime_config
 from core.runtime.retry import TaskInputError
 from core.schemas.contracts import AgentType, EntityType, TaskMessage, TaskStatus, WorkerType
@@ -27,6 +28,19 @@ def _iface_signals() -> list[dict]:
         {"name": "rst_n", "direction": "INPUT", "width": 1, "semantics": "reset"},
         {"name": "out", "direction": "OUTPUT", "width": 1, "semantics": "output"},
     ]
+
+
+def _empty_registry() -> ToolRegistry:
+    return ToolRegistry(
+        tools={},
+        simulation=SimulationConfig(
+            artifact_base="artifacts/task_memory",
+            waveform_filename="waveform.vcd",
+            fail_window_before=20,
+            fail_window_after=5,
+        ),
+        lint=LintConfig(strict_warnings=False),
+    )
 
 
 @pytest.fixture()
@@ -356,7 +370,7 @@ def test_testbench_worker_rewrites_invalid_dump_plusargs(tmp_path):
 
 
 def test_lint_worker_missing_verilator(tmp_path):
-    worker = LintWorker(connection_params=None, stop_event=None)
+    worker = LintWorker(connection_params=None, stop_event=None, registry=_empty_registry())
     worker.verilator = None
     rtl_path = tmp_path / "demo.sv"
     rtl_path.write_text("module demo; endmodule\n")
@@ -716,7 +730,7 @@ def test_acceptance_worker_relaxes_coverage_when_sim_passes(sandbox):
 
 
 def test_sim_worker_missing_tools(tmp_path, monkeypatch):
-    worker = SimulationWorker(connection_params=None, stop_event=None)
+    worker = SimulationWorker(connection_params=None, stop_event=None, registry=_empty_registry())
     monkeypatch.setattr("workers.sim.worker.shutil.which", lambda name: None)
     rtl_path = tmp_path / "demo.sv"
     rtl_path.write_text("module demo; endmodule\n")

@@ -9,6 +9,7 @@ import subprocess
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pika
 from core.schemas.contracts import ResultMessage, TaskMessage, TaskStatus
@@ -16,6 +17,13 @@ from core.observability.emitter import emit_runtime_event
 from core.runtime.retry import RetryableError, TaskInputError, get_max_retries, get_retry_count, next_retry_headers
 from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE, resolve_task_queue
 from core.runtime.config import get_runtime_config
+
+try:
+    from core.tools.registry import ToolRegistry, ToolSpec, get_registry
+except Exception:  # noqa: BLE001
+    ToolRegistry = Any  # type: ignore[misc,assignment]
+    ToolSpec = Any  # type: ignore[misc,assignment]
+    get_registry = None  # type: ignore[assignment]
 
 
 _EDGE_ALWAYS_RE = re.compile(r"always\s*@\s*\(([^)]*(?:posedge|negedge)[^)]*)\)", re.IGNORECASE | re.DOTALL)
@@ -93,15 +101,13 @@ def _combine_process_output(completed: subprocess.CompletedProcess[str]) -> str:
 
 def _run_verilator_lint(
     *,
-    verilator: str,
-    rtl_args: list[str],
+    command: list[str],
     timeout_s: float,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
-    primary_cmd = [verilator, "--lint-only", "--quiet", "--sv", *rtl_args]
-    completed = subprocess.run(primary_cmd, capture_output=True, text=True, timeout=timeout_s)
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout_s)
     output = _combine_process_output(completed)
-    if completed.returncode != 0 and _VERILATOR_QUIET_UNSUPPORTED_RE.search(output):
-        fallback_cmd = [verilator, "--lint-only", "--sv", *rtl_args]
+    if completed.returncode != 0 and _VERILATOR_QUIET_UNSUPPORTED_RE.search(output) and "--quiet" in command:
+        fallback_cmd = [arg for arg in command if arg != "--quiet"]
         completed = subprocess.run(fallback_cmd, capture_output=True, text=True, timeout=timeout_s)
         fallback_output = _combine_process_output(completed)
         note = "Verilator '--quiet' unsupported; retried without it."
@@ -109,15 +115,59 @@ def _run_verilator_lint(
     return completed, output
 
 
+def _safe_get_registry() -> ToolRegistry | None:
+    if not callable(get_registry):
+        return None
+    try:
+        return get_registry()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _registry_tool(registry: ToolRegistry | None, tool_name: str) -> ToolSpec | None:
+    if registry is None:
+        return None
+    try:
+        return registry.get(tool_name)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _build_verilator_command(
+    *,
+    verilator_path: str,
+    rtl_args: list[str],
+    registry_tool: ToolSpec | None,
+) -> tuple[list[str], float]:
+    if registry_tool is not None:
+        try:
+            lint_spec = registry_tool.cmd("lint")
+            cmd = lint_spec.build(tool=verilator_path, sources=" ".join(rtl_args))
+            if cmd:
+                return cmd, float(lint_spec.timeout_seconds)
+        except Exception:  # noqa: BLE001
+            pass
+    return [verilator_path, "--lint-only", "--quiet", "--sv", *rtl_args], 10.0
+
+
 class LintWorker(threading.Thread):
     queue_name = resolve_task_queue("LinterWorker") or "process_tasks"
 
-    def __init__(self, connection_params: pika.ConnectionParameters, stop_event: threading.Event):
+    def __init__(
+        self,
+        connection_params: pika.ConnectionParameters,
+        stop_event: threading.Event,
+        registry: ToolRegistry | None = None,
+    ):
         super().__init__(daemon=True)
         self.connection_params = connection_params
         self.stop_event = stop_event
+        self._registry = registry if registry is not None else _safe_get_registry()
+        registry_verilator = _registry_tool(self._registry, "verilator")
         runtime_cfg = get_runtime_config()
-        self.verilator = runtime_cfg.tools.verilator_path or shutil.which("verilator")
+        self.verilator = runtime_cfg.tools.verilator_path or (
+            registry_verilator.resolved_path if registry_verilator is not None else shutil.which("verilator")
+        )
         self.worker_instance_id = f"worker_lint:{id(self):x}"
 
     def run(self) -> None:
@@ -215,6 +265,9 @@ class LintWorker(threading.Thread):
         missing_rtl = [path for path in rtl_paths if not Path(path).exists()]
         if missing_rtl:
             raise TaskInputError(f"RTL missing: {missing_rtl}")
+        registry_verilator = _registry_tool(self._registry, "verilator")
+        if not self.verilator and registry_verilator is not None:
+            self.verilator = registry_verilator.resolved_path
 
         if not self.verilator:
             return ResultMessage(
@@ -231,10 +284,14 @@ class LintWorker(threading.Thread):
         semantic_strict = lint_cfg.rtl_semantic_strict
         try:
             rtl_args = list(dict.fromkeys(rtl_paths))
-            completed, output = _run_verilator_lint(
-                verilator=self.verilator,
+            lint_cmd, timeout_s = _build_verilator_command(
+                verilator_path=self.verilator,
                 rtl_args=rtl_args,
-                timeout_s=10,
+                registry_tool=registry_verilator,
+            )
+            completed, output = _run_verilator_lint(
+                command=lint_cmd,
+                timeout_s=timeout_s,
             )
             has_moddup = "MODDUP" in output.upper()
             has_error = ("%Error" in output) or ("%Fatal" in output)
