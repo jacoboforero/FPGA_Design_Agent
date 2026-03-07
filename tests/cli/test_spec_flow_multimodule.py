@@ -1,8 +1,47 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from apps.cli import spec_flow
+
+
+def _clear_theme_env(monkeypatch) -> None:
+    for name in ("CLI_THEME", "TERMINAL_BACKGROUND", "TERM_BACKGROUND", "COLORFGBG", "TERM_PROGRAM"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_terminal_theme_mode_honors_cli_theme_override(monkeypatch):
+    _clear_theme_env(monkeypatch)
+    monkeypatch.setenv("CLI_THEME", "light")
+    assert spec_flow._terminal_theme_mode() == "light"
+
+
+def test_terminal_theme_mode_uses_colorfgbg_dark_background(monkeypatch):
+    _clear_theme_env(monkeypatch)
+    monkeypatch.setenv("COLORFGBG", "15;0")
+    assert spec_flow._terminal_theme_mode() == "dark"
+
+
+def test_terminal_theme_mode_uses_colorfgbg_light_background(monkeypatch):
+    _clear_theme_env(monkeypatch)
+    monkeypatch.setenv("COLORFGBG", "0;15")
+    assert spec_flow._terminal_theme_mode() == "light"
+
+
+def test_terminal_theme_mode_defaults_to_light_for_apple_terminal(monkeypatch):
+    _clear_theme_env(monkeypatch)
+    monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
+    assert spec_flow._terminal_theme_mode() == "light"
+
+
+def test_terminal_theme_mode_defaults_to_neutral_on_darwin_without_hints(monkeypatch):
+    _clear_theme_env(monkeypatch)
+    monkeypatch.setattr(spec_flow.sys, "platform", "darwin")
+    monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+    assert spec_flow._terminal_theme_mode() == "neutral"
 
 
 def test_collect_specs_from_text_prefers_multimodule_flow_with_module_arg(tmp_path, monkeypatch):
@@ -29,6 +68,97 @@ def test_collect_specs_from_text_prefers_multimodule_flow_with_module_arg(tmp_pa
     result = spec_flow.collect_specs_from_text("ignored_name", spec_text, interactive=False)
     assert result == {"mode": "multi"}
     assert called["interactive"] is False
+
+
+def test_collect_specs_from_text_benchmark_skips_gateway(monkeypatch, tmp_path):
+    monkeypatch.setattr(spec_flow, "SPEC_DIR", tmp_path / "specs")
+    monkeypatch.setattr(spec_flow, "_require_gateway", lambda: (_ for _ in ()).throw(AssertionError("unexpected")))
+    monkeypatch.setattr(spec_flow, "_ensure_single_module_contract", lambda *args, **kwargs: None)
+    monkeypatch.setattr(spec_flow, "_write_artifacts", lambda *args, **kwargs: "spec-id")
+    monkeypatch.setattr(spec_flow, "_write_lock", lambda *args, **kwargs: None)
+
+    seen: dict[str, object] = {}
+
+    def _fake_invoke(gateway, spec_text, checklist, **kwargs):
+        seen["gateway"] = gateway
+        checklist["module_name"] = "demo"
+        return checklist, spec_text
+
+    monkeypatch.setattr(spec_flow, "_invoke_complete_checklist", _fake_invoke)
+
+    result = spec_flow.collect_specs_from_text(
+        "demo",
+        "Module: demo\nL1\nRole summary: demo\n",
+        interactive=False,
+        spec_profile="benchmark",
+    )
+    assert seen["gateway"] is None
+    assert result["module_name"] == "demo"
+
+
+def test_apply_benchmark_defaults_keeps_clocking_empty_without_explicit_clock():
+    checklist = {
+        "module_name": "TopModule",
+        "L2": {
+            "signals": [{"name": "zero", "direction": "OUTPUT", "width_expr": "1"}],
+            "clocking": [],
+        },
+    }
+    updated = spec_flow._apply_benchmark_defaults(checklist, "Module: TopModule\n- output zero\n")
+    assert updated["L2"]["clocking"] == []
+
+
+def test_apply_benchmark_defaults_infers_clocking_only_with_explicit_clock_signal():
+    checklist = {
+        "module_name": "TopModule",
+        "L2": {
+            "signals": [
+                {"name": "clk", "direction": "INPUT", "width_expr": "1"},
+                {"name": "zero", "direction": "OUTPUT", "width_expr": "1"},
+            ],
+            "clocking": [],
+        },
+    }
+    updated = spec_flow._apply_benchmark_defaults(checklist, "Module: TopModule\n- input clk\n- output zero\n")
+    assert len(updated["L2"]["clocking"]) == 1
+    assert updated["L2"]["clocking"][0]["clock_name"] == "clk"
+
+
+def test_apply_benchmark_defaults_preserves_full_role_summary_text():
+    checklist = {
+        "module_name": "TopModule",
+        "L1": {"role_summary": ""},
+        "L2": {"signals": [], "clocking": []},
+    }
+    spec_text = "\n".join(
+        [
+            "Module: TopModule",
+            "I would like you to implement a module named TopModule.",
+            "This intentionally long benchmark prompt line should not be truncated.",
+            "Another line with additional details about behavior and corner cases.",
+            "Include full state-machine transitions, arithmetic corner cases, and all timing assumptions.",
+            "Do not drop any text from this prompt because later lines define required behavior.",
+            "- input clk",
+            "- output out",
+        ]
+    )
+    expected = " ".join(line.strip() for line in spec_text.splitlines() if line.strip())
+    updated = spec_flow._apply_benchmark_defaults(checklist, spec_text)
+    assert updated["L1"]["role_summary"] == expected
+    assert len(updated["L1"]["role_summary"]) > 280
+
+
+def test_complete_checklist_benchmark_allows_clockless_interface():
+    checklist = spec_flow.build_empty_checklist()
+    updated, _ = spec_flow._complete_checklist(
+        gateway=None,
+        spec_text="Module: TopModule\n- output zero\nThe module should always output 0.\n",
+        checklist=checklist,
+        interactive=False,
+        spec_profile="benchmark",
+        append_notes=False,
+    )
+    assert updated["L2"]["clocking"] == []
 
 
 def test_validate_module_inventory_raises_when_l4_nodes_missing_module_sections():
@@ -63,19 +193,14 @@ def test_canonical_modules_excludes_standard_components():
     assert canonical == ["top", "core_a"]
 
 
-def test_collect_multi_specs_auto_scaffolds_missing_modules(tmp_path, monkeypatch):
+def test_collect_multi_specs_raises_when_l4_declares_missing_module_sections(tmp_path, monkeypatch):
     monkeypatch.setattr(spec_flow, "SPEC_DIR", tmp_path / "specs")
 
     captured_artifacts = []
-    captured_lock = {}
 
-    def _fake_write_artifacts(spec_text, checklist, spec_path, module_name, spec_id=None, filename_suffix=""):
+    def _fake_write_artifacts(spec_text, checklist, spec_path, module_name, spec_id=None, filename_suffix=""):  # noqa: ARG001
         captured_artifacts.append(module_name)
         return spec_id
-
-    def _fake_write_lock(module_names, top_module, spec_id):
-        captured_lock["modules"] = list(module_names)
-        captured_lock["top_module"] = top_module
 
     top_checklist = {
         "module_name": "top",
@@ -121,18 +246,17 @@ def test_collect_multi_specs_auto_scaffolds_missing_modules(tmp_path, monkeypatc
         return top_checklist, spec_text
 
     monkeypatch.setattr(spec_flow, "_write_artifacts", _fake_write_artifacts)
-    monkeypatch.setattr(spec_flow, "_write_lock", _fake_write_lock)
     monkeypatch.setattr(spec_flow, "_complete_checklist", _fake_complete_checklist)
 
     spec_text = "Module: top\nL1\nRole summary: top\n"
     spec_path = tmp_path / "spec_input.txt"
     spec_path.write_text(spec_text)
 
-    spec_flow._collect_multi_specs(object(), spec_text, spec_path, interactive=False)
+    with pytest.raises(RuntimeError, match="missing Module section\\(s\\): child_a"):
+        spec_flow._collect_multi_specs(object(), spec_text, spec_path, interactive=False)
 
-    assert captured_artifacts == ["top", "child_a"]
-    assert captured_lock["modules"] == ["top", "child_a"]
-    assert captured_lock["top_module"] == "top"
+    # Only declared module artifacts should have been written before validation fails.
+    assert captured_artifacts == ["top"]
 
 
 def test_autogenerated_comparator_child_is_combinational():
@@ -176,3 +300,29 @@ def test_autogenerated_comparator_child_is_combinational():
     assert "clk" not in signal_names
     assert "rst_n" not in signal_names
     assert set(signal_names) >= {"count", "duty", "pwm_out"}
+
+
+def test_collect_specs_from_text_direct_parse_single_module(tmp_path, monkeypatch):
+    monkeypatch.setattr(spec_flow, "SPEC_DIR", tmp_path / "specs")
+    monkeypatch.setattr(spec_flow, "_require_gateway", lambda: (_ for _ in ()).throw(AssertionError("unexpected")))
+    spec_path = Path(__file__).resolve().parents[1] / "test_specs" / "01_counter3_basic.txt"
+    payload = spec_path.read_text()
+
+    result = spec_flow.collect_specs_from_text("counter3", payload, interactive=False, direct_parse=True)
+    lock = json.loads((tmp_path / "specs" / "lock.json").read_text())
+
+    assert result["module_name"] == "counter3"
+    assert lock["top_module"] == "counter3"
+    assert lock["modules"] == ["counter3"]
+    assert (tmp_path / "specs" / "L1_functional.json").exists()
+    assert (tmp_path / "specs" / "L5_acceptance.json").exists()
+
+
+def test_collect_specs_from_text_direct_parse_multimodule_requires_explicit_module_sections(tmp_path, monkeypatch):
+    monkeypatch.setattr(spec_flow, "SPEC_DIR", tmp_path / "specs")
+    monkeypatch.setattr(spec_flow, "_require_gateway", lambda: (_ for _ in ()).throw(AssertionError("unexpected")))
+    spec_path = Path(__file__).resolve().parents[1] / "test_specs" / "05_pwm_led_multimodule.txt"
+    payload = spec_path.read_text()
+
+    with pytest.raises(RuntimeError, match="missing Module section\\(s\\): pwm_counter8, duty_reg8, pwm_compare8"):
+        spec_flow.collect_specs_from_text("ignored", payload, interactive=False, direct_parse=True)

@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from typing import Any, Dict, List, Optional
 
 from agents.common.llm_gateway import GenerationConfig, Message, MessageRole
 from core.observability.agentops_tracker import get_tracker
+from core.runtime.config import get_runtime_config
 from agents.spec_helper.checklist import (
     CHECKLIST_SCHEMA,
     FieldInfo,
@@ -96,19 +96,21 @@ def _field_shape_hint(field: FieldInfo, *, user_facing: bool) -> str:
 
 
 def _default_cfg(max_tokens: int, temperature: float) -> GenerationConfig:
-    return GenerationConfig(temperature=temperature, max_tokens=max_tokens)
+    top_p = get_runtime_config().llm.top_p
+    return GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
 
 
 def _resolve_cfg(stage: str) -> GenerationConfig:
+    llm_cfg = get_runtime_config().llm
     if stage == "question":
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS_SPEC_QUESTION", "10000"))
-        temperature = float(os.getenv("LLM_TEMPERATURE_SPEC_QUESTION", "0.3"))
+        max_tokens = int(llm_cfg.max_tokens_spec_question)
+        temperature = float(llm_cfg.temperature_spec_question)
     elif stage == "draft":
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS_SPEC_DRAFT", "10000"))
-        temperature = float(os.getenv("LLM_TEMPERATURE_SPEC_DRAFT", "0.4"))
+        max_tokens = int(llm_cfg.max_tokens_spec_draft)
+        temperature = float(llm_cfg.temperature_spec_draft)
     else:
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS_SPEC", "10000"))
-        temperature = float(os.getenv("LLM_TEMPERATURE_SPEC", "0.2"))
+        max_tokens = int(llm_cfg.max_tokens_spec)
+        temperature = float(llm_cfg.temperature_spec)
     return _default_cfg(max_tokens, temperature)
 
 
@@ -117,7 +119,7 @@ def _run_llm(gateway: object, messages: List[Message], stage: str) -> str:
         raise RuntimeError("LLM gateway is not available; set USE_LLM=1 and provider keys.")
     cfg = _resolve_cfg(stage)
     provider = getattr(gateway, "provider", None)
-    json_mode = os.getenv("LLM_JSON_MODE", "1") != "0"
+    json_mode = bool(get_runtime_config().llm.json_mode)
     if json_mode and provider in ("openai", "groq"):
         cfg.provider_specific.setdefault("response_format", {"type": "json_object"})
 
@@ -163,9 +165,8 @@ def update_checklist_from_spec(
         "For list sections, collect subsequent bullet lines ('- ') until the next heading. "
         "For single-line fields like 'Role summary: ...' copy the value text directly. "
         "Do not leave required fields empty if the spec text provides values. "
-        "If a field is explicitly not applicable, use a sentinel so it's treated as complete: "
-        "text -> 'none', list -> ['none'], map -> {'note': 'none'}, object -> {'note': 'none'}, list_of_objects -> "
-        "[{'name': 'none', 'direction': 'none', 'width': 'none'}] or equivalent for that field. "
+        "If a field is explicitly not applicable, only use a 'none' sentinel for optional fields. "
+        "For required fields, leave unresolved unless the spec provides a concrete value. "
         "Use proper JSON types for values: numbers as numbers (e.g., min_cycles_after_reset is an integer). "
         "Return JSON only, no prose, no code fences."
     )
@@ -256,9 +257,8 @@ def generate_field_draft(
         "in draft_text. Keep draft_text concrete and short (no marketing language). "
         "Return JSON only with keys: draft_text (human-readable) and value (matches the field type). "
         "Use proper JSON types for values; numeric fields must be numbers, not prose. "
-        "If the correct answer is 'none' or not applicable, set value to the sentinel: "
-        "text -> 'none', list -> ['none'], map -> {'note': 'none'}, object -> {'note': 'none'}, list_of_objects -> "
-        "[{'name': 'none', 'direction': 'none', 'width': 'none'}] or equivalent for that field."
+        "If the correct answer is not applicable, only use a 'none' sentinel when the field is optional. "
+        "Do not use 'none' for required fields."
     )
     field_context = {
         "path": field.path,

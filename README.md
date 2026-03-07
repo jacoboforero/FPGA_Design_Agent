@@ -1,5 +1,14 @@
 # Multi-Agent Hardware Design System
 
+## Purpose
+Provide a practical entrypoint to run and maintain this repository's planning + RTL generation pipeline.
+
+## Audience
+Developers and maintainers operating the CLI pipeline, brokered workers, and benchmark workflows.
+
+## Scope
+Quick-start operations and pointers to deeper docs. Detailed component internals live under `docs/`.
+
 LLM-backed agents plus deterministic workers that turn a frozen hardware spec into RTL, testbenches, lint (RTL/TB), sim results, and analysis artifacts. Planning is frozen first; execution then runs mechanically through queues and a small state machine.
 
 ## What works today
@@ -57,37 +66,37 @@ Open the repo in a Dev Container to use the same pinned toolchain automatically.
 - `core/schemas/` — contracts and enums
 - `adapters/llm/` — gateway to OpenAI/Groq
 - `infrastructure/` — RabbitMQ compose files
+- `third_party/` — vendored external dependencies (including VerilogEval benchmark harness submodule)
+- `benchmarks/verilog_eval/` — repo-owned benchmark integration assets (docs, templates, optional overrides)
 - `artifacts/generated/` — design context + RTL/TB outputs
 - `artifacts/task_memory/` — per-stage logs and paths (cleared at each CLI run)
 - `artifacts/observability/` — per-run event logs (`*_events.jsonl`) and LLM cost summaries
 - `docs/` — deeper design notes
 
-## Environment knobs
-- Broker: `RABBITMQ_URL` (default `amqp://user:password@localhost:5672/`)
-- LLM: `USE_LLM`, `LLM_PROVIDER` (`openai`/`groq`), `OPENAI_MODEL` (default `gpt-4.1-mini`) or `GROQ_MODEL`
-- Tool overrides: `VERILATOR_PATH`, `IVERILOG_PATH`, `VVP_PATH`
-- Sim failure window: `SIM_FAIL_WINDOW_BEFORE`, `SIM_FAIL_WINDOW_AFTER` (cycles around detected failure)
+## Configuration
+- Runtime behavior: `config/runtime.yaml` (override with `--config`, preset via `--preset`)
+- Secrets/credentials: environment variables (`OPENAI_API_KEY`, `GROQ_API_KEY`, AgentOps keys)
+- Broker/tool/LLM/lint/sim/debug policy knobs are YAML-driven in the runtime config.
+- Benchmark policy: upstream VerilogEval is vendored as a submodule under `third_party/verilog-eval`.
 
 ## Testing
 - Unit/schema: `pytest tests/core/schemas -q`
 - Workers/planner smoke: `pytest tests/workers/test_* tests/core/test_planner.py`
 
-<<<<<<< HEAD
 ## Docs (start here)
-- `docs/overview.md` — how the system flows
-- `docs/architecture.md` — components and queues
-- `docs/agents.md` — role-by-role IO
-- `docs/cli.md` — command details
-- `docs/observability.md` — AgentOps setup and cost tracking
-- `docs/spec-and-planning.md` — L1–L5 checklist and artifacts
-- `docs/queues-and-workers.md` — broker layout and DLQ notes
-=======
-## Docs (start here)
-- `docs/overview.md` — how the system flows
-- `docs/architecture.md` — components and queues
-- `docs/agents.md` — role-by-role IO
-- `docs/cli.md` — command details
-- `docs/observability.md` — AgentOps setup and cost tracking
-- `docs/spec-and-planning.md` — L1–L5 checklist and artifacts
-- `docs/queues-and-workers.md` — broker layout and DLQ notes
->>>>>>> 8653a13 (Add Verilog-Eval dataset and processed prompts)
+- `docs/README.md` — master documentation index
+- `docs/components/` — component internals (orchestrator, workers, gateway, UI bridge)
+- `docs/workflows/` — operational runbooks (interactive, benchmark, failure loop)
+- `docs/reference/` — command and config references
+- `docs/overview.md` — high-level lifecycle
+- `docs/architecture.md` — component map and state progression
+- `docs/cli.md` — command-line usage
+
+## Source of Truth
+- `/home/jacobo/school/FPGA_Design_Agent/apps/cli/cli.py`
+- `/home/jacobo/school/FPGA_Design_Agent/orchestrator/orchestrator_service.py`
+- `/home/jacobo/school/FPGA_Design_Agent/config/runtime.yaml`
+
+## Related Docs
+- [docs/README.md](/home/jacobo/school/FPGA_Design_Agent/docs/README.md)
+- [docs/workflows/interactive-run.md](/home/jacobo/school/FPGA_Design_Agent/docs/workflows/interactive-run.md)

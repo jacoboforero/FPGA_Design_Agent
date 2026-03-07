@@ -243,6 +243,49 @@ Dependencies:
 - parent_id: event_fifo
   child_id: event_logger_top
   dependency_type: structural
+Connections:
+- src:
+    node_id: event_logger_top
+    port: s_axi_awaddr
+  dst:
+    node_id: axi_lite_regs
+    port: s_axi_awaddr
+- src:
+    node_id: axi_lite_regs
+    port: s_axi_awready
+  dst:
+    node_id: event_logger_top
+    port: s_axi_awready
+- src:
+    node_id: event_logger_top
+    port: s_axi_wdata
+  dst:
+    node_id: axi_lite_regs
+    port: s_axi_wdata
+- src:
+    node_id: axi_lite_regs
+    port: s_axi_wready
+  dst:
+    node_id: event_logger_top
+    port: s_axi_wready
+- src:
+    node_id: event_logger_top
+    port: s_axi_araddr
+  dst:
+    node_id: axi_lite_regs
+    port: s_axi_araddr
+- src:
+    node_id: axi_lite_regs
+    port: s_axi_rdata
+  dst:
+    node_id: event_logger_top
+    port: s_axi_rdata
+- src:
+    node_id: event_fifo
+    port: fifo_level
+  dst:
+    node_id: event_logger_top
+    port: fifo_level
 Clock domains:
 - name: clk
   frequency_hz: 100000000
@@ -289,4 +332,286 @@ Acceptance metrics:
 Exclusions:
 - no burst AXI support
 - no clock domain crossing
+Synthesis target: fpga_generic
+
+Module: axi_lite_regs
+Title: AXI-Lite register block for event logger configuration and status
+
+L1
+Role summary: AXI-Lite slave register block that stores configuration bits and exposes status/data paths used by the top-level event logger.
+Key rules:
+- Accept AXI-Lite read/write transfers on used register addresses and return OKAY responses.
+- Provide stable configuration outputs to top-level logic.
+- Produce deterministic reset values for all visible registers.
+Performance intent: Complete AXI-Lite read/write handshake in 1-2 cycles in this simplified model.
+Reset semantics: Active-low async reset clears registers to defaults.
+Corner cases:
+- Back-to-back reads and writes.
+- Writes with byte strobes.
+Open questions:
+- none
+
+L2
+Clocking:
+- clock_name: clk
+  clock_polarity: POSEDGE
+  reset_name: rst_n
+  reset_polarity: ACTIVE_LOW
+  reset_is_async: true
+  description: single synchronous AXI-Lite domain
+Signals:
+- name: clk
+  direction: INPUT
+  width_expr: 1
+  semantics: clock
+- name: rst_n
+  direction: INPUT
+  width_expr: 1
+  semantics: async active-low reset
+- name: s_axi_awaddr
+  direction: INPUT
+  width_expr: 8
+  semantics: AXI-Lite write address
+- name: s_axi_awready
+  direction: OUTPUT
+  width_expr: 1
+  semantics: AXI-Lite write address ready
+- name: s_axi_wdata
+  direction: INPUT
+  width_expr: 32
+  semantics: AXI-Lite write data
+- name: s_axi_wready
+  direction: OUTPUT
+  width_expr: 1
+  semantics: AXI-Lite write data ready
+- name: s_axi_araddr
+  direction: INPUT
+  width_expr: 8
+  semantics: AXI-Lite read address
+- name: s_axi_rdata
+  direction: OUTPUT
+  width_expr: 32
+  semantics: AXI-Lite read data
+Handshake semantics:
+- name: axi_lite
+  rules: single outstanding read and write; OKAY responses only.
+Transaction unit: one 32-bit AXI-Lite transfer.
+Configuration parameters:
+- name: ADDR_WIDTH
+  default_value: 8
+  description: AXI-Lite address width
+
+L3
+Test goals:
+- Reset defaults are correct.
+- AXI-Lite read/write channels operate without protocol violation.
+Oracle strategy: Register-model mirror and AXI-Lite protocol checks.
+Stimulus strategy: Directed register writes and reads.
+Pass/fail criteria:
+- Readback values and handshake behavior match reference.
+Coverage targets:
+- coverage_id: branch
+  description: branch coverage of register access paths
+  metric_type: branch
+  goal: 0.8
+  notes: none
+- coverage_id: toggle
+  description: toggle coverage of control/status bits
+  metric_type: toggle
+  goal: 0.7
+  notes: none
+Reset constraints:
+min_cycles_after_reset: 1
+ordering_notes: begin AXI-Lite traffic one cycle after reset deasserts.
+Scenarios:
+- scenario_id: basic_write_read
+  description: write then read a control register
+  stimulus: issue one AXI-Lite write followed by one read
+  oracle: returned data equals written value
+  pass_fail_criteria: write/read transaction pair succeeds
+  illegal: false
+
+L4
+Block diagram:
+- node_id: axi_lite_regs
+  description: AXI-Lite register block
+  node_type: axi_lite_slave
+  interface_refs: [axi_lite_regs_if]
+  uses_standard_component: false
+  notes: child module consumed by event_logger_top
+Dependencies: []
+Connections: []
+Clock domains:
+- name: clk
+  frequency_hz: 100000000
+  notes: single synchronous domain
+Resource strategy: register file and simple AXI-Lite channel control.
+Latency budget: 1-2 cycle channel response.
+Assertion plan:
+sva:
+- AXI-Lite outputs reset to deterministic defaults
+scoreboard_assertions:
+- register mirror matches observed readback
+
+L5
+Required artifacts:
+- name: rtl
+  description: synthesizable RTL for axi_lite_regs
+  mandatory: true
+- name: testbench
+  description: self-checking AXI-Lite register block testbench
+  mandatory: true
+- name: lint_report
+  description: verilator lint log
+  mandatory: true
+- name: sim_log
+  description: simulation transcript
+  mandatory: true
+- name: coverage_report
+  description: branch/toggle coverage summary
+  mandatory: true
+Acceptance metrics:
+- metric_id: branch
+  description: branch coverage >= 0.8
+  operator: ">="
+  target_value: "0.8"
+  metric_source: coverage_report
+- metric_id: toggle
+  description: toggle coverage >= 0.7
+  operator: ">="
+  target_value: "0.7"
+  metric_source: coverage_report
+Exclusions:
+- none
+Synthesis target: fpga_generic
+
+Module: event_fifo
+Title: Synchronous event FIFO status/data buffering child block
+
+L1
+Role summary: Synchronous FIFO block used by the event logger path to buffer event words and report occupancy.
+Key rules:
+- Provide occupancy indicator fifo_level.
+- Reset clears occupancy to zero.
+- Occupancy changes follow enqueue/dequeue activity.
+Performance intent: One enqueue and one dequeue can occur in the same cycle.
+Reset semantics: Active-low async reset clears internal memory pointers and level.
+Corner cases:
+- full and empty transitions.
+- simultaneous enqueue and dequeue.
+Open questions:
+- none
+
+L2
+Clocking:
+- clock_name: clk
+  clock_polarity: POSEDGE
+  reset_name: rst_n
+  reset_polarity: ACTIVE_LOW
+  reset_is_async: true
+  description: single synchronous FIFO domain
+Signals:
+- name: clk
+  direction: INPUT
+  width_expr: 1
+  semantics: clock
+- name: rst_n
+  direction: INPUT
+  width_expr: 1
+  semantics: async active-low reset
+- name: fifo_level
+  direction: OUTPUT
+  width_expr: 6
+  semantics: FIFO occupancy level
+Handshake semantics:
+- name: fifo_local
+  rules: occupancy reflects internal queue depth each cycle.
+Transaction unit: one FIFO enqueue/dequeue event per cycle.
+Configuration parameters:
+- name: FIFO_DEPTH
+  default_value: 32
+  description: number of FIFO entries
+
+L3
+Test goals:
+- fifo_level reflects occupancy updates.
+- reset clears occupancy.
+Oracle strategy: Cycle-accurate queue occupancy model.
+Stimulus strategy: Directed enqueue/dequeue sequences.
+Pass/fail criteria:
+- fifo_level always matches reference model.
+Coverage targets:
+- coverage_id: branch
+  description: branch coverage of full/empty handling
+  metric_type: branch
+  goal: 0.8
+  notes: none
+- coverage_id: toggle
+  description: toggle coverage of status outputs
+  metric_type: toggle
+  goal: 0.7
+  notes: none
+Reset constraints:
+min_cycles_after_reset: 1
+ordering_notes: begin FIFO stimulus one cycle after reset deasserts.
+Scenarios:
+- scenario_id: level_tracking
+  description: level updates on writes and reads
+  stimulus: drive enqueue/dequeue sequence
+  oracle: fifo_level tracks expected occupancy
+  pass_fail_criteria: no occupancy mismatch
+  illegal: false
+
+L4
+Block diagram:
+- node_id: event_fifo
+  description: synchronous FIFO for event words
+  node_type: fifo
+  interface_refs: [event_fifo_if]
+  uses_standard_component: false
+  notes: child module consumed by event_logger_top
+Dependencies: []
+Connections: []
+Clock domains:
+- name: clk
+  frequency_hz: 100000000
+  notes: single synchronous domain
+Resource strategy: depth-32 FIFO with occupancy counter.
+Latency budget: same-cycle level visibility after internal update.
+Assertion plan:
+sva:
+- fifo_level remains within configured depth range
+scoreboard_assertions:
+- fifo_level matches queue occupancy reference
+
+L5
+Required artifacts:
+- name: rtl
+  description: synthesizable RTL for event_fifo
+  mandatory: true
+- name: testbench
+  description: self-checking FIFO testbench
+  mandatory: true
+- name: lint_report
+  description: verilator lint log
+  mandatory: true
+- name: sim_log
+  description: simulation transcript
+  mandatory: true
+- name: coverage_report
+  description: branch/toggle coverage summary
+  mandatory: true
+Acceptance metrics:
+- metric_id: branch
+  description: branch coverage >= 0.8
+  operator: ">="
+  target_value: "0.8"
+  metric_source: coverage_report
+- metric_id: toggle
+  description: toggle coverage >= 0.7
+  operator: ">="
+  target_value: "0.7"
+  metric_source: coverage_report
+Exclusions:
+- none
 Synthesis target: fpga_generic

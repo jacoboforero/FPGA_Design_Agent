@@ -1,21 +1,29 @@
 # Overview
 
-This Project augments computer hardware engineer's workflow by using LLM-Based agents to assist in spec refinement and RTL Code generation, including testbenches. 
+## Purpose
+Explain the end-to-end lifecycle at a high level (plan, execute, decide).
 
+## Audience
+New contributors and reviewers who need system context before code-level docs.
 
-## How it flows
-- **Plan** — Human + spec helper collect L1–L5, lock them, and the planner emits `design_context.json` + `dag.json`.
-- **Execute** — The orchestrator walks the DAG: Implementation → Lint → Testbench → TB lint → Simulation → Acceptance. On pass, the node is DONE. On sim failure, it runs Distill → Reflect → Debug and marks FAILED. If TB lint fails, it runs Debug and marks FAILED. In multi-module designs, only the top module runs TB/TB lint/SIM/Acceptance; submodules stop after lint. Each stage writes logs/artifact paths to task memory.
-- **Decide** — Coverage/results are reviewed; on failures you can use distill/reflect/debug outputs to iterate and re-run sim.
+## Scope
+Conceptual flow only. Detailed routing, contracts, and command syntax are covered elsewhere.
 
-## What’s in scope now
-- Local runs via CLI (LLM + toolchain required for end-to-end execution).
-- Agents for implementation/testbench/reflection/debug/spec-helper; workers for RTL lint, testbench lint, acceptance, sim, distill.
-- RabbitMQ queues with task memory persisted to disk.
+## Lifecycle
+- **Plan**: Human + Spec Helper converge on L1-L5, then planner writes `artifacts/generated/design_context.json` and `artifacts/generated/dag.json`.
+- **Execute**: Orchestrator advances nodes through implementation and verification stages. On simulation or lint failures, it can trigger distill/reflect/debug and retry (bounded by policy).
+- **Decide**: Review generated artifacts, logs, and acceptance output for pass/fail decisions.
 
-## Where to read next
-- Components and queues: [architecture.md](./architecture.md)
-- Agent IO (inputs/outputs per role): [agents.md](./agents.md)
-- CLI commands and examples: [cli.md](./cli.md)
-- Planning checklist and artifacts: [spec-and-planning.md](./spec-and-planning.md)
-- Queue/DLQ specifics: [queues-and-workers.md](./queues-and-workers.md)
+## Current Execution Shape
+- Primary path: `PENDING -> IMPLEMENTING -> LINTING -> TESTBENCHING -> TB_LINTING -> SIMULATING -> ACCEPTING -> DONE`.
+- Failure paths may include `DISTILLING -> REFLECTING -> DEBUGGING` before retrying lint/simulation.
+- Dependency failures propagate to dependents as `FAILED`.
+
+## Source of Truth
+- `/home/jacobo/school/FPGA_Design_Agent/orchestrator/state_machine.py`
+- `/home/jacobo/school/FPGA_Design_Agent/orchestrator/orchestrator_service.py`
+
+## Related Docs
+- [architecture.md](./architecture.md)
+- [workflows/failure-repair-loop.md](./workflows/failure-repair-loop.md)
+- [spec-and-planning.md](./spec-and-planning.md)

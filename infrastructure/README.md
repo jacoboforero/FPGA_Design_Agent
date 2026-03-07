@@ -1,95 +1,43 @@
 # RabbitMQ Infrastructure
 
-This directory contains the RabbitMQ infrastructure setup for the Multi-Agent Hardware Design System. The infrastructure provides a message broker that enables asynchronous task distribution and error handling. The Docker Compose file also includes an optional `app` service for the pinned toolchain container.
+## Purpose
+Document local RabbitMQ infrastructure setup and broker topology for this repository.
 
-## Files
+## Audience
+Contributors running broker-dependent tests or local orchestration flows.
 
-- `docker-compose.yml` - RabbitMQ service and app toolchain configuration with Docker Compose
-- `rabbitmq-definitions.json` - Queue, exchange, and binding definitions
-- `rabbitmq.conf` - RabbitMQ configuration file (enables automatic definitions loading)
-- `SETUP_NOTES.md` - Detailed setup and configuration documentation
+## Scope
+Local development setup and verification commands.
 
-## Quick Start
+## Services
+- `rabbitmq`: message broker + management UI
+- `app` (optional): pinned toolchain service for containerized workflows
 
+## Quick Start (from repo root)
 ```bash
-# Start RabbitMQ only
-cd infrastructure/
-docker-compose up -d rabbitmq
-
-# Start RabbitMQ + app toolchain
-docker-compose up -d rabbitmq app
-
-# Check status
-docker-compose ps
-
-# View logs
-docker-compose logs
-
-# Stop services
-docker-compose down
+docker-compose -f infrastructure/docker-compose.yml up -d rabbitmq
 ```
 
-## Access
+## Management Endpoints
+- Management UI: `http://localhost:15672`
+- AMQP: `localhost:5672`
 
-- **Management UI**: http://localhost:15672 (user/password)
-- **AMQP**: localhost:5672
-
-## Queue Architecture
-
-The system uses a multi-queue architecture optimized for different task types:
-
-### Task Queues
-
-- **`agent_tasks`** - REASONING entity tasks (priority 1-3, supports priority ordering)
-- **`process_tasks`** - LIGHT_DETERMINISTIC entity tasks (fast, deterministic)
-- **`simulation_tasks`** - HEAVY_DETERMINISTIC entity tasks (long-running simulations)
-
-### Error Handling
-
-- **`dead_letter_queue`** - Failed/unprocessable tasks (quarantined for analysis)
-
-### Exchanges
-
-- **`tasks_exchange`** - Routes tasks to appropriate queues based on EntityType
-- **`tasks_dlx`** - Dead Letter Exchange for routing failed tasks to DLQ
-
-## Schema Integration
-
-The queue routing keys align with `EntityType` enum values in `core/schemas/contracts.py`:
-
-- `EntityType.REASONING` → routing key "REASONING" → queue "agent_tasks"
-- `EntityType.LIGHT_DETERMINISTIC` → routing key "LIGHT_DETERMINISTIC" → queue "process_tasks"
-- `EntityType.HEAVY_DETERMINISTIC` → routing key "HEAVY_DETERMINISTIC" → queue "simulation_tasks"
-
-## Priority Support
-
-The `agent_tasks` queue supports priority levels (1-3) that align with `TaskPriority` enum:
-
-- `TaskPriority.LOW` = 1
-- `TaskPriority.MEDIUM` = 2
-- `TaskPriority.HIGH` = 3
-
-## Automatic Configuration
-
-The infrastructure automatically loads queue and exchange definitions on startup through:
-
-1. **rabbitmq.conf** - Configures RabbitMQ to load definitions from JSON file
-2. **Volume mounts** - Mounts configuration files into the container
-3. **User creation** - Test fixtures automatically create required users
-
-## Testing
-
-Run the infrastructure tests to verify everything is working:
-
+## Test Command (from repo root)
 ```bash
-# From project root
-python3 run_infrastructure_tests.py
+python3 tests/run_infrastructure_tests.py
 ```
 
-All 28 tests should pass, confirming:
+## Routing Summary
+- `REASONING` -> `agent_tasks`
+- `LIGHT_DETERMINISTIC` -> `process_tasks`
+- `HEAVY_DETERMINISTIC` -> `simulation_tasks`
+- DLX -> `dead_letter_queue`
 
-- ✅ RabbitMQ service starts correctly
-- ✅ All queues and exchanges are properly configured
-- ✅ Schema integration works seamlessly
-- ✅ Message flow works end-to-end
-- ✅ DLQ functionality is operational
+## Source of Truth
+- `/home/jacobo/school/FPGA_Design_Agent/infrastructure/docker-compose.yml`
+- `/home/jacobo/school/FPGA_Design_Agent/infrastructure/rabbitmq-definitions.json`
+- `/home/jacobo/school/FPGA_Design_Agent/core/schemas/contracts.py`
+
+## Related Docs
+- [SETUP_NOTES.md](./SETUP_NOTES.md)
+- [/home/jacobo/school/FPGA_Design_Agent/docs/queues-and-workers.md](/home/jacobo/school/FPGA_Design_Agent/docs/queues-and-workers.md)

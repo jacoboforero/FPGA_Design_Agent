@@ -9,6 +9,7 @@ from adapters.llm.gateway import (
     ModelResponse,
     GenerationConfig,
 )
+from core.runtime.llm_rate_control import get_llm_rate_controller
 
 
 class GroqGateway(LLMGateway):
@@ -27,48 +28,57 @@ class GroqGateway(LLMGateway):
         self.client = AsyncOpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
 
     async def generate(self, messages: List[Message], config: Optional[GenerationConfig] = None) -> ModelResponse:
-        config = config or GenerationConfig()
-        config = self.validate_config(config)
+        controller = get_llm_rate_controller()
+        ticket = controller.acquire()
+        error: Exception | None = None
+        try:
+            config = config or GenerationConfig()
+            config = self.validate_config(config)
 
-        groq_messages = [{"role": msg.role.value, "content": msg.content} for msg in messages]
-        api_params = {"model": self._model, "messages": groq_messages}
-        if config.temperature is not None:
-            api_params["temperature"] = config.temperature
-        if config.top_p is not None:
-            api_params["top_p"] = config.top_p
-        if config.max_tokens is not None:
-            api_params["max_tokens"] = config.max_tokens
-        if config.stop_sequences:
-            api_params["stop"] = config.stop_sequences
-        api_params.update(config.provider_specific)
+            groq_messages = [{"role": msg.role.value, "content": msg.content} for msg in messages]
+            api_params = {"model": self._model, "messages": groq_messages}
+            if config.temperature is not None:
+                api_params["temperature"] = config.temperature
+            if config.top_p is not None:
+                api_params["top_p"] = config.top_p
+            if config.max_tokens is not None:
+                api_params["max_tokens"] = config.max_tokens
+            if config.stop_sequences:
+                api_params["stop"] = config.stop_sequences
+            api_params.update(config.provider_specific)
 
-        response = await self.client.chat.completions.create(**api_params)
-        choice = response.choices[0]
-        usage = response.usage
-        input_tokens = usage.prompt_tokens
-        output_tokens = usage.completion_tokens
+            response = await self.client.chat.completions.create(**api_params)
+            choice = response.choices[0]
+            usage = response.usage
+            input_tokens = usage.prompt_tokens
+            output_tokens = usage.completion_tokens
 
-        tmp = ModelResponse(
-            content=choice.message.content or "",
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=usage.total_tokens,
-            model_name=self._model,
-            provider="groq",
-        )
-        cost = self.estimate_cost(tmp)
+            tmp = ModelResponse(
+                content=choice.message.content or "",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=usage.total_tokens,
+                model_name=self._model,
+                provider="groq",
+            )
+            cost = self.estimate_cost(tmp)
 
-        return ModelResponse(
-            content=choice.message.content or "",
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=usage.total_tokens,
-            model_name=response.model,
-            provider="groq",
-            finish_reason=choice.finish_reason,
-            estimated_cost_usd=cost,
-            raw_response=response.model_dump(),
-        )
+            return ModelResponse(
+                content=choice.message.content or "",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=usage.total_tokens,
+                model_name=response.model,
+                provider="groq",
+                finish_reason=choice.finish_reason,
+                estimated_cost_usd=cost,
+                raw_response=response.model_dump(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = exc
+            raise
+        finally:
+            controller.release(ticket, error=error)
 
     @property
     def model_name(self) -> str:

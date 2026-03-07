@@ -20,9 +20,8 @@ from core.observability.setup import configure_observability
 from core.observability.agentops_tracker import get_tracker
 from core.schemas.contracts import AgentType, EntityType, ResultMessage, TaskMessage, TaskStatus
 from agents.planner.worker import PlannerWorker
-
-TASK_EXCHANGE = "tasks_exchange"
-RESULTS_ROUTING_KEY = "RESULTS"
+from core.runtime.broker import TASK_EXCHANGE, create_run_routing, declare_results_queue
+from core.runtime.config import DEFAULT_CONFIG_PATH, get_runtime_config, initialize_runtime_config
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_GEN = REPO_ROOT / "artifacts" / "generated"
@@ -34,7 +33,19 @@ def clean_artifacts() -> None:
     shutil.rmtree(SPEC_DIR, ignore_errors=True)
 
 
-def run_planner_task(params, timeout: float) -> None:
+def _purge_broker_queues(params: pika.ConnectionParameters) -> None:
+    if not get_runtime_config().broker.purge_queues_on_start:
+        return
+    with pika.BlockingConnection(params) as conn:
+        ch = conn.channel()
+        for queue_name in ("agent_tasks", "process_tasks", "simulation_tasks", "results"):
+            try:
+                ch.queue_purge(queue=queue_name)
+            except Exception:
+                continue
+
+
+def run_planner_task(params, run_routing, execution_policy: dict, timeout: float) -> None:
     if timeout <= 0:
         timeout = float("inf")
     task = TaskMessage(
@@ -43,12 +54,14 @@ def run_planner_task(params, timeout: float) -> None:
         context={
             "spec_dir": str(SPEC_DIR),
             "out_dir": str(ARTIFACTS_GEN),
+            "execution_policy": execution_policy,
         },
+        run_id=run_routing.run_id,
+        results_routing_key=run_routing.results_routing_key,
     )
     with pika.BlockingConnection(params) as conn:
         ch = conn.channel()
-        ch.queue_declare(queue="results", durable=True)
-        ch.queue_bind(queue="results", exchange=TASK_EXCHANGE, routing_key=RESULTS_ROUTING_KEY)
+        results_queue = declare_results_queue(ch, results_routing_key=run_routing.results_routing_key)
         ch.basic_publish(
             exchange=TASK_EXCHANGE,
             routing_key=task.entity_type.value,
@@ -57,13 +70,15 @@ def run_planner_task(params, timeout: float) -> None:
         )
         start = time.time()
         while time.time() - start < timeout:
-            method, props, body = ch.basic_get(queue="results", auto_ack=True)
+            method, props, body = ch.basic_get(queue=results_queue, auto_ack=False)
             if body is None:
                 time.sleep(0.05)
                 continue
             result = ResultMessage.model_validate_json(body)
             if result.task_id != task.task_id:
+                ch.basic_nack(method.delivery_tag, requeue=True)
                 continue
+            ch.basic_ack(method.delivery_tag)
             if result.status is not TaskStatus.SUCCESS:
                 raise RuntimeError(f"Planning failed: {result.log_output}")
             return
@@ -161,6 +176,18 @@ def run_case(case: Dict[str, str], timeout: float) -> Dict[str, str]:
     dag_path = ARTIFACTS_GEN / "dag.json"
 
     params = connection_params_from_env()
+    _purge_broker_queues(params)
+    run_routing = create_run_routing()
+    runtime_cfg = get_runtime_config()
+    preset = runtime_cfg.resolved_preset
+    execution_policy = {
+        "preset": runtime_cfg.active_preset,
+        "spec_profile": preset.spec_profile,
+        "verification_profile": preset.verification_profile,
+        "allow_repair_loop": preset.allow_repair_loop,
+        "benchmark_mode": preset.benchmark_mode,
+        "debug_max_retries": runtime_cfg.debug.max_retries,
+    }
     stop_event = threading.Event()
     workers = start_workers(params, stop_event)
     status = "SUCCESS"
@@ -170,11 +197,21 @@ def run_case(case: Dict[str, str], timeout: float) -> Dict[str, str]:
         planner_worker = PlannerWorker(params, planner_stop)
         planner_worker.start()
         try:
-            run_planner_task(params, timeout=timeout)
+            run_planner_task(params, run_routing, execution_policy, timeout=timeout)
         finally:
             planner_stop.set()
             planner_worker.join(timeout=1.0)
-        DemoOrchestrator(params, design_context, dag_path, ARTIFACTS_GEN, REPO_ROOT / "artifacts" / "task_memory").run(timeout_s=timeout)
+        DemoOrchestrator(
+            params,
+            design_context,
+            dag_path,
+            ARTIFACTS_GEN,
+            REPO_ROOT / "artifacts" / "task_memory",
+            run_id=run_routing.run_id,
+            results_routing_key=run_routing.results_routing_key,
+            allow_repair_loop=preset.allow_repair_loop,
+            execution_policy=execution_policy,
+        ).run(timeout_s=timeout)
         ctx = design_context.read_text()
         if ctx:
             import json
@@ -200,7 +237,10 @@ def run_case(case: Dict[str, str], timeout: float) -> Dict[str, str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run increasing-complexity pipeline smoke tests.")
     parser.add_argument("--timeout", type=float, default=120.0, help="Per-case timeout in seconds")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to runtime YAML config.")
+    parser.add_argument("--preset", help="Optional preset override.")
     args = parser.parse_args()
+    initialize_runtime_config(Path(args.config), preset_override=args.preset)
 
     results = []
     for case in SUITE:

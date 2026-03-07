@@ -1,0 +1,126 @@
+active_preset: engineer_fast
+
+presets:
+  engineer_fast:
+    spec_profile: engineer_fast
+    verification_profile: hybrid_scoreboard
+    allow_repair_loop: true
+    interactive_spec_helper: true
+    benchmark_mode: false
+  engineer_signoff:
+    spec_profile: engineer_signoff
+    verification_profile: strict_tb_acceptance
+    allow_repair_loop: true
+    interactive_spec_helper: true
+    benchmark_mode: false
+  benchmark:
+    spec_profile: benchmark
+    verification_profile: oracle_compare
+    allow_repair_loop: true
+    interactive_spec_helper: false
+    benchmark_mode: true
+
+broker:
+  url: amqp://user:password@localhost:5672/
+  heartbeat: 600
+  blocked_connection_timeout: 300.0
+  connection_attempts: 5
+  retry_delay: 2.0
+  socket_timeout: 10.0
+  reconnect_delay_s: 1.0
+  task_max_retries: 1
+  purge_queues_on_start: true
+  planner_timeout_s: 60.0
+  results_consume_mode: consume
+
+cli:
+  default_narrative_mode: deterministic
+  narrative_show_state: false
+  execution_narrator_async: true
+  execution_narrator_order_mode: strict
+  execution_narrator_queue_max_events: 256
+
+workers:
+  pool_sizes:
+    implementation: 2
+    testbench: 2
+    reflection: 2
+    debug: 2
+    spec_helper: 1
+    lint: 1
+    tb_lint: 1
+    acceptance: 1
+    distill: 1
+    simulation: 2
+
+llm:
+  enabled: true
+  provider: openai
+  default_model: gpt-4.1-mini
+  request_timeout_s: 120.0
+  agent_overrides: {}
+  narrative_fallback_model: gpt-4.1-mini
+  json_mode: true
+  max_tokens: 10000
+  temperature: 0.2
+  top_p: null
+  max_tokens_spec: 4000
+  temperature_spec: 0.2
+  max_tokens_spec_question: 1500
+  temperature_spec_question: 0.3
+  max_tokens_spec_draft: 2500
+  temperature_spec_draft: 0.4
+  max_tokens_reflect: 6000
+  temperature_reflect: 0.2
+  max_tokens_debug: 7000
+  temperature_debug: 0.2
+  narrative_temperature: 0.5
+  narrative_max_tokens: 220
+  narrative_timeout_s: 10.0
+  rate_control:
+    adaptive_enabled: true
+    max_in_flight_min: 1
+    max_in_flight_default: 6
+    max_in_flight_max: 8
+    backoff_on_429: true
+
+tools:
+  verilator_path: null
+  iverilog_path: null
+  vvp_path: null
+
+lint:
+  verilator_strict_warnings: false
+  rtl_fail_moddup: true
+  rtl_semantic_enabled: true
+  rtl_semantic_strict: true
+  tb_semantic_enabled: true
+  tb_semantic_strict: true
+
+sim:
+  fail_window_before: 20
+  fail_window_after: 5
+  vcd_max_signals: 40
+  vcd_max_changes_per_signal: 200
+  vcd_time_window_before: 2000
+  vcd_time_window_after: 2000
+
+debug:
+  max_retries: 2
+  max_attempts: 3
+  local_lint_timeout_s: 12.0
+  local_lint_max_lines: 20
+
+benchmark:
+  verilog_eval_root: third_party/verilog-eval
+  prompts_dir: third_party/verilog-eval/dataset_spec-to-rtl
+  output_root: artifacts/benchmarks/verilog_eval
+  oracle_manifest: null
+  canonical:
+    n: 1
+    temperature: 0.0
+    top_p: 0.01
+  sampled:
+    n: 20
+    temperature: 0.8
+    top_p: 0.95

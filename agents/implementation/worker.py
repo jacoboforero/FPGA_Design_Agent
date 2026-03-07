@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
+import re
 from pathlib import Path
 from typing import List, Tuple
 
@@ -16,6 +16,13 @@ from agents.common.base import AgentWorkerBase
 from agents.common.llm_gateway import init_llm_gateway, Message, MessageRole, GenerationConfig
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
+from core.runtime.config import get_runtime_config
+
+_NO_FENCE_PREFIXES = ("`systemverilog", "```")
+_ALWAYS_FF_RE = re.compile(r"\balways_ff\b")
+_ALWAYS_COMB_RE = re.compile(r"\balways_comb\b")
+_OUTPUT_LOGIC_RE = re.compile(r"\boutput\s+logic\b")
+_LOGIC_RE = re.compile(r"\blogic\b")
 
 
 class ImplementationWorker(AgentWorkerBase):
@@ -24,7 +31,7 @@ class ImplementationWorker(AgentWorkerBase):
 
     def __init__(self, connection_params, stop_event):
         super().__init__(connection_params, stop_event)
-        self.gateway = init_llm_gateway()
+        self.gateway = init_llm_gateway("implementation")
 
     def _width_expr(self, sig) -> str:
         raw = sig.get("width", 1)
@@ -66,6 +73,16 @@ class ImplementationWorker(AgentWorkerBase):
         if not isinstance(iface_signals, list) or not iface_signals:
             raise TaskInputError("Empty interface signals in task context.")
 
+        integration_error = self._validate_integration_context(ctx)
+        if integration_error:
+            return ResultMessage(
+                task_id=task.task_id,
+                correlation_id=task.correlation_id,
+                status=TaskStatus.FAILURE,
+                artifacts_path=None,
+                log_output=integration_error,
+            )
+
         if not self.gateway or not Message or not GenerationConfig:
             return ResultMessage(
                 task_id=task.task_id,
@@ -96,19 +113,8 @@ class ImplementationWorker(AgentWorkerBase):
             )
 
         # Sanitize for Verilog-only toolchains.
-        lines = []
-        for line in rtl_source.splitlines():
-            stripped = line.strip()
-            if stripped.startswith(("`systemverilog", "```")):
-                continue
-            lines.append(line)
-        rtl_source = "\n".join(lines)
-        rtl_source = rtl_source.replace("always_ff", "always")
-        rtl_source = rtl_source.replace("always_comb", "always @*")
-        if "always" in rtl_source:
-            rtl_source = rtl_source.replace("output logic", "output reg")
-            rtl_source = rtl_source.replace("output wire", "output reg")
-        rtl_source = rtl_source.replace("logic", "wire")
+        rtl_source = _sanitize_rtl_for_verilog(rtl_source)
+        rtl_source = _extract_target_module_source(rtl_source, node_id)
 
         try:
             rtl_path.write_text(rtl_source)
@@ -132,6 +138,86 @@ class ImplementationWorker(AgentWorkerBase):
             artifacts_path=str(rtl_path),
             log_output=log_output,
         )
+
+    def _validate_integration_context(self, ctx: dict) -> str | None:
+        children = ctx.get("children") or []
+        if not isinstance(children, list):
+            return "Integration context error: 'children' must be a list."
+        children = [str(child).strip() for child in children if str(child).strip()]
+        if not children:
+            return None
+
+        child_interfaces = ctx.get("child_interfaces")
+        if not isinstance(child_interfaces, dict):
+            return (
+                "Integration context error: missing child_interfaces for module with children. "
+                "Provide per-child L2 interface signals in design context."
+            )
+
+        connections = ctx.get("connections")
+        if not isinstance(connections, list) or not connections:
+            return (
+                "Integration context error: missing L4.connections for module with children. "
+                "Define explicit connection endpoints for child integration."
+            )
+
+        child_ports: dict[str, set[str]] = {}
+        for child in children:
+            iface = child_interfaces.get(child)
+            if not isinstance(iface, dict):
+                return (
+                    f"Integration context error: missing interface for child '{child}'. "
+                    "Define the child Module section with explicit L2.signals."
+                )
+            signals = iface.get("signals")
+            if not isinstance(signals, list) or not signals:
+                return (
+                    f"Integration context error: child '{child}' has no interface signals. "
+                    "Define explicit L2.signals for this child module."
+                )
+            ports = {
+                str(sig.get("name", "")).strip()
+                for sig in signals
+                if isinstance(sig, dict) and str(sig.get("name", "")).strip()
+            }
+            if not ports:
+                return (
+                    f"Integration context error: child '{child}' has no named interface ports. "
+                    "Define valid L2.signals names for this child module."
+                )
+            child_ports[child] = ports
+
+        connected_children: set[str] = set()
+        for conn in connections:
+            if not isinstance(conn, dict):
+                continue
+            for side_name in ("src", "dst"):
+                endpoint = conn.get(side_name)
+                if not isinstance(endpoint, dict):
+                    continue
+                node_id = str(endpoint.get("node_id", "")).strip()
+                port = str(endpoint.get("port", "")).strip()
+                if not node_id or not port:
+                    continue
+                if node_id not in child_ports:
+                    continue
+                if port not in child_ports[node_id]:
+                    allowed = ", ".join(sorted(child_ports[node_id]))
+                    return (
+                        f"Integration context error: connection endpoint '{node_id}.{port}' is not declared in child "
+                        f"interface. Allowed child ports: [{allowed}]"
+                    )
+                connected_children.add(node_id)
+
+        missing_connections = [child for child in children if child not in connected_children]
+        if missing_connections:
+            missing = ", ".join(missing_connections)
+            return (
+                "Integration context error: no L4.connections endpoint found for child module(s): "
+                f"{missing}. Add explicit child wiring before RTL generation."
+            )
+
+        return None
 
     async def _llm_generate_impl(self, ctx, node_id: str, iface) -> Tuple[str, str]:
         port_lines = []
@@ -201,9 +287,11 @@ class ImplementationWorker(AgentWorkerBase):
             Message(role=MessageRole.SYSTEM, content=system),
             Message(role=MessageRole.USER, content=user),
         ]
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS", 10000))
-        temperature = float(os.getenv("LLM_TEMPERATURE", 0.2))
-        cfg = GenerationConfig(temperature=temperature, max_tokens=max_tokens)
+        llm_cfg = get_runtime_config().llm
+        max_tokens = int(llm_cfg.max_tokens)
+        temperature = float(llm_cfg.temperature)
+        top_p = llm_cfg.top_p
+        cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
         resp = await self.gateway.generate(messages=msgs, config=cfg)  # type: ignore[arg-type]
         tracker = get_tracker()
         try:
@@ -221,3 +309,59 @@ class ImplementationWorker(AgentWorkerBase):
         except Exception:
             pass
         return resp.content, f"LLM generation via {getattr(resp, 'provider', 'llm')}/{getattr(resp, 'model_name', 'unknown')}"
+
+
+_MODULE_DECL_RE = re.compile(r"^\s*module\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+_ENDMODULE_RE = re.compile(r"^\s*endmodule\b")
+
+
+def _sanitize_rtl_for_verilog(source: str) -> str:
+    lines = []
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(_NO_FENCE_PREFIXES):
+            continue
+        lines.append(line)
+    text = "\n".join(lines)
+    text = _ALWAYS_FF_RE.sub("always", text)
+    text = _ALWAYS_COMB_RE.sub("always @*", text)
+    if "always" in text:
+        text = _OUTPUT_LOGIC_RE.sub("output reg", text)
+    text = _LOGIC_RE.sub("wire", text)
+    return text
+
+
+def _extract_target_module_source(source: str, module_name: str) -> str:
+    lines = source.splitlines()
+    blocks: list[tuple[str, int, int]] = []
+    in_module = False
+    start_idx = -1
+    current_name = ""
+
+    for idx, line in enumerate(lines):
+        if not in_module:
+            match = _MODULE_DECL_RE.match(line)
+            if match:
+                in_module = True
+                current_name = match.group(1)
+                start_idx = idx
+            continue
+        if _ENDMODULE_RE.match(line):
+            blocks.append((current_name, start_idx, idx))
+            in_module = False
+            start_idx = -1
+            current_name = ""
+
+    if len(blocks) <= 1:
+        return source
+
+    chosen = next((item for item in blocks if item[0] == module_name), None)
+    if not chosen:
+        return source
+    _, start, end = chosen
+    selected = "\n".join(lines[start : end + 1]).strip()
+
+    timescale_line = next((line.strip() for line in lines if line.strip().startswith("`timescale")), "")
+    if timescale_line and not selected.startswith("`timescale"):
+        selected = f"{timescale_line}\n\n{selected}"
+    return selected.rstrip() + "\n"

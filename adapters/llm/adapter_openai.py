@@ -15,6 +15,8 @@ from adapters.llm.gateway import (
     ModelResponse,
     GenerationConfig,
 )
+from core.runtime.config import get_runtime_config
+from core.runtime.llm_rate_control import get_llm_rate_controller
 
 
 class OpenAIGateway(LLMGateway):
@@ -40,9 +42,14 @@ class OpenAIGateway(LLMGateway):
         model: str = "gpt-5-nano",
         organization: Optional[str] = None, # Required for billing, rate limits, usage reports.
     ):
+        try:
+            request_timeout_s = float(get_runtime_config().llm.request_timeout_s)
+        except Exception:
+            request_timeout_s = 120.0
         self.client = AsyncOpenAI(
             api_key=api_key,
             organization=organization,
+            timeout=request_timeout_s,
         )
         self._model = model
         raw_mode = os.getenv("OPENAI_API_MODE", "auto").strip().lower() or "auto"
@@ -56,23 +63,32 @@ class OpenAIGateway(LLMGateway):
         config: Optional[GenerationConfig] = None,
     ) -> ModelResponse:
         """Generate a response using OpenAI's chat completion or responses API."""
-        config = config or GenerationConfig()
-        config = self.validate_config(config)
-
-        mode = self._resolve_api_mode(config)
-        if mode == "responses":
-            response = await self.client.responses.create(**self._build_responses_params(messages, config))
-            return self._convert_responses_response(response)
-
-        # Chat mode, with fallback to Responses for model/API compatibility errors.
+        controller = get_llm_rate_controller()
+        ticket = controller.acquire()
+        error: Exception | None = None
         try:
-            response = await self.client.chat.completions.create(**self._build_chat_params(messages, config))
-            return self._convert_chat_response(response)
+            config = config or GenerationConfig()
+            config = self.validate_config(config)
+
+            mode = self._resolve_api_mode(config)
+            if mode == "responses":
+                response = await self.client.responses.create(**self._build_responses_params(messages, config))
+                return self._convert_responses_response(response)
+
+            # Chat mode, with fallback to Responses for model/API compatibility errors.
+            try:
+                response = await self.client.chat.completions.create(**self._build_chat_params(messages, config))
+                return self._convert_chat_response(response)
+            except Exception as exc:  # noqa: BLE001
+                if not self._should_fallback_to_responses(exc):
+                    raise
+                response = await self.client.responses.create(**self._build_responses_params(messages, config))
+                return self._convert_responses_response(response)
         except Exception as exc:  # noqa: BLE001
-            if not self._should_fallback_to_responses(exc):
-                raise
-            response = await self.client.responses.create(**self._build_responses_params(messages, config))
-            return self._convert_responses_response(response)
+            error = exc
+            raise
+        finally:
+            controller.release(ticket, error=error)
     
     @property
     def model_name(self) -> str:

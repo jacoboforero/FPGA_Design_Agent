@@ -26,40 +26,67 @@ def utc_now() -> datetime:
 # Provider-agnostic Response packet including base response and metadata.
 class ModelResponse(BaseModel):
     content: str
-    
+
     # Token usage and cost accounting.
     input_tokens: int
     output_tokens: int
     total_tokens: int
     estimated_cost_usd: Optional[float] = None
-    
-    
+
     model_name: str # "gpt-5", "qwen3:8b", etc.
     provider: str # "openai", "anthropic", "google", etc.
-    
+
     # "Exit Code" for the LLM call. "stop", "length", etc.
     finish_reason: Optional[str] = None
-    
+
+    # Structured response fields (provider-specific extras).
+    # - `choices` retains raw choice/candidate objects when available
+    # - `function_call` surfaces function-calling/tool-invocation payloads
+    # - `logprobs` contains token-level scoring where provided
+    choices: Optional[List[Dict[str, Any]]] = None
+    function_call: Optional[Dict[str, Any]] = None
+    logprobs: Optional[Dict[str, Any]] = None
+
     # Raw response from LLM call to assist debugging or human escalation states.
     raw_response: Dict[str, Any] = Field(default_factory=dict)
-    
+
     # Per-instance timestamping via factory.
     timestamp: datetime = Field(default_factory=utc_now)
 
 
 class GenerationConfig(BaseModel):
     # Adapter implementations handle mapping to provider-specific params.
-    
+
+    # Common, provider-agnostic controls
     max_tokens: Optional[int] = None
-    
+
     # Sampling methodologies (note, some subsets of these ARE mutually exclusive).
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     top_k: Optional[int] = None
-    
+
+    # Common provider features surfaced as typed fields for discoverability
+    n: Optional[int] = None  # number of completions/candidates
+    logprobs: Optional[int] = None  # request token-level scores
+
+    # Function-calling / tool interfaces (provider-specific semantics)
+    functions: Optional[List[Dict[str, Any]]] = None
+    function_call: Optional[Union[str, Dict[str, Any]]] = None
+
     # Terminal character sequences.
     stop_sequences: List[str] = Field(default_factory=list)
-    
+
+    # Misc control fields
+    user: Optional[str] = None
+    stream: Optional[bool] = None
+
+    # Prefer Responses API over Chat Completions when true (OpenAI only)
+    use_responses_api: Optional[bool] = False
+
+    # Prefer the legacy/completions (Codex) endpoint when true.
+    # If unset, model-name auto-detection is used by adapters that support it.
+    use_completions_api: Optional[bool] = None
+
     # Provider-specific overrides.
     provider_specific: Dict[str, Any] = Field(default_factory=dict)
 

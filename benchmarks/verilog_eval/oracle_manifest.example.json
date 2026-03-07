@@ -1,0 +1,10 @@
+{
+  "Prob004": {
+    "test_sv": "Prob004_vector2_test.sv",
+    "ref_sv": "Prob004_vector2_ref.sv"
+  },
+  "Prob079": {
+    "test_sv": "/abs/path/to/Prob079_test.sv",
+    "ref_sv": "/abs/path/to/Prob079_ref.sv"
+  }
+}

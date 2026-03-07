@@ -4,6 +4,7 @@ JSONL sink for local observability logs.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -12,7 +13,12 @@ class JsonlFileSink:
     def __init__(self, run_name: str, run_id: str, base_dir: Path | None = None) -> None:
         self.run_name = run_name or "run"
         self.run_id = run_id
-        self.base_dir = Path(base_dir or "artifacts/observability")
+        default_dir = (
+            os.getenv("OBSERVABILITY_ARTIFACTS_DIR")
+            or os.getenv("AGENTOPS_ARTIFACTS_DIR")
+            or "artifacts/observability"
+        )
+        self.base_dir = Path(base_dir or default_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.path = self.base_dir / f"{self._slug()}_events.jsonl"
         self._lock = threading.Lock()

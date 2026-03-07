@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from pathlib import Path
 
 from core.schemas.contracts import AgentType, ReflectionInsights, ResultMessage, TaskMessage, TaskStatus
@@ -15,6 +14,7 @@ from agents.common.base import AgentWorkerBase
 from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, init_llm_gateway
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
+from core.runtime.config import get_runtime_config
 
 
 class ReflectionWorker(AgentWorkerBase):
@@ -23,7 +23,7 @@ class ReflectionWorker(AgentWorkerBase):
 
     def __init__(self, connection_params, stop_event):
         super().__init__(connection_params, stop_event)
-        self.gateway = init_llm_gateway()
+        self.gateway = init_llm_gateway("reflection")
 
     def handle_task(self, task: TaskMessage) -> ResultMessage:
         if not self.gateway or not Message or not GenerationConfig:
@@ -48,6 +48,8 @@ class ReflectionWorker(AgentWorkerBase):
         tb_path = Path(ctx.get("tb_path", "")) if ctx.get("tb_path") else rtl_path.with_name(f"{node_id}_tb.sv")
         rtl_text = rtl_path.read_text() if rtl_path.exists() else f"<<RTL missing at {rtl_path}>>"
         tb_text = tb_path.read_text() if tb_path.exists() else f"<<TB missing at {tb_path}>>"
+        rtl_numbered = _number_lines_limited(rtl_text, max_lines=450)
+        tb_numbered = _number_lines_limited(tb_text, max_lines=450)
         system = (
             "You are a Reflection Agent for RTL verification. "
             "Analyze the distilled simulation/log data and the full RTL/TB code to produce debugging insights. "
@@ -74,16 +76,18 @@ class ReflectionWorker(AgentWorkerBase):
             f"- current_failure_signature: {ctx.get('current_failure_signature', '')}\n"
             f"- stuck_repeated_failures: {ctx.get('stuck_repeated_failures', 0)}\n"
             f"Distilled dataset:\n{distill_text}\n\n"
-            f"RTL source (full, line-numbered):\n{_number_lines(rtl_text)}\n\n"
-            f"Testbench source (full, line-numbered):\n{_number_lines(tb_text)}\n"
+            f"RTL source (line-numbered excerpt):\n{rtl_numbered}\n\n"
+            f"Testbench source (line-numbered excerpt):\n{tb_numbered}\n"
         )
         msgs = [
             Message(role=MessageRole.SYSTEM, content=system),
             Message(role=MessageRole.USER, content=user),
         ]
-        max_tokens = int(os.getenv("LLM_MAX_TOKENS_REFLECT", "10000"))
-        temperature = float(os.getenv("LLM_TEMPERATURE_REFLECT", "0.2"))
-        cfg = GenerationConfig(temperature=temperature, max_tokens=max_tokens)
+        llm_cfg = get_runtime_config().llm
+        max_tokens = int(llm_cfg.max_tokens_reflect)
+        temperature = float(llm_cfg.temperature_reflect)
+        top_p = llm_cfg.top_p
+        cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
 
         try:
             resp = asyncio.run(self.gateway.generate(messages=msgs, config=cfg))  # type: ignore[arg-type]
@@ -185,6 +189,17 @@ def _number_lines(text: str) -> str:
     lines = text.splitlines()
     width = len(str(len(lines))) if lines else 1
     return "\n".join(f"{idx+1:>{width}}: {line}" for idx, line in enumerate(lines))
+
+
+def _number_lines_limited(text: str, *, max_lines: int) -> str:
+    lines = text.splitlines()
+    if len(lines) <= max_lines:
+        return _number_lines(text)
+    clipped = "\n".join(lines[:max_lines])
+    return (
+        f"{_number_lines(clipped)}\n"
+        f"... (truncated {len(lines) - max_lines} trailing line(s) for prompt efficiency)"
+    )
 
 
 def _normalize_reflection_payload(payload: dict) -> dict:
