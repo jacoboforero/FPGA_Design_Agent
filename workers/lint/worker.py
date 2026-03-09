@@ -4,6 +4,7 @@ Deterministic lint worker. Runs Verilator lint and fails hard on errors.
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess
 import threading
@@ -142,7 +143,8 @@ def _build_verilator_command(
     if registry_tool is not None:
         try:
             lint_spec = registry_tool.cmd("lint")
-            cmd = lint_spec.build(tool=verilator_path, sources=" ".join(rtl_args))
+            quoted_sources = " ".join(shlex.quote(str(path)) for path in rtl_args)
+            cmd = lint_spec.build(tool=verilator_path, sources=quoted_sources)
             if cmd:
                 return cmd, float(lint_spec.timeout_seconds)
         except Exception:  # noqa: BLE001

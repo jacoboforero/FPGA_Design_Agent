@@ -115,7 +115,8 @@ class DistillWorker(threading.Thread):
         if not node_id:
             raise TaskInputError("Missing node_id in task context.")
         attempt = _parse_attempt(task.context.get("attempt"))
-        sim_log = Path("artifacts/task_memory") / node_id / _stage_dir("sim", attempt) / "log.txt"
+        sim_stage_dir = Path("artifacts/task_memory") / node_id / _stage_dir("sim", attempt)
+        sim_log = sim_stage_dir / "log.txt"
         if not sim_log.exists():
             raise TaskInputError(f"Missing simulation log for distillation: {sim_log}")
 
@@ -132,11 +133,11 @@ class DistillWorker(threading.Thread):
         failure_signal_snapshot = _extract_failure_signal_snapshot(fail_line)
         log_excerpt = _extract_log_excerpt(sim_text, fail_line_idx)
         signal_hints = _extract_signal_hints(sim_text, fail_line_idx)
-        waveform_path = Path("artifacts/task_memory") / node_id / _stage_dir("sim", attempt) / "waveform.vcd"
-        waveform_present = waveform_path.exists()
-        waveform_str = str(waveform_path) if waveform_present else None
+        waveform_path, waveform_source = _resolve_waveform_path(sim_stage_dir)
+        waveform_present = waveform_path is not None
+        waveform_str = str(waveform_path) if waveform_path is not None else None
         waveform_excerpt = None
-        if waveform_present:
+        if waveform_path is not None:
             waveform_excerpt = _distill_waveform_excerpt(
                 vcd_path=waveform_path,
                 failure_time=time_val,
@@ -159,6 +160,7 @@ class DistillWorker(threading.Thread):
             "log_excerpt": log_excerpt,
             "log_length": original_size,
             "waveform_path": waveform_str,
+            "waveform_source": waveform_source,
             "signal_hints": signal_hints,
             "waveform_excerpt": waveform_excerpt,
             "waveform_failure_snapshot": waveform_failure_snapshot,
@@ -186,7 +188,7 @@ class DistillWorker(threading.Thread):
             task_id=task.task_id,
             correlation_id=task.correlation_id,
             status=TaskStatus.SUCCESS,
-            log_output=_distill_log(cycle, time_val, window, waveform_str),
+            log_output=_distill_log(cycle, time_val, window, waveform_str, waveform_source),
             distilled_dataset=dataset,
         )
 
@@ -225,6 +227,37 @@ _DEFAULT_SIGNAL_HINTS = {
     "count",
     "rollover",
 }
+
+
+def _resolve_waveform_path(sim_stage_dir: Path) -> tuple[Path | None, str | None]:
+    artifact_path_file = sim_stage_dir / "artifact_path.txt"
+    candidates: list[tuple[Path, str]] = []
+    if artifact_path_file.exists():
+        try:
+            artifact_path = artifact_path_file.read_text().strip()
+            if artifact_path:
+                candidates.append((Path(artifact_path), "artifact_path"))
+        except Exception:
+            pass
+    candidates.extend(
+        [
+            (sim_stage_dir / "waveform.vcd", "waveform_vcd"),
+            (sim_stage_dir / "wave.vcd", "wave_vcd"),
+        ]
+    )
+
+    seen: set[str] = set()
+    for path, source in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if path.exists() and path.is_file():
+                return path, source
+        except Exception:
+            continue
+    return None, None
 
 
 def _extract_failure_info(text: str | None) -> tuple[int | None, int | None]:
@@ -504,6 +537,7 @@ def _distill_log(
     time_val: int | None,
     window: dict | None,
     waveform_path: str | None,
+    waveform_source: str | None,
 ) -> str:
     parts = ["Distillation complete."]
     if cycle is not None or time_val is not None:
@@ -514,6 +548,8 @@ def _distill_log(
         parts.append(f"window_cycles={window.get('start_cycle')}..{window.get('end_cycle')}")
     if waveform_path:
         parts.append(f"waveform_path={waveform_path}")
+        if waveform_source:
+            parts.append(f"waveform_source={waveform_source}")
     else:
         parts.append("waveform_present=no")
     return " ".join(parts)

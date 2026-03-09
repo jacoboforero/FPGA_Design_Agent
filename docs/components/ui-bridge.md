@@ -1,15 +1,8 @@
 # UI Bridge Component
 
-## Purpose
-Document the FastAPI bridge used by the VS Code extension demo workflow.
+The UI bridge is an optional FastAPI service used by the VS Code extension demo path.
 
-## Audience
-Engineers maintaining the extension bridge and local demo endpoints.
-
-## Scope
-Bridge endpoints and integration expectations.
-
-## Endpoints
+## Endpoint Summary
 - `POST /run`
 - `POST /reset`
 - `GET /state`
@@ -17,13 +10,9 @@ Bridge endpoints and integration expectations.
 - `GET/POST /chat`
 
 ## Notes
-- Bridge is optional and separate from CLI-first runtime workflows.
-- Extension communicates over HTTP and does not connect directly to RabbitMQ.
+- This bridge is separate from the CLI-first workflow.
+- Extension clients talk to the bridge over HTTP; they do not connect directly to RabbitMQ.
 
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/apps/ui_backend/server.py`
-- `/home/jacobo/school/FPGA_Design_Agent/apps/vscode-extension/README.md`
-
-## Related Docs
-- [../cli.md](../cli.md)
-- [../architecture.md](../architecture.md)
+## Related Code
+- `apps/ui_backend/server.py`
+- `apps/vscode-extension/README.md`

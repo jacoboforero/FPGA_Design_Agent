@@ -1,37 +1,40 @@
 # Test Plan
 
-## Purpose
-Describe test strategy, priority checks, and practical commands for routine verification.
+The test strategy prioritizes contract correctness, orchestration behavior, execution-stage reliability, and documentation trust.
 
-## Audience
-Contributors validating runtime behavior, broker routing, and schema correctness.
+## Priority Coverage Areas
+- Schema and enum validation.
+- Planner/spec flow behavior.
+- Orchestrator state transitions and dependency handling.
+- Worker behavior (lint, TB lint, simulation, acceptance, distillation).
+- Broker topology, routing, and DLQ plumbing.
+- Benchmark command behavior and failure handling.
+- Documentation quality guardrails (link integrity and command-smoke validation).
 
-## Scope
-Test planning and command references for local and CI usage.
+## Recommended Command Set
+From repo root:
 
-## Priority Coverage
-- Schema and contract tests
-- Orchestration state progression and failure handling
-- Worker behavior (lint, tb_lint, sim, acceptance, distill)
-- Infrastructure routing and DLQ behavior
-
-## Recommended Commands (from repo root)
 ```bash
 pytest tests/core/schemas -q
 pytest tests/infrastructure -q
 pytest tests/workers -q
 pytest tests/execution -q
-python3 tests/run_infrastructure_tests.py
+pytest tests/orchestrator -q
+pytest tests/apps/test_run_verilog_eval.py -q
+pytest tests/apps/test_run_benchmark_campaign.py -q
+pytest tests/apps/test_index_runs.py -q
+python3 scripts/validate_docs.py
+python3 scripts/validate_docs.py --run-commands
 ```
 
 ## CI Guidance
-- Keep fast schema/unit checks in default CI path.
-- Run tool-heavy and benchmark checks in optional jobs.
+- Keep schema/unit suites in fast default CI.
+- Run heavier integration and benchmark-adjacent suites in staged or optional jobs.
+- Include docs link validation in standard CI.
+- Include docs command-smoke validation in scheduled/nightly or pre-release CI where runtime dependencies are available.
 
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/tests/`
-- `/home/jacobo/school/FPGA_Design_Agent/pytest.ini`
-
-## Related Docs
-- [reference/test-commands.md](./reference/test-commands.md)
-- [workflows/failure-repair-loop.md](./workflows/failure-repair-loop.md)
+## Related Code
+- `tests/`
+- `pytest.ini`
+- `apps/cli/run_validation_report.py`
+- `scripts/validate_docs.py`

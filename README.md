@@ -1,102 +1,101 @@
 # Multi-Agent Hardware Design System
 
-## Purpose
-Provide a practical entrypoint to run and maintain this repository's planning + RTL generation pipeline.
+This repository provides a planning-first hardware generation pipeline: freeze spec intent, generate a design context/DAG, then execute implementation and verification through brokered workers.
 
-## Audience
-Developers and maintainers operating the CLI pipeline, brokered workers, and benchmark workflows.
+## What Works Today
+- End-to-end CLI pipeline for planning + execution.
+- LLM-backed agents: spec helper, planner, implementation, testbench, reflection, debug.
+- Deterministic workers: RTL lint, TB lint, simulation, acceptance, distillation.
+- RabbitMQ-based orchestration with task memory artifacts per stage.
+- Multi-module spec support with top-level execution flow.
+- Research benchmark workflow with explicit run/analyze/compare/list command modes.
 
-## Scope
-Quick-start operations and pointers to deeper docs. Detailed component internals live under `docs/`.
+## Choose Your Path
+### Hardware engineer path
+1. Run interactive/full CLI flow.
+2. Refine spec and approve planning handoff.
+3. Execute and inspect generated RTL + verification artifacts.
 
-LLM-backed agents plus deterministic workers that turn a frozen hardware spec into RTL, testbenches, lint (RTL/TB), sim results, and analysis artifacts. Planning is frozen first; execution then runs mechanically through queues and a small state machine.
+Primary docs:
+- [docs/workflows/interactive-run.md](docs/workflows/interactive-run.md)
+- [docs/spec-and-planning.md](docs/spec-and-planning.md)
 
-## What works today
-- End-to-end pipeline via CLI (stubbed EDA path works without keys; LLM/tooling paths optional).
-- Agents for implementation, testbench, reflection, debug, spec-helper; workers for RTL lint, testbench lint, acceptance gating, simulation, distillation.
-- RabbitMQ-based orchestration with task memory under `artifacts/task_memory/` (CLI auto-purges per run).
-- Multi-module specs supported in a single input; full TB/sim runs for the top module only.
+### Researcher path
+1. Run benchmark preflight checks.
+2. Execute reproducible benchmark runs/campaigns.
+3. Compare and interpret benchmark outcomes.
 
-## Quick start (containerized, recommended)
-Use the pinned Verilator toolchain (5.044) inside Docker for consistent results across machines. The container also includes Icarus (`iverilog`/`vvp`) for testbench lint and simulation.
+Primary docs:
+- [docs/workflows/benchmark-run.md](docs/workflows/benchmark-run.md)
+- [docs/workflows/benchmark-campaigns.md](docs/workflows/benchmark-campaigns.md)
+- [docs/benchmark-methodology.md](docs/benchmark-methodology.md)
 
-1) **Prereqs**
-   - Docker + Docker Compose
-   - Optional LLM: set `USE_LLM=1` and `OPENAI_API_KEY` (or Groq vars) in `.env`
-2) **Build and start services**
-   ```bash
-   make build
-   make up
-   ```
-3) **Install deps and run the CLI**
-   ```bash
-   make deps
-   make cli
-   ```
-   Artifacts land in `artifacts/generated/rtl/`; logs live in `artifacts/task_memory/<node>/<stage>/` (cleared at each CLI run).
-   `make deps` installs the OpenAI client extra required for LLM-backed agents.
-   The container sets `EDITOR=nano`; override by setting `EDITOR` in `.env` if you prefer another editor.
-   Inside Docker, `RABBITMQ_URL` must use the service host (`amqp://user:password@rabbitmq:5672/`).
+## Quick Start (Containerized Recommended)
+Use the pinned container toolchain for reproducible behavior.
 
-## Host-only (not recommended)
-You can still run on the host, but tool versions may drift across machines.
+1. Prerequisites
+- Docker + Docker Compose
+- Optional LLM keys (`OPENAI_API_KEY` or `GROQ_API_KEY`) in `.env`
 
+2. Build and start
 ```bash
-PYTHONPATH=. USE_LLM=1 python apps/cli/cli.py --timeout 120
+make build
+make up
 ```
 
-## CLI usage
-- `make cli` — runs the pipeline inside the pinned toolchain container (sources `.env` if present; CLI also loads it)
-- `python apps/cli/cli.py` — host-only fallback (not recommended)
+3. Install deps and run CLI
+```bash
+make deps
+make cli
+```
 
-## Dev workflow helpers
-- `make shell` — open a shell in the running app container (sources `.env` if present)
-- `make test` — run pytest inside the container
-- `make logs` — tail RabbitMQ logs
-- `make down` — stop containers
+Generated outputs go to `artifacts/generated/`, stage logs to `artifacts/task_memory/`, and run telemetry to `artifacts/observability/`.
 
-## Devcontainer (VS Code)
-Open the repo in a Dev Container to use the same pinned toolchain automatically. The config uses the `app` service in `infrastructure/docker-compose.yml`.
+## Host Fallback
+```bash
+PYTHONPATH=. python3 apps/cli/cli.py --timeout 120 --config config/runtime.yaml --preset engineer_fast
+```
 
-## Repo map (you’ll touch these)
-- `apps/cli/` — main entrypoint
-- `orchestrator/` — state machine, planner, task memory, context builder
-- `agents/` — LLM-backed roles
-- `workers/` — deterministic RTL lint / testbench lint / acceptance gating / sim / distill
-- `core/schemas/` — contracts and enums
-- `adapters/llm/` — gateway to OpenAI/Groq
-- `infrastructure/` — RabbitMQ compose files
-- `third_party/` — vendored external dependencies (including VerilogEval benchmark harness submodule)
-- `benchmarks/verilog_eval/` — repo-owned benchmark integration assets (docs, templates, optional overrides)
-- `artifacts/generated/` — design context + RTL/TB outputs
-- `artifacts/task_memory/` — per-stage logs and paths (cleared at each CLI run)
-- `artifacts/observability/` — per-run event logs (`*_events.jsonl`) and LLM cost summaries
-- `docs/` — deeper design notes
+## Common Commands
+```bash
+PYTHONPATH=. python3 apps/cli/cli.py --preset engineer_fast
+PYTHONPATH=. python3 apps/cli/cli.py doctor --preset engineer_fast
+PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke
+PYTHONPATH=. python3 apps/cli/cli.py benchmark compare --left-dir <run_a>/canonical --right-dir <run_b>/canonical
+```
+
+## Repo Map
+- `apps/cli/` main entrypoints
+- `orchestrator/` scheduling, state machine, task memory integration
+- `agents/` LLM-backed task handlers
+- `workers/` deterministic execution stages
+- `core/schemas/` shared contracts
+- `core/runtime/` broker/config/retry helpers
+- `infrastructure/` RabbitMQ and container setup
+- `artifacts/` generated outputs and observability traces
+- `docs/` detailed architecture and runbooks
 
 ## Configuration
-- Runtime behavior: `config/runtime.yaml` (override with `--config`, preset via `--preset`)
-- Secrets/credentials: environment variables (`OPENAI_API_KEY`, `GROQ_API_KEY`, AgentOps keys)
-- Broker/tool/LLM/lint/sim/debug policy knobs are YAML-driven in the runtime config.
-- Benchmark policy: upstream VerilogEval is vendored as a submodule under `third_party/verilog-eval`.
+- Runtime behavior: `config/runtime.yaml`
+- Secrets and credentials: environment variables
+- Use `--config` and `--preset` to select run profile behavior.
 
 ## Testing
-- Unit/schema: `pytest tests/core/schemas -q`
-- Workers/planner smoke: `pytest tests/workers/test_* tests/core/test_planner.py`
+```bash
+pytest tests/core/schemas -q
+pytest tests/infrastructure -q
+pytest tests/workers -q
+pytest tests/execution -q
+pytest tests/orchestrator -q
+pytest tests/apps/test_run_verilog_eval.py -q
+pytest tests/apps/test_run_benchmark_campaign.py -q
+pytest tests/apps/test_index_runs.py -q
+```
 
-## Docs (start here)
-- `docs/README.md` — master documentation index
-- `docs/components/` — component internals (orchestrator, workers, gateway, UI bridge)
-- `docs/workflows/` — operational runbooks (interactive, benchmark, failure loop)
-- `docs/reference/` — command and config references
-- `docs/overview.md` — high-level lifecycle
-- `docs/architecture.md` — component map and state progression
-- `docs/cli.md` — command-line usage
-
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/apps/cli/cli.py`
-- `/home/jacobo/school/FPGA_Design_Agent/orchestrator/orchestrator_service.py`
-- `/home/jacobo/school/FPGA_Design_Agent/config/runtime.yaml`
-
-## Related Docs
-- [docs/README.md](/home/jacobo/school/FPGA_Design_Agent/docs/README.md)
-- [docs/workflows/interactive-run.md](/home/jacobo/school/FPGA_Design_Agent/docs/workflows/interactive-run.md)
+## Documentation
+- [docs/README.md](docs/README.md)
+- [docs/vision-and-ux.md](docs/vision-and-ux.md)
+- [docs/overview.md](docs/overview.md)
+- [docs/architecture.md](docs/architecture.md)
+- [docs/workflows/interactive-run.md](docs/workflows/interactive-run.md)
+- [docs/workflows/benchmark-run.md](docs/workflows/benchmark-run.md)

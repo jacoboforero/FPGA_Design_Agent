@@ -114,7 +114,7 @@ debug:
 benchmark:
   verilog_eval_root: third_party/verilog-eval
   prompts_dir: third_party/verilog-eval/dataset_spec-to-rtl
-  output_root: artifacts/benchmarks/verilog_eval
+  output_root: artifacts/benchmarks/verilog_eval/wavefix_smoke_20260307
   oracle_manifest: null
   sim_run_timeout_s: 90.0
   near_miss_extra_retry_enabled: true

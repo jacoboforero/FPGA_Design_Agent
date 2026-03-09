@@ -1,15 +1,10 @@
 # HW Agent VS Code Extension
 
-## Purpose
-Document extension setup for viewing DAG state and triggering demo runs.
+This extension connects to the optional HTTP UI bridge for viewing state and triggering demo actions.
 
-## Audience
-Developers using the VS Code UI extension.
+## Setup
+From repo root:
 
-## Scope
-Extension-side setup and expected backend endpoints.
-
-## Setup (from repo root)
 ```bash
 cd apps/vscode-extension
 npm install
@@ -21,12 +16,9 @@ npm install
 
 ## Notes
 - API base URL setting: `hwAgent.apiBaseUrl` (default `http://localhost:8000`).
-- Extension talks to HTTP bridge, not RabbitMQ directly.
+- The extension talks to the HTTP bridge, not RabbitMQ directly.
 
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/apps/vscode-extension/src/`
-- `/home/jacobo/school/FPGA_Design_Agent/apps/ui_backend/server.py`
-
-## Related Docs
-- [/home/jacobo/school/FPGA_Design_Agent/docs/components/ui-bridge.md](/home/jacobo/school/FPGA_Design_Agent/docs/components/ui-bridge.md)
-- [/home/jacobo/school/FPGA_Design_Agent/docs/cli.md](/home/jacobo/school/FPGA_Design_Agent/docs/cli.md)
+## Related Files
+- `apps/vscode-extension/src/`
+- `apps/ui_backend/server.py`
+- `docs/components/ui-bridge.md`

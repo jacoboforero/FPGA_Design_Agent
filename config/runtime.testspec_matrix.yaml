@@ -1,0 +1,45 @@
+active_preset: testspec_matrix
+
+presets:
+  testspec_matrix:
+    spec_profile: engineer_fast
+    verification_profile: hybrid_scoreboard
+    allow_repair_loop: true
+    interactive_spec_helper: false
+    benchmark_mode: false
+
+cli:
+  default_narrative_mode: deterministic
+
+broker:
+  purge_queues_on_start: true
+  results_consume_mode: consume
+
+workers:
+  pool_sizes:
+    implementation: 1
+    testbench: 1
+    reflection: 1
+    debug: 1
+    spec_helper: 1
+    lint: 1
+    tb_lint: 1
+    acceptance: 1
+    distill: 1
+    simulation: 1
+
+llm:
+  provider: openai
+  default_model: gpt-4.1-mini
+  temperature: 0.2
+  agent_overrides:
+    testbench:
+      model: gpt-4.1
+    debug:
+      model: gpt-4.1
+    reflection:
+      model: gpt-4.1
+
+debug:
+  max_retries: 2
+  max_attempts: 3

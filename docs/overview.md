@@ -1,29 +1,30 @@
 # Overview
 
-## Purpose
-Explain the end-to-end lifecycle at a high level (plan, execute, decide).
+The project turns a hardware specification into generated RTL, verification artifacts, and execution evidence through a two-phase workflow.
 
-## Audience
-New contributors and reviewers who need system context before code-level docs.
+For product goals and intended UX language, see [vision-and-ux.md](./vision-and-ux.md).
 
-## Scope
-Conceptual flow only. Detailed routing, contracts, and command syntax are covered elsewhere.
+## What Happens In A Run
+1. Write or load a design spec.
+2. Complete and freeze L1-L5 planning artifacts.
+3. Run planner to emit `artifacts/generated/design_context.json` and `artifacts/generated/dag.json`.
+4. Confirm execution.
+5. Orchestrator drives each DAG node through implementation and verification stages.
+6. On failures, repair loop stages can run (`distill -> reflect -> debug`) and retry.
+7. Outputs and traces are written under generated, task-memory, and observability artifact roots.
 
-## Lifecycle
-- **Plan**: Human + Spec Helper converge on L1-L5, then planner writes `artifacts/generated/design_context.json` and `artifacts/generated/dag.json`.
-- **Execute**: Orchestrator advances nodes through implementation and verification stages. On simulation or lint failures, it can trigger distill/reflect/debug and retry (bounded by policy).
-- **Decide**: Review generated artifacts, logs, and acceptance output for pass/fail decisions.
+## Current Runtime State Progression
+- Success path: `PENDING -> IMPLEMENTING -> LINTING -> TESTBENCHING -> TB_LINTING -> SIMULATING -> ACCEPTING -> DONE`
+- Failure/repair path (when enabled): simulation or lint failures can route through `DISTILLING`, `REFLECTING`, and `DEBUGGING` before retry.
+- Dependency-aware execution: nodes start only after dependencies reach `DONE`; failed dependencies can block dependents as `FAILED`.
 
-## Current Execution Shape
-- Primary path: `PENDING -> IMPLEMENTING -> LINTING -> TESTBENCHING -> TB_LINTING -> SIMULATING -> ACCEPTING -> DONE`.
-- Failure paths may include `DISTILLING -> REFLECTING -> DEBUGGING` before retrying lint/simulation.
-- Dependency failures propagate to dependents as `FAILED`.
+## User Experience Summary
+- Interactive mode is human-in-the-loop during planning.
+- Execution is automated after the planning approval gate.
+- You inspect artifacts and logs, then iterate on spec or config as needed.
 
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/orchestrator/state_machine.py`
-- `/home/jacobo/school/FPGA_Design_Agent/orchestrator/orchestrator_service.py`
-
-## Related Docs
-- [architecture.md](./architecture.md)
-- [workflows/failure-repair-loop.md](./workflows/failure-repair-loop.md)
-- [spec-and-planning.md](./spec-and-planning.md)
+## Related Code
+- `apps/cli/cli.py`
+- `apps/cli/spec_flow.py`
+- `orchestrator/orchestrator_service.py`
+- `orchestrator/state_machine.py`

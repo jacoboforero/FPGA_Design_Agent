@@ -50,7 +50,7 @@ class AgentOpsTracker:
             "estimated_cost_usd": 0.0,
             "calls": 0,
         }
-        self.cost_log_path = ARTIFACTS_DIR / "costs.jsonl"
+        self._global_cost_log_path = ARTIFACTS_DIR / "costs.jsonl"
         self._summary_filename = "cost_summary.json"
         ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -61,13 +61,36 @@ class AgentOpsTracker:
 
     @property
     def summary_path(self) -> Path:
+        path = ARTIFACTS_DIR / "runs" / self._slug() / str(self.run_id or "unknown") / "observability" / "summary.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def legacy_summary_path(self) -> Path:
         return ARTIFACTS_DIR / f"{self._slug()}_summary.json"
 
     @property
     def latest_summary_path(self) -> Path:
         return ARTIFACTS_DIR / self._summary_filename
 
-    def init_from_env(self, run_name: Optional[str] = None, default_tags: Optional[list[str]] = None, force: bool = False) -> None:
+    @property
+    def cost_log_path(self) -> Path:
+        path = ARTIFACTS_DIR / "runs" / self._slug() / str(self.run_id or "unknown") / "observability" / "costs.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def legacy_cost_log_path(self) -> Path:
+        return self._global_cost_log_path
+
+    def init_from_env(
+        self,
+        run_name: Optional[str] = None,
+        default_tags: Optional[list[str]] = None,
+        *,
+        run_id: Optional[str] = None,
+        force: bool = False,
+    ) -> None:
         if self.enabled and not force:
             return
         if self.enabled and force:
@@ -87,6 +110,7 @@ class AgentOpsTracker:
             }
             self.run_id = str(uuid.uuid4())
         self.run_name = run_name or os.getenv("AGENTOPS_RUN_NAME") or "session"
+        self.run_id = str(run_id or os.getenv("AGENTOPS_RUN_ID") or self.run_id or uuid.uuid4())
 
         api_key = os.getenv("AGENTOPS_API_KEY")
         if not api_key and os.getenv("AGENTOPS_ENABLE") != "1":
@@ -152,9 +176,10 @@ class AgentOpsTracker:
             self._totals["total_tokens"] += total_tokens
             self._totals["estimated_cost_usd"] += float(estimated_cost_usd or 0.0)
             self._totals["calls"] += 1
-            self.cost_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.cost_log_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(entry) + "\n")
+            for path in (self.cost_log_path, self.legacy_cost_log_path):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry) + "\n")
             self._write_summary_locked()
         if self.enabled:
             try:
@@ -197,6 +222,7 @@ class AgentOpsTracker:
         }
         self.summary_path.parent.mkdir(parents=True, exist_ok=True)
         self.summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        self.legacy_summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
         # Keep a latest pointer for convenience
         self.latest_summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 

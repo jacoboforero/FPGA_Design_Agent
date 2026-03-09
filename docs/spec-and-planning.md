@@ -1,36 +1,44 @@
 # Specification and Planning
 
-## Purpose
-Define how L1-L5 specs are produced, frozen, and transformed into execution artifacts.
+Planning is a hard gate before execution. The goal is to freeze what should be built and how it should be verified before any RTL generation starts.
 
-## Audience
-Contributors authoring specs, planner behavior, or design-context generation.
+## Planning Workflow
+1. Collect spec text (interactive editor or provided file).
+2. Complete missing L1-L5 fields.
+3. Persist frozen artifacts and `lock.json` under `artifacts/task_memory/specs/`.
+4. Run planner to emit `artifacts/generated/design_context.json` and `artifacts/generated/dag.json`.
 
-## Scope
-Planning and handoff contracts only. Execution runtime details are covered elsewhere.
+## L1-L5 Layers
+- **L1**: functional intent and corner-case behavior.
+- **L2**: interface contract (signals, widths, clock/reset, handshake semantics).
+- **L3**: verification plan (goals, scenarios, oracle strategy, coverage intent).
+- **L4**: architecture/dependencies/connections.
+- **L5**: acceptance artifacts and measurable thresholds.
 
-## Workflow
-1. Collect and refine L1-L5 spec layers.
-2. Lock specs under `artifacts/task_memory/specs/`.
-3. Planner emits `artifacts/generated/design_context.json` and `artifacts/generated/dag.json`.
+## Interactive Spec UX
+When fields are missing, the spec helper loop lets you:
+1. Edit the spec in your editor.
+2. Answer in chat.
+3. Ask the helper to propose drafts.
 
-## L1-L5 Summary
-- **L1** functional intent
-- **L2** interface contract
-- **L3** verification objectives
-- **L4** architecture and dependencies
-- **L5** acceptance criteria
+This continues until required fields are complete or explicitly handled.
 
-## Multi-Module Notes
-- Use repeated `Module: <name>` sections.
-- Optional `Top: <module>` selects top module.
-- Planner maps dependency edges and emits node/dependency structure in DAG.
+## Multi-Module Behavior
+- Use repeated `Module: <name>` sections in spec text.
+- Optional `Top: <module>` sets top module.
+- Planner validates child specs and connection coverage for declared dependencies.
 
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/apps/cli/spec_flow.py`
-- `/home/jacobo/school/FPGA_Design_Agent/orchestrator/planner.py`
+## Frozen Artifacts Written
+- `L1_functional*.json`
+- `L2_interface*.json`
+- `L3_verification*.json`
+- `L4_architecture*.json`
+- `L5_acceptance*.json`
+- `frozen_spec*.json`
+- `lock.json`
 
-## Related Docs
-- [overview.md](./overview.md)
-- [architecture.md](./architecture.md)
-- [schemas.md](./schemas.md)
+## Related Code
+- `apps/cli/spec_flow.py`
+- `orchestrator/planner.py`
+- `orchestrator/preplan_validator.py`
+- `core/schemas/specifications.py`

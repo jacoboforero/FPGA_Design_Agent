@@ -1,242 +1,285 @@
 # Benchmark Run Workflow
 
-## Purpose
-Provide a complete runbook to configure, execute, and interpret VerilogEval-compatible benchmarks in this repository.
+Last verified against runtime behavior: March 8, 2026.
 
-## Audience
-Engineers running benchmarks, tuning benchmark settings, or reviewing benchmark outputs.
+This runbook covers how to run VerilogEval-compatible benchmarks in this repo and how to interpret outputs.
 
-## Scope
-Prerequisites, runtime configuration, command semantics, artifact layout, and troubleshooting for `apps/cli/cli.py benchmark`.
+This workflow is designed for researchers comparing models, settings, and system behavior in a reproducible way.
 
-## End-to-End Flow
-The benchmark runner executes this sequence:
-1. Load prompt cases from `benchmark.prompts_dir` (default `third_party/verilog-eval/dataset_spec-to-rtl`, IDs like `Prob079`).
-2. For each sample, run local benchmark planning (`spec_flow` + `planner.generate_from_specs`) as a decoupled planning phase.
-3. Execute the orchestrated pipeline (queues/workers/orchestrator, including repair loop) to produce RTL.
-   In benchmark mode, TB generation/edit stages are disabled; the run uses benchmark-provided testbench/reference assets for feedback.
-4. Compile and simulate each generated sample with `iverilog` + `vvp` against official test/reference SV files.
-5. Run official VerilogEval analyzer (`third_party/verilog-eval/scripts/sv-iv-analyze`) to produce `summary.txt` and `summary.csv`.
-6. Write local `aggregate.json` as a machine-friendly rollup of official artifacts.
+## What This Page Is For
+Use this page when your goal is benchmark execution, reproducible campaign runs, and model/system comparisons with official-style scoring artifacts.
 
-## Required Prerequisites
-All commands below assume repo root as the current working directory.
+## What This Page Is Not For
+- It is not the interactive hardware engineering flow. For that, use [interactive-run.md](./interactive-run.md).
+- It is not a deep internals page for orchestration details. For internals, use [architecture.md](../architecture.md).
 
-### 1) Framework assets
+## Research Success Criteria
+A successful benchmark workflow means:
+1. Preflight checks pass (toolchain, broker, analyzer dependency, prompts/framework).
+2. Run artifacts are created in deterministic run directories.
+3. Official analyzer outputs (`summary.txt`, `summary.csv`) are present.
+4. Local aggregate (`aggregate.json`) and run metadata (`run_manifest.json`) are present.
+5. You can compare runs with structured delta output.
+
+## Command Modes
+`cli.py benchmark` supports explicit research workflows:
+- `run`: generate benchmark samples and official scoring artifacts.
+- `analyze`: parse existing `summary.txt`/`summary.csv` and emit `aggregate.json`.
+- `compare`: compare two benchmark mode folders (`canonical`/`sampled`) and report metric deltas.
+- `list-problems`: list discovered benchmark cases from prompts/dataset mapping.
+
+Default behavior remains `run` if no command is provided.
+
+Legacy compatibility: `PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark` still maps to `benchmark run`.
+
+## Fastest Path (15-Minute Research First Success)
+From repo root:
+
 ```bash
 git submodule update --init --recursive
+PYTHONPATH=. python3 apps/cli/cli.py doctor --preset benchmark --benchmark
+PYTHONPATH=. python3 apps/cli/cli.py benchmark list-problems --preset benchmark --max-problems 3
+PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke --run-id smoke001 --max-problems 3 --dry-run
+PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke --run-id smoke001 --max-problems 3
 ```
-Expected files:
-- `third_party/verilog-eval/scripts/sv-iv-analyze`
-- `third_party/verilog-eval/Makefile.in`
-- `third_party/verilog-eval/dataset_spec-to-rtl/`
 
-### 2) LLM credentials
-Benchmark generation uses orchestrated agent workers (implementation/debug/reflection as needed):
-- if `llm.provider: openai`, set `OPENAI_API_KEY`
-- if `llm.provider: groq`, set `GROQ_API_KEY`
+Then compare against a second run (for example, another config/model setting):
 
-### 3) Broker
-RabbitMQ must be reachable for orchestrated benchmark execution (same requirement as full pipeline runs).
-
-### 4) Toolchain
-`verilator` must be available for orchestrated RTL lint stages.
-
-### 5) Simulation tools
-`iverilog` and `vvp` must be available either on PATH or explicitly configured:
-- `tools.iverilog_path`
-- `tools.vvp_path`
-
-### 6) Analyzer dependency
-Official analyzer currently imports `langchain.schema`:
 ```bash
-poetry run pip install 'langchain<0.2'
+PYTHONPATH=. python3 apps/cli/cli.py benchmark compare \
+  --left-dir artifacts/benchmarks/verilog_eval/smoke/smoke001/canonical \
+  --right-dir artifacts/benchmarks/verilog_eval/smoke/smoke002/canonical \
+  --compare-out artifacts/benchmarks/verilog_eval/smoke/compare_smoke001_vs_smoke002.json
 ```
 
-### 7) Preflight (recommended)
+## End-to-End Run Flow
+For each sample in `run` mode:
+1. Load prompt/test/reference assets for a problem.
+2. Build benchmark-mode L1-L5 spec artifacts.
+3. Run planner to produce design context and DAG.
+4. Run orchestrated generation pipeline (or legacy lightweight path) to produce RTL.
+5. Run sample compile/simulation logs (`iverilog` + `vvp`) against benchmark oracle assets.
+
+After sample generation/testing completes, official analyzer (`sv-iv-analyze`) produces `summary.txt` and `summary.csv`.
+
+## Important Runtime Behavior
+- In orchestrated benchmark mode, TB generation/edit is disabled and benchmark oracle TB/reference files are used.
+- Sample generation failures are logged per sample and execution continues to remaining samples.
+- Placeholder sample files may be emitted so official analysis can still run to completion.
+- Final benchmark scoring still comes from official analyzer outputs.
+- Queue purge behavior is optional via `--purge-queues` (important for shared environments).
+
+## Prerequisites
+You need:
+- reachable RabbitMQ broker,
+- LLM credentials matching configured provider,
+- `verilator` for orchestrated lint stages,
+- `iverilog` and `vvp` for sample simulation,
+- analyzer dependency (`langchain.schema`) available in runtime environment,
+- initialized VerilogEval submodule contents.
+
+Quick preflight command:
+
 ```bash
 PYTHONPATH=. python3 apps/cli/cli.py doctor --preset benchmark --benchmark
 ```
-This checks runtime preset load, provider credentials, framework files, prompt discovery, broker reachability, verilator, sim tools, and analyzer dependency.
 
-## Runtime Configuration Explained
-Primary config file: `config/runtime.yaml`.
+## Main Commands
+List discovered benchmark cases:
 
-### Minimal benchmark-ready config shape
-```yaml
-presets:
-  benchmark:
-    spec_profile: benchmark
-    verification_profile: oracle_compare
-    allow_repair_loop: true
-    interactive_spec_helper: false
-    benchmark_mode: true
-
-llm:
-  enabled: true
-  provider: openai
-  default_model: gpt-4.1-mini
-
-tools:
-  verilator_path: null
-  iverilog_path: null
-  vvp_path: null
-
-benchmark:
-  verilog_eval_root: third_party/verilog-eval
-  prompts_dir: third_party/verilog-eval/dataset_spec-to-rtl
-  output_root: artifacts/benchmarks/verilog_eval
-  oracle_manifest: null
-  canonical: { n: 1, temperature: 0.0, top_p: 0.01 }
-  sampled: { n: 20, temperature: 0.8, top_p: 0.95 }
-```
-
-### Which config fields matter most
-- `benchmark.verilog_eval_root`: framework root used for dataset and analyzer scripts.
-- `benchmark.prompts_dir`: source prompt directory scanned for benchmark cases.
-- `benchmark.output_root`: where `canonical/` and `sampled/` run directories are created.
-- `benchmark.oracle_manifest`: optional JSON mapping problem IDs to explicit test/ref paths.
-- `benchmark.canonical.*`: sample count and decode settings used in the canonical run.
-- `benchmark.sampled.*`: sample count and decode settings used when `--sampled` is passed.
-- `tools.verilator_path`: explicit path for orchestrated benchmark RTL lint stages.
-- `tools.iverilog_path` and `tools.vvp_path`: explicit tool paths if PATH lookup is not enough.
-- `llm.provider` and provider credentials: required for sample generation.
-- `llm.default_model`: model used by benchmark agent workers.
-
-### Important behavior about presets
-The benchmark command loads your selected preset (`--preset`, default `benchmark`) but benchmark generation itself enforces benchmark policy internally (non-interactive benchmark flow and benchmark execution policy). Keep the benchmark preset aligned with benchmark defaults to avoid confusion and to keep doctor output accurate.
-
-### `oracle_manifest` format (optional)
-When present, this overrides dataset auto-resolution for listed problems.
-
-Example (`config/oracle_manifest.json`):
-```json
-{
-  "Prob004": {
-    "test_sv": "Prob004_vector2_test.sv",
-    "ref_sv": "Prob004_vector2_ref.sv"
-  },
-  "Prob079": {
-    "test_sv": "/abs/path/to/Prob079_test.sv",
-    "ref_sv": "/abs/path/to/Prob079_ref.sv"
-  }
-}
-```
-Notes:
-- relative paths are resolved under `benchmark.verilog_eval_root/dataset_spec-to-rtl`
-- absolute paths are used as-is
-- missing referenced files cause a hard failure
-
-## Commands and What Each One Does
-### Preflight check before running
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py doctor --preset benchmark --benchmark
+PYTHONPATH=. python3 apps/cli/cli.py benchmark list-problems --preset benchmark
 ```
-Purpose: validate local environment and config before spending generation time.
 
-### Canonical run (default benchmark mode)
+Canonical run (safe run directory layout):
+
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark
+PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke
 ```
-Purpose: runs orchestrated benchmark canonical mode only (`benchmark.canonical`).
 
-### Canonical + sampled run
+Canonical + sampled:
+
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark --sampled
+PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --sampled
 ```
-Purpose: runs canonical first, then sampled profile (`benchmark.sampled`) into a separate output tree.
 
-### Legacy lightweight fallback (explicit only)
+Legacy lightweight fallback:
+
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark --legacy-lightweight
+PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --legacy-lightweight
 ```
-Purpose: use previous one-shot implementation generation path for compatibility/debugging.
 
-### Limit run scope
+Targeted runs:
+
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark --max-problems 25
-PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark --only-problem Prob079
-PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark --only-problem Prob004 --only-problem Prob079
+PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --max-problems 25
+PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --only-problem Prob079
 ```
-Purpose: reduce runtime for smoke checks or targeted debugging.
 
-### Analyze-only mode
+Dry-run plan only:
+
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark --build-dir artifacts/benchmarks/verilog_eval/canonical
+PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --max-problems 10 --dry-run
 ```
-Purpose: skip generation and simulation; only parse existing `summary.txt` and `summary.csv` into `aggregate.json`.
 
-## CLI Options Reference
-- `--config <path>`: runtime YAML path; default `config/runtime.yaml`.
-- `--preset <name>`: preset to load; default `benchmark`.
-- `--sampled`: additionally run sampled mode.
-- `--legacy-lightweight`: use previous direct implementation-only benchmark generation path.
-- `--pipeline-timeout <seconds>`: per-sample orchestrated pipeline timeout; default `180`.
-- `--max-problems <N>`: cap number of discovered prompt cases; `0` means all.
-- `--only-problem ProbNNN`: include only selected problem IDs; repeatable.
-- `--build-dir <dir>`: analyze-only mode on an existing benchmark build directory.
+Analyze existing run outputs:
 
-## Prompt and Dataset Resolution Rules
-- Prompt discovery prefers official `*_prompt.txt` files under `benchmark.prompts_dir`.
-- Legacy compatibility is preserved: if official prompt files are absent for a problem, `ProbNNN*.txt` files are accepted.
-- Non-problem text files (for example `problems.txt`) are ignored.
-- For each problem, test/reference SV is resolved from dataset patterns unless overridden by `oracle_manifest`.
-- If `--only-problem` includes IDs not found in discovered cases, the run fails fast.
+```bash
+PYTHONPATH=. python3 apps/cli/cli.py benchmark analyze --build-dir artifacts/benchmarks/verilog_eval/wavefix_smoke/run_001/canonical
+```
 
-## Output Layout and Interpretation
-Default base output directory:
+Compare two runs:
+
+```bash
+PYTHONPATH=. python3 apps/cli/cli.py benchmark compare \
+  --left-dir artifacts/benchmarks/verilog_eval/wavefix_smoke/run_001/canonical \
+  --right-dir artifacts/benchmarks/verilog_eval/wavefix_smoke/run_002/canonical \
+  --compare-out artifacts/benchmarks/verilog_eval/wavefix_smoke/compare_run001_vs_run002.json
+```
+
+Campaign sweeps from YAML:
+
+```bash
+python3 scripts/run_benchmark_campaign.py --campaign-file benchmarks/verilog_eval/campaign.example.yaml
+```
+
+Campaign authoring details:
+- See [benchmark-campaigns.md](./benchmark-campaigns.md).
+
+## Key Run Flags
+- `--campaign <name>` and `--run-id <id>`: deterministic run directory naming.
+- `--run-dir <path>`: explicit run directory override.
+- `--sampled`: run sampled profile in addition to canonical.
+- `--legacy-lightweight`: bypass orchestrated path and use compatibility generation path.
+- `--pipeline-timeout <seconds>`: per-sample orchestrated timeout.
+- `--max-problems <N>` and `--only-problem`: restrict problem scope.
+- `--resume`: skip samples that already have sample SV and sample test log.
+- `--overwrite`: replace existing run directory.
+- `--purge-queues`: optional queue purge before benchmark mode start (unsafe for shared environments).
+- `--dry-run`: print execution plan without running generation.
+
+## Expected Checkpoints
+These checkpoints make long-running benchmark jobs easier to operate and debug.
+
+### Checkpoint 1: Discovery and Plan
+What you should observe:
+- `list-problems` returns recognized problem IDs.
+- `run --dry-run` prints run directory, campaign, run id, problem count, and profile choices.
+
+### Checkpoint 2: Run Directory and Manifest
+What you should observe:
+- Run directory exists at `<output_root>/<campaign>/<run_id>/`.
+- `run_manifest.json` is present with run metadata (`preset`, provider/model, flags, filters).
+
+Sanity checks:
+
+```bash
+ls artifacts/benchmarks/verilog_eval/<campaign>/<run_id>
+cat artifacts/benchmarks/verilog_eval/<campaign>/<run_id>/run_manifest.json
+```
+
+### Checkpoint 3: Mode Outputs
+What you should observe:
+- `canonical/` always exists for successful run mode.
+- `sampled/` exists when `--sampled` is requested.
+
+Each mode should include:
+- `summary.txt`
+- `summary.csv`
+- `aggregate.json`
+
+### Checkpoint 4: Per-Problem Logs
+What you should observe:
+- `<ProbNNN>/` folders with sample SV outputs and sample logs.
+- `pipeline_sampleXX/` snapshots for orchestrated traceability.
+
+### Checkpoint 5: Compare Report
+What you should observe:
+- `benchmark compare` prints or writes structured JSON with left/right metrics and delta values.
+
+## Output Layout
+Default root:
 - `artifacts/benchmarks/verilog_eval/`
 
-Canonical run outputs:
-- `artifacts/benchmarks/verilog_eval/canonical/summary.txt`
-- `artifacts/benchmarks/verilog_eval/canonical/summary.csv`
-- `artifacts/benchmarks/verilog_eval/canonical/aggregate.json`
-- `artifacts/benchmarks/verilog_eval/canonical/<ProbNNN>/` per-problem sample directories
-- `artifacts/benchmarks/verilog_eval/canonical/<ProbNNN>/*_sampleXX.sv` generated RTL samples
-- `artifacts/benchmarks/verilog_eval/canonical/<ProbNNN>/*-sv-generate.log` generation logs
-- `artifacts/benchmarks/verilog_eval/canonical/<ProbNNN>/*-sv-iv-test.log` compile/simulation logs
-- `artifacts/benchmarks/verilog_eval/canonical/<ProbNNN>/pipeline_sampleXX/` full per-sample pipeline traces
+Per run:
+- `<campaign>/<run_id>/run_manifest.json`
+- `<campaign>/<run_id>/canonical/`
+- `<campaign>/<run_id>/sampled/` (if enabled)
 
-Sampled run outputs:
-- same structure under `artifacts/benchmarks/verilog_eval/sampled/`
+Per mode (`canonical/`, `sampled/`):
+- `summary.txt` (official analyzer output)
+- `summary.csv` (official analyzer output)
+- `aggregate.json` (local structured summary)
+- `<ProbNNN>/` per-problem directory with:
+  - generated sample SV files,
+  - sample generate logs,
+  - sample compile/run logs,
+  - `pipeline_sampleXX/` trace snapshots.
 
-How to read results:
-- `summary.txt` and `summary.csv` are official analyzer outputs.
-- `aggregate.json` is an internal structured summary derived from official artifacts.
+## Troubleshooting by Symptom
 
-## Performance and Cost Expectations
-- Total sample executions = `number_of_cases * n` where `n` is from selected sample config.
-- Each sample executes the orchestrated pipeline (and can trigger repair-loop retries), so cost/runtime are materially higher than the legacy lightweight path.
-- Canonical (`n=1`) is best for quick correctness checks.
-- Sampled (`n=20` by default) is much slower and more expensive because it multiplies LLM calls and compile/sim runs.
+### Symptom: `doctor` fails framework/prompt checks
+Symptoms:
+- Missing framework scripts/datasets.
+- Missing prompts directory.
 
-## Common Failures and Fixes
-- Framework not initialized: run `git submodule update --init --recursive`.
-- Missing `langchain.schema`: run `poetry run pip install 'langchain<0.2'`.
-- RabbitMQ unreachable: verify broker is up and runtime broker settings are correct.
-- `verilator` unavailable: install tool or set `tools.verilator_path`.
-- `iverilog` or `vvp` unavailable: install tools or set `tools.iverilog_path` and `tools.vvp_path`.
-- LLM gateway unavailable: set provider key and keep `llm.enabled: true`.
-- Prompt directory missing or empty: verify `benchmark.prompts_dir` points to an official VerilogEval dataset directory or an explicit override directory.
-- Pipeline failure stops run immediately (fail-fast): inspect the failing sample’s `pipeline_sampleXX/` trace and `*-sv-generate.log`.
-- Analyze-only directory invalid: ensure `--build-dir` contains both `summary.txt` and `summary.csv`.
+Actions:
+1. Run `git submodule update --init --recursive`.
+2. Validate `benchmark.verilog_eval_root` and `benchmark.prompts_dir` in config.
+3. Re-run doctor.
 
-## New Contributor Checklist
-1. Initialize submodules.
-2. Set LLM provider key matching `llm.provider`.
-3. Run doctor benchmark preflight.
-4. Run canonical benchmark.
-5. Inspect `canonical/summary.txt`, `canonical/summary.csv`, and `canonical/aggregate.json`.
-6. Run sampled only after canonical is healthy.
+### Symptom: broker/tool dependency failures before run starts
+Symptoms:
+- Broker unreachable, or missing `verilator`/`iverilog`/`vvp`.
 
-## Source of Truth
+Actions:
+1. Run `PYTHONPATH=. python3 apps/cli/cli.py doctor --preset benchmark --benchmark`.
+2. Fix broker reachability and tool path resolution (`tools.*` in runtime config).
+3. Retry with `run --dry-run` first to confirm setup.
+
+### Symptom: run fails because output directory already exists
+Symptoms:
+- Error indicating run/mode directory exists.
+
+Actions:
+1. Use `--resume` when continuing an interrupted run.
+2. Use `--overwrite` when intentionally replacing a run.
+3. Avoid accidental clobber by setting explicit `--run-id` values.
+
+### Symptom: compare mode says path is ambiguous
+Symptoms:
+- Error indicates both canonical and sampled are present.
+
+Actions:
+1. Pass explicit mode directories (`.../canonical` or `.../sampled`) to `--left-dir` and `--right-dir`.
+
+### Symptom: repeated generation failures for specific problems
+Symptoms:
+- Warnings for sample generation failures continue but run completes.
+
+Actions:
+1. Inspect problem sample logs (`*-sv-generate.log`, `*-sv-iv-test.log`).
+2. Inspect `pipeline_sampleXX/` snapshots for orchestrated details.
+3. Use `--only-problem` to isolate and rerun with more focused debugging.
+
+### Symptom: analyzer dependency error (`langchain.schema`)
+Symptoms:
+- Run/analyze phase fails with missing analyzer dependency.
+
+Actions:
+1. Install required dependency in runtime env (`langchain<0.2` as documented).
+2. Re-run doctor benchmark checks.
+
+## Researcher Next Steps
+1. Use [benchmark-campaigns.md](./benchmark-campaigns.md) to run structured sweeps across model/config variants.
+2. Use [benchmark-methodology.md](../benchmark-methodology.md) to interpret deltas and avoid weak comparisons.
+3. Use [artifact-hygiene.md](./artifact-hygiene.md) and [observability.md](../observability.md) to keep campaign outputs searchable and auditable.
+
+## Related Code
 - `apps/cli/run_verilog_eval.py`
+- `scripts/run_benchmark_campaign.py`
+- `benchmarks/verilog_eval/campaign.example.yaml`
+- `tests/apps/test_run_verilog_eval.py`
+- `tests/apps/test_run_benchmark_campaign.py`
 - `apps/cli/doctor.py`
-- `apps/cli/cli.py`
-- `core/runtime/config.py`
 - `config/runtime.yaml`
-
-## Related Docs
-- [../benchmark-methodology.md](../benchmark-methodology.md)
-- [../cli.md](../cli.md)
-- [../reference/runtime-config.md](../reference/runtime-config.md)

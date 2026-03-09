@@ -1,31 +1,23 @@
 # Test Commands Reference
 
-## Purpose
-Provide a quick command catalog for common test scopes.
+Quick command set from repo root:
 
-## Audience
-Developers and CI maintainers.
-
-## Scope
-Command quick reference only.
-
-## Commands (from repo root)
 ```bash
 pytest tests/core/schemas -q
 pytest tests/infrastructure -q
 pytest tests/workers -q
 pytest tests/execution -q
+pytest tests/orchestrator -q
+pytest tests/apps/test_run_verilog_eval.py -q
+pytest tests/apps/test_run_benchmark_campaign.py -q
+pytest tests/apps/test_index_runs.py -q
 python3 tests/run_infrastructure_tests.py
 python3 tests/run_schema_tests.py
+python3 scripts/validate_docs.py
+python3 scripts/validate_docs.py --run-commands
 ```
 
-## Notes
-- Use focused suites during development; reserve full-suite runs for broader validation.
-
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/tests/`
-- `/home/jacobo/school/FPGA_Design_Agent/pytest.ini`
-
-## Related Docs
-- [../test-plan.md](../test-plan.md)
-- [../workflows/interactive-run.md](../workflows/interactive-run.md)
+## Tips
+- Use focused suites while iterating locally.
+- Run broader integration suites before merging orchestrator/worker changes.
+- Run `validate_docs.py` before doc-heavy changes to keep links and command examples trustworthy.

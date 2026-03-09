@@ -13,8 +13,26 @@ This directory contains repository-owned benchmark integration assets. Upstream 
 ## Running Benchmarks
 ```bash
 PYTHONPATH=. python3 apps/cli/cli.py doctor --preset benchmark --benchmark
-PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark
-PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark --sampled
+PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke
+PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke --sampled
+```
+
+List available benchmark cases:
+
+```bash
+PYTHONPATH=. python3 apps/cli/cli.py benchmark list-problems --preset benchmark
+```
+
+Compare two benchmark mode directories:
+
+```bash
+PYTHONPATH=. python3 apps/cli/cli.py benchmark compare --left-dir <run_a>/canonical --right-dir <run_b>/canonical
+```
+
+Run multi-entry campaigns from YAML:
+
+```bash
+python3 scripts/run_benchmark_campaign.py --campaign-file benchmarks/verilog_eval/campaign.example.yaml
 ```
 
 ## Optional Prompt Overrides

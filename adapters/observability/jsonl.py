@@ -20,9 +20,14 @@ class JsonlFileSink:
         )
         self.base_dir = Path(base_dir or default_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.path = self.base_dir / f"{self._slug()}_events.jsonl"
+        run_dir = self.base_dir / "runs" / self._slug() / str(self.run_id or "unknown") / "observability"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        self.path = run_dir / "events.jsonl"
+        # Backward-compatible legacy path retained for tooling that still reads flat files.
+        self.legacy_path = self.base_dir / f"{self._slug()}_events.jsonl"
         self._lock = threading.Lock()
         self.path.touch(exist_ok=True)
+        self.legacy_path.touch(exist_ok=True)
 
     def _slug(self) -> str:
         safe = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in self.run_name)
@@ -41,4 +46,6 @@ class JsonlFileSink:
         line = json.dumps(entry, ensure_ascii=True)
         with self._lock:
             with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+            with self.legacy_path.open("a", encoding="utf-8") as handle:
                 handle.write(line + "\n")

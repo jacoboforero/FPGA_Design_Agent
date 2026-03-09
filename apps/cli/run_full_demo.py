@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pika
@@ -30,6 +31,8 @@ from core.schemas.contracts import AgentType, EntityType, ResultMessage, TaskMes
 from core.runtime.broker import TASK_EXCHANGE, create_run_routing, declare_results_queue
 from core.runtime.config import DEFAULT_CONFIG_PATH, get_runtime_config, initialize_runtime_config
 from apps.cli.cli import _load_env_file, connection_params_from_config
+from core.observability.setup import configure_observability
+from core.observability.agentops_tracker import get_tracker
 
 
 def _run_planner_task(
@@ -104,6 +107,9 @@ def main() -> None:
     task_memory_root = REPO_ROOT / "artifacts" / "task_memory"
 
     run_routing = create_run_routing()
+    run_name = f"demo_full_{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    execution_policy["run_name"] = run_name
+    configure_observability(run_name=run_name, run_id=run_routing.run_id, default_tags=["demo", "full"])
     stop_event = threading.Event()
     workers = [
         PlannerWorker(params, stop_event),
@@ -144,6 +150,7 @@ def main() -> None:
         stop_event.set()
         for w in workers:
             w.join(timeout=1.0)
+        get_tracker().finalize()
 
 
 if __name__ == "__main__":

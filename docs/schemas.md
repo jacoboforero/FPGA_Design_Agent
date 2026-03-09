@@ -1,35 +1,26 @@
 # Schemas
 
-## Purpose
-Summarize shared message contracts and controlled vocabularies used across runtime components.
+Schema contracts define how orchestrator, agents, and workers communicate.
 
-## Audience
-Contributors changing task payloads, result payloads, routing enums, or validation behavior.
+## Core Messages
+- **`TaskMessage`**: unit of work dispatched for a node/stage.
+- **`ResultMessage`**: completion payload with status, logs, and optional artifacts.
 
-## Scope
-Schema overview and usage guidance. Full model definitions remain in code.
+## Key Enums
+- **`EntityType`**: `REASONING`, `LIGHT_DETERMINISTIC`, `HEAVY_DETERMINISTIC`
+- **`AgentType`**: planner, implementation, testbench, reflection, debug, spec helper
+- **`WorkerType`**: linter, tb linter, simulator, acceptance, distillation
+- **`TaskStatus`**: `SUCCESS`, `FAILURE`, `ESCALATED_TO_HUMAN`
 
-## Core Contracts
-- **TaskMessage**: task identity, routing fields, and execution context.
-- **ResultMessage**: task completion status, logs, and optional analysis artifacts.
+## Practical Notes
+- Preserve `task_id` and `correlation_id` through execution and result publication.
+- `ESCALATED_TO_HUMAN` exists in schema; most current runtime flows use success/failure transitions.
+- Keep backwards compatibility in message shape when possible; coordinate breaking changes with orchestrator and workers together.
 
-## Controlled Vocabularies
-- `EntityType`: `REASONING`, `LIGHT_DETERMINISTIC`, `HEAVY_DETERMINISTIC`
-- `AgentType`: planner/spec helper/implementation/testbench/reflection/debug
-- `WorkerType`: linter/testbench linter/acceptance/simulator/distillation
-- `TaskStatus`: `SUCCESS`, `FAILURE`, `ESCALATED_TO_HUMAN`
+## Planning Schemas
+L1-L5 planning artifacts are modeled in `core/schemas/specifications.py`, including frozen-state checks and cross-document consistency.
 
-## Validation Guidance
-- Validate payloads before execution.
-- Preserve `task_id` and `correlation_id` across retries/results.
-- Keep schema changes backward compatible unless coordinated as breaking changes.
-
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/core/schemas/contracts.py`
-- `/home/jacobo/school/FPGA_Design_Agent/core/schemas/specifications.py`
-- `/home/jacobo/school/FPGA_Design_Agent/core/schemas/SCHEMAS.md`
-
-## Related Docs
-- [queues-and-workers.md](./queues-and-workers.md)
-- [spec-and-planning.md](./spec-and-planning.md)
-- [reference/runtime-config.md](./reference/runtime-config.md)
+## Related Code
+- `core/schemas/contracts.py`
+- `core/schemas/specifications.py`
+- `core/schemas/SCHEMAS.md`

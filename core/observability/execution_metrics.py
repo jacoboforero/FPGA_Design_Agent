@@ -63,6 +63,8 @@ class ExecutionMetricsRecorder:
         )
         self.out_dir = Path(out_dir or default_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.run_observability_dir = self.out_dir / "runs" / _slug(self.run_name) / str(self.run_id or "unknown") / "observability"
+        self.run_observability_dir.mkdir(parents=True, exist_ok=True)
 
     def ensure_record(self, task_id: str) -> Dict[str, Any]:
         task_key = str(task_id)
@@ -190,6 +192,8 @@ class ExecutionMetricsRecorder:
             "summary": self._summary(rows),
             "tasks": rows,
         }
-        path = self.out_dir / f"{_slug(self.run_name)}_execution_metrics.json"
+        path = self.run_observability_dir / "execution_metrics.json"
+        legacy_path = self.out_dir / f"{_slug(self.run_name)}_execution_metrics.json"
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        legacy_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return path

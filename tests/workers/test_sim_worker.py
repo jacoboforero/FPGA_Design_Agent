@@ -4,6 +4,7 @@ import subprocess
 import pytest
 
 from core.tools.registry import CommandSpec, LintConfig, SimulationConfig, ToolRegistry, ToolSpec
+from core.runtime.config import get_runtime_config, set_runtime_config
 from workers.sim.worker import SimulationWorker
 from core.schemas.contracts import TaskMessage, EntityType, WorkerType, TaskPriority, TaskStatus
 
@@ -267,6 +268,72 @@ def test_sim_worker_uses_registry_commands_and_timeouts(tmp_path, monkeypatch):
     assert calls[1][1] == 29
 
 
+def test_sim_worker_benchmark_mode_applies_timeout_floor(tmp_path, monkeypatch):
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.benchmark.sim_run_timeout_s = 77.0
+    set_runtime_config(cfg)
+    monkeypatch.setattr("workers.sim.worker.shutil.which", lambda _name: None)
+    worker = SimulationWorker(
+        connection_params=None,
+        stop_event=None,
+        registry=_registry_with_sim_tools(run_timeout_s=29),
+    )
+
+    rtl = tmp_path / "demo.sv"
+    rtl.write_text("module demo; endmodule\n")
+    calls: list[tuple[list[str], float]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((list(cmd), float(kwargs["timeout"])))
+        return subprocess.CompletedProcess(cmd, 0, stdout="PASS", stderr="")
+
+    monkeypatch.setattr("workers.sim.worker.subprocess.run", fake_run)
+    result = worker.handle_task(make_task(rtl, execution_policy={"benchmark_mode": True}))
+
+    assert result.status is TaskStatus.SUCCESS
+    assert calls[1][0][0] == "/registry/vvp"
+    assert calls[1][0][1] == "--run"
+    assert calls[1][1] == 77.0
+
+
+def test_sim_worker_registry_build_preserves_paths_with_spaces(tmp_path, monkeypatch):
+    monkeypatch.setattr("workers.sim.worker.shutil.which", lambda _name: None)
+    worker = SimulationWorker(
+        connection_params=None,
+        stop_event=None,
+        registry=_registry_with_sim_tools(),
+    )
+
+    spaced = tmp_path / "with space"
+    spaced.mkdir()
+    rtl = spaced / "demo rtl.sv"
+    tb = spaced / "demo tb.sv"
+    ref = spaced / "demo ref.sv"
+    rtl.write_text("module demo; endmodule\n")
+    tb.write_text("module demo_tb; initial $finish; endmodule\n")
+    ref.write_text("module demo_ref; endmodule\n")
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        cmd_list = list(cmd)
+        calls.append(cmd_list)
+        if "--build" in cmd_list:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if "--run" in cmd_list:
+            return subprocess.CompletedProcess(cmd, 0, stdout="PASS\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("workers.sim.worker.subprocess.run", fake_run)
+    result = worker.handle_task(make_task(rtl, tb, ref))
+
+    assert result.status is TaskStatus.SUCCESS
+    build_cmd = calls[0]
+    assert str(rtl) in build_cmd
+    assert str(tb) in build_cmd
+    assert str(ref) in build_cmd
+
+
 def test_sim_worker_uses_registry_dump_command_on_failure(tmp_path, monkeypatch):
     monkeypatch.setattr("workers.sim.worker.shutil.which", lambda _name: None)
     worker = SimulationWorker(
@@ -280,8 +347,10 @@ def test_sim_worker_uses_registry_dump_command_on_failure(tmp_path, monkeypatch)
     tb.write_text("module demo_tb; initial $finish; endmodule\n")
 
     calls: list[tuple[list[str], float]] = []
+    seen_dump_path: Path | None = None
 
     def fake_run(cmd, **kwargs):
+        nonlocal seen_dump_path
         cmd_list = list(cmd)
         calls.append((cmd_list, float(kwargs["timeout"])))
         if "--build" in cmd_list:
@@ -292,8 +361,9 @@ def test_sim_worker_uses_registry_dump_command_on_failure(tmp_path, monkeypatch)
             dump_arg = next((arg for arg in cmd_list if arg.startswith("+DUMP_FILE=")), "")
             dump_path = Path(dump_arg.split("=", 1)[1]) if dump_arg else None
             if dump_path:
+                seen_dump_path = dump_path
                 dump_path.parent.mkdir(parents=True, exist_ok=True)
-                dump_path.write_text("vcd")
+                dump_path.write_text("$date\n$end\n#0\n0!\n")
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -305,3 +375,54 @@ def test_sim_worker_uses_registry_dump_command_on_failure(tmp_path, monkeypatch)
     assert dump_calls
     assert dump_calls[0][0][0] == "/registry/vvp"
     assert dump_calls[0][1] == 31
+    assert seen_dump_path is not None
+    assert seen_dump_path.is_absolute()
+    assert result.artifacts_path == str(seen_dump_path)
+
+
+def test_sim_worker_retries_dump_without_window_when_windowed_vcd_has_no_activity(tmp_path, monkeypatch):
+    monkeypatch.setattr("workers.sim.worker.shutil.which", lambda _name: None)
+    worker = SimulationWorker(
+        connection_params=None,
+        stop_event=None,
+        registry=_registry_with_sim_tools(),
+    )
+    rtl = tmp_path / "demo.sv"
+    tb = tmp_path / "demo_tb.sv"
+    rtl.write_text("module demo; endmodule\n")
+    tb.write_text("module demo_tb; initial $finish; endmodule\n")
+
+    dump_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        cmd_list = list(cmd)
+        if "--build" in cmd_list:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if "--run" in cmd_list:
+            # Cycle>fail_window_before so first rerun uses window args.
+            return subprocess.CompletedProcess(cmd, 1, stdout="FAIL: cycle=50 time=500", stderr="")
+        if "--dump" in cmd_list:
+            dump_cmds.append(cmd_list)
+            dump_arg = next((arg for arg in cmd_list if arg.startswith("+DUMP_FILE=")), "")
+            dump_path = Path(dump_arg.split("=", 1)[1]) if dump_arg else None
+            if dump_path:
+                dump_path.parent.mkdir(parents=True, exist_ok=True)
+                has_window = any(arg.startswith("+DUMP_START=") for arg in cmd_list)
+                if has_window:
+                    # Header-only VCD simulates empty capture due bad window semantics.
+                    dump_path.write_text("$date\n$end\n")
+                else:
+                    # Fallback rerun should produce timestamped activity.
+                    dump_path.write_text("$date\n$end\n#0\n0!\n#10\n1!\n")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("workers.sim.worker.subprocess.run", fake_run)
+    result = worker.handle_task(make_task(rtl, tb, node_id="demo"))
+
+    assert result.status is TaskStatus.FAILURE
+    assert len(dump_cmds) == 2
+    assert any(arg.startswith("+DUMP_START=") for arg in dump_cmds[0])
+    assert not any(arg.startswith("+DUMP_START=") for arg in dump_cmds[1])
+    assert "Retrying waveform capture without window args." in result.log_output
+    assert result.artifacts_path is not None

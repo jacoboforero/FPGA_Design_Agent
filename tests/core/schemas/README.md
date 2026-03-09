@@ -1,30 +1,22 @@
 # Schema Test Suite
 
-## Purpose
-Document schema test coverage and execution commands.
-
-## Audience
-Contributors changing `core/schemas` contracts or validation behavior.
-
-## Scope
-Schema-focused tests and expected coverage domains.
+These tests protect contract compatibility for task/result messages and planning schemas.
 
 ## Coverage Areas
-- enums
+- enum correctness
 - model validation
-- serialization/deserialization
+- serialization/deserialization behavior
 - L1-L5 specification schema behavior
 
-## Run Commands (from repo root)
+## Run Commands
+From repo root:
+
 ```bash
 pytest tests/core/schemas -v
 python3 tests/run_schema_tests.py
 ```
 
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/tests/core/schemas/`
-- `/home/jacobo/school/FPGA_Design_Agent/core/schemas/`
-
-## Related Docs
-- [/home/jacobo/school/FPGA_Design_Agent/docs/schemas.md](/home/jacobo/school/FPGA_Design_Agent/docs/schemas.md)
-- [/home/jacobo/school/FPGA_Design_Agent/docs/test-plan.md](/home/jacobo/school/FPGA_Design_Agent/docs/test-plan.md)
+## Related Files
+- `tests/core/schemas/`
+- `core/schemas/`
+- `docs/schemas.md`

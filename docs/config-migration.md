@@ -1,28 +1,23 @@
 # Runtime Config Migration
 
-## Purpose
-Clarify YAML-vs-environment responsibilities after runtime configuration migration.
+Runtime behavior is YAML-driven, while secrets stay environment-driven.
 
-## Audience
-Contributors changing configuration behavior or deployment setup.
+## Ownership Rules
+- YAML (`config/runtime.yaml`): presets, worker sizing, routing behavior, retry policy, benchmark defaults.
+- Environment variables: provider credentials and secret tokens (for example `OPENAI_API_KEY`, `GROQ_API_KEY`, AgentOps keys).
 
-## Scope
-Configuration ownership boundaries and practical invocation examples.
-
-## Ownership
-- YAML (`config/runtime.yaml`): runtime behavior, presets, routing, policies
-- Environment variables: secrets/credentials and selected compatibility overrides
-
-## Example Commands (from repo root)
+## Typical Invocation
 ```bash
 PYTHONPATH=. python3 apps/cli/cli.py --config config/runtime.yaml --preset engineer_fast
-PYTHONPATH=. python3 apps/cli/cli.py benchmark --config config/runtime.yaml --preset benchmark
+PYTHONPATH=. python3 apps/cli/cli.py benchmark run --config config/runtime.yaml --preset benchmark --campaign smoke
 ```
 
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/core/runtime/config.py`
-- `/home/jacobo/school/FPGA_Design_Agent/config/runtime.yaml`
+## Practical Guidance
+- Keep environment files focused on secrets.
+- Keep non-secret behavior in YAML for reproducibility.
+- Prefer presets over ad-hoc per-command overrides when running teams or CI.
 
-## Related Docs
-- [reference/runtime-config.md](./reference/runtime-config.md)
-- [cli.md](./cli.md)
+## Related Code
+- `core/runtime/config.py`
+- `config/runtime.yaml`
+- `apps/cli/cli.py`

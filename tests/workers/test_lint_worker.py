@@ -256,3 +256,29 @@ def test_lint_worker_uses_registry_tool_path_and_timeout(tmp_path, monkeypatch):
     assert calls
     assert calls[0][0][0] == "/registry/verilator"
     assert calls[0][1] == 19
+
+
+def test_lint_worker_registry_command_preserves_paths_with_spaces(tmp_path, monkeypatch):
+    monkeypatch.setattr("workers.lint.worker.shutil.which", lambda _name: None)
+    worker = LintWorker(
+        connection_params=None,
+        stop_event=None,
+        registry=_registry_with_verilator(timeout_s=19),
+    )
+    spaced = tmp_path / "rtl space"
+    spaced.mkdir()
+    rtl = spaced / "demo rtl.sv"
+    rtl.write_text("module demo; endmodule\n")
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("workers.lint.worker.subprocess.run", fake_run)
+    result = worker.handle_task(make_task(rtl))
+
+    assert result.status is TaskStatus.SUCCESS
+    assert calls
+    assert str(rtl) in calls[0]

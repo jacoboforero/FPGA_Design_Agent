@@ -140,6 +140,10 @@ class BenchmarkConfig(BaseModel):
     prompts_dir: str = "third_party/verilog-eval/dataset_spec-to-rtl"
     output_root: str = "artifacts/benchmarks/verilog_eval"
     oracle_manifest: Optional[str] = None
+    sim_run_timeout_s: float = 90.0
+    near_miss_extra_retry_enabled: bool = True
+    near_miss_max_mismatches: int = 20
+    near_miss_extra_debug_retries: int = 1
     canonical: BenchmarkSampleConfig = Field(
         default_factory=lambda: BenchmarkSampleConfig(n=1, temperature=0.0, top_p=0.01)
     )

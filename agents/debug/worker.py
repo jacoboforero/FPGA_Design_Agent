@@ -29,7 +29,6 @@ from core.runtime.retry import TaskInputError
 from core.runtime.config import get_runtime_config
 
 _VERILATOR_QUIET_UNSUPPORTED_RE = re.compile(r"invalid option:\s*--quiet", re.IGNORECASE)
-_SIM_FAIL_MARKER_RE = re.compile(r"\b(FAIL|FAILURE|ERROR|FATAL|ASSERT|ASSERTION)\b", re.IGNORECASE)
 _ALWAYS_FF_RE = re.compile(r"\balways_ff\b")
 _ALWAYS_COMB_RE = re.compile(r"\balways_comb\b")
 _LOGIC_RE = re.compile(r"\blogic\b")
@@ -113,7 +112,7 @@ class DebugWorker(AgentWorkerBase):
             "- If stuck=true or a failure signature repeats, your patch MUST change strategy materially and explain the delta in summary.\n"
             "- If waveform dumping uses a cycle window, do NOT treat DUMP_START=0 as \"disabled\"; some benches accidentally $dumpoff forever.\n"
             "- If the context includes child modules and connection wiring, preserve the integration structure; only fix wiring or glue logic as needed.\n"
-            "- Your patch is accepted only if local deterministic validation passes (tb_lint for TB changes; lint for RTL changes; sim check for smoke-child sim failures).\n"
+            "- Your patch is accepted only if local deterministic validation passes (tb_lint for TB changes; lint for RTL changes).\n"
         )
         if rtl_only_debug:
             system += (
@@ -482,19 +481,12 @@ def _run_local_validation(
 
     need_rtl_lint = ("rtl" in touched_files) or (debug_reason == "rtl_lint")
     need_tb_lint = ("tb" in touched_files) or (debug_reason == "tb_lint")
-    need_sim = (
-        debug_reason == "sim"
-        and _is_smoke_child_context(ctx)
-        and (("rtl" in touched_files) or ("tb" in touched_files))
-    )
     rtl_paths = _resolve_rtl_paths(ctx, rtl_path)
 
     if need_rtl_lint:
         checks.append(_run_rtl_lint_check(ctx=ctx, rtl_paths=rtl_paths, rtl_path=rtl_path))
     if need_tb_lint:
         checks.append(_run_tb_lint_check(ctx=ctx, rtl_paths=rtl_paths, tb_path=tb_path))
-    if need_sim:
-        checks.append(_run_sim_check(rtl_paths, tb_path))
 
     if not checks:
         return {
@@ -514,23 +506,6 @@ def _run_local_validation(
             details_lines.append(output)
     details = "\n".join(details_lines).strip()
     return {"ok": ok, "summary": summary, "details": details, "checks": checks}
-
-
-def _is_smoke_child_context(ctx: dict) -> bool:
-    if not isinstance(ctx, dict):
-        return False
-    node_id = str(ctx.get("node_id") or "").strip()
-    top_module = str(ctx.get("top_module") or "").strip()
-    if not node_id or not top_module or node_id == top_module:
-        return False
-    verification = ctx.get("verification")
-    if not isinstance(verification, dict):
-        return False
-    goals = verification.get("test_goals")
-    if not isinstance(goals, list):
-        return False
-    return any("smoke" in str(goal or "").strip().lower() for goal in goals)
-
 
 def _resolve_rtl_paths(ctx: dict, rtl_path: Path) -> list[str]:
     candidates = ctx.get("rtl_paths") or [str(rtl_path)]
@@ -704,65 +679,6 @@ def _run_tb_lint_check(*, ctx: dict, rtl_paths: list[str], tb_path: Path) -> dic
         "ok": True,
         "output": merged_output,
     }
-
-
-def _run_sim_check(rtl_paths: list[str], tb_path: Path) -> dict:
-    name = "sim"
-    missing = [path for path in rtl_paths if not Path(path).exists()]
-    if missing:
-        return {"name": name, "ok": False, "output": f"RTL missing for local sim validation: {missing}"}
-    if not tb_path.exists():
-        return {"name": name, "ok": False, "output": f"Testbench missing for local sim validation: {tb_path}"}
-
-    runtime_cfg = get_runtime_config()
-    iverilog = runtime_cfg.tools.iverilog_path or shutil.which("iverilog")
-    vvp = runtime_cfg.tools.vvp_path or shutil.which("vvp")
-    if not iverilog or not vvp:
-        return {"name": name, "ok": False, "output": "Icarus (iverilog/vvp) not found for local sim validation."}
-
-    timeout_s = float(runtime_cfg.debug.local_lint_timeout_s)
-    out_path = "/tmp/debug_local_sim.out"
-    build_cmd = [iverilog, "-g2012", "-g2005-sv", "-o", out_path, *rtl_paths, str(tb_path)]
-    try:
-        build = _run_subprocess(build_cmd, timeout_s)
-    except subprocess.TimeoutExpired as exc:
-        return {"name": name, "ok": False, "output": f"Local sim build timed out: {exc}"}
-    except Exception as exc:  # noqa: BLE001
-        return {"name": name, "ok": False, "output": f"Local sim build failed: {exc}"}
-    build_output = _format_tool_output(build.stdout, build.stderr)
-    if build.returncode != 0:
-        return {
-            "name": name,
-            "ok": False,
-            "output": (build_output or "Local sim build failed."),
-        }
-
-    run_cmd = [vvp, out_path]
-    try:
-        run = _run_subprocess(run_cmd, timeout_s)
-    except subprocess.TimeoutExpired as exc:
-        return {"name": name, "ok": False, "output": f"Local sim run timed out: {exc}"}
-    except Exception as exc:  # noqa: BLE001
-        return {"name": name, "ok": False, "output": f"Local sim run failed: {exc}"}
-    run_output = _format_tool_output(run.stdout, run.stderr)
-    marker_fail = bool(_SIM_FAIL_MARKER_RE.search(run_output or ""))
-    ok = run.returncode == 0 and not marker_fail
-    if ok:
-        merged = run_output or "Local sim validation passed."
-        return {"name": name, "ok": True, "output": merged}
-    reason = []
-    if run.returncode != 0:
-        reason.append(f"exit_code={run.returncode}")
-    if marker_fail:
-        reason.append("failure_marker_detected")
-    reason_text = ", ".join(reason) if reason else "unknown_failure"
-    output = run_output or "Local sim validation failed."
-    return {
-        "name": name,
-        "ok": False,
-        "output": f"{output}\n[sim_analysis] {reason_text}".strip(),
-    }
-
 
 def _format_tool_output(stdout: str | None, stderr: str | None) -> str:
     raw = "\n".join(part for part in [stdout or "", stderr or ""] if part).strip()

@@ -1,41 +1,40 @@
 # Architecture
 
-## Purpose
-Describe core runtime components and how work is routed through the system.
-
-## Audience
-Engineers modifying orchestration, routing, planning, or execution internals.
-
-## Scope
-Component boundaries, queue topology, and state progression. Not a CLI manual.
+The system is split into planning and execution. Planning freezes intent and interfaces up front. Execution then runs mechanically through queues and a state machine.
 
 ## Core Components
-- **Orchestrator**: reads design context and DAG, publishes tasks, consumes results, updates node state.
-- **RabbitMQ**: routes reasoning, deterministic, and simulation work.
-- **Agents**: planner, implementation, testbench, reflection, debug, specification helper.
-- **Workers**: lint, testbench lint, simulation, acceptance, distillation.
-- **Storage**:
-  - `artifacts/generated/` for generated design artifacts
-  - `artifacts/task_memory/` for stage logs and per-stage outputs
-  - `artifacts/observability/` for event and cost telemetry
+- **CLI**: collects specs, invokes planner, asks for execution confirmation, and starts workers/orchestrator.
+- **Planner**: consumes frozen L1-L5 artifacts and emits design context + DAG.
+- **Orchestrator**: starts ready nodes, publishes tasks, consumes results, advances node state, and applies retry/failure policy.
+- **RabbitMQ broker**: routes tasks to agent and worker queues and captures rejected messages in DLQ.
+- **Agents**: planner, specification helper, implementation, testbench, reflection, debug.
+- **Deterministic workers**: lint, TB lint, simulation, acceptance, distillation.
+- **Artifact stores**:
+  - `artifacts/generated/`
+  - `artifacts/task_memory/`
+  - `artifacts/observability/`
 
-## State Progression
-- Main success progression: `PENDING -> IMPLEMENTING -> LINTING -> TESTBENCHING -> TB_LINTING -> SIMULATING -> ACCEPTING -> DONE`.
-- Repair-loop progression (when enabled): `SIMULATING -> DISTILLING -> REFLECTING -> DEBUGGING -> (LINTING/TB_LINTING/SIMULATING)`.
+## Execution Model
+- DAG-driven scheduling with dependency gating.
+- Per-task routing through broker exchange/queues.
+- Run-scoped result routing (`RESULTS.<run_id>`) to isolate concurrent runs.
+- Attempt tracking and bounded debug retries per failure reason.
 
-## Queue Routing (default)
-- `REASONING` -> `agent_tasks`
-- `LIGHT_DETERMINISTIC` -> `process_tasks`
-- `HEAVY_DETERMINISTIC` -> `simulation_tasks`
-- Results -> run-scoped `RESULTS.<run_id>` binding
-- Rejects (`requeue=false`) -> DLQ
+## State Machine
+- Main path:
+  - `PENDING -> IMPLEMENTING -> LINTING -> TESTBENCHING -> TB_LINTING -> SIMULATING -> ACCEPTING -> DONE`
+- Repair loop path:
+  - `SIMULATING (fail) -> DISTILLING -> REFLECTING -> DEBUGGING -> retry`
+  - `LINTING/TB_LINTING (fail) -> DEBUGGING -> retry`
+- Dependents of a failed node can be marked `FAILED` without running.
 
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/orchestrator/orchestrator_service.py`
-- `/home/jacobo/school/FPGA_Design_Agent/core/runtime/broker.py`
-- `/home/jacobo/school/FPGA_Design_Agent/infrastructure/rabbitmq-definitions.json`
+## DLQ And Failure Isolation
+- Queues are declared with `x-dead-letter-exchange`.
+- Non-requeued rejections (`requeue=false`) are routed to `dead_letter_queue`.
+- This prevents poison-pill tasks from blocking healthy work.
 
-## Related Docs
-- [queues-and-workers.md](./queues-and-workers.md)
-- [components/orchestrator.md](./components/orchestrator.md)
-- [components/workers.md](./components/workers.md)
+## Related Code
+- `orchestrator/orchestrator_service.py`
+- `orchestrator/state_machine.py`
+- `core/runtime/broker.py`
+- `infrastructure/rabbitmq-definitions.json`

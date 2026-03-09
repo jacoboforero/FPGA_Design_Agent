@@ -14,8 +14,10 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,12 +29,15 @@ from agents.implementation.worker import ImplementationWorker
 from apps.cli import spec_flow
 from apps.cli.cli import connection_params_from_config, start_workers, stop_workers
 from core.observability.agentops_tracker import get_tracker
+from core.observability.setup import configure_observability
 from core.runtime.broker import create_run_routing, declare_task_topology
 from core.runtime.config import DEFAULT_CONFIG_PATH, get_runtime_config, set_runtime_config
 from core.schemas.contracts import AgentType, EntityType, TaskMessage, TaskStatus
 from orchestrator import planner
 from orchestrator.context_builder import DemoContextBuilder
 from orchestrator.orchestrator_service import DemoOrchestrator
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 PROBLEM_RE = re.compile(r"^(Prob\d+)", re.IGNORECASE)
 SUMMARY_KV_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([-+]?[0-9]*\.?[0-9]+)\s*$")
@@ -78,9 +83,36 @@ class PromptCase:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run VerilogEval-compatible benchmark scoring.")
+    parser = argparse.ArgumentParser(description="Run VerilogEval-compatible benchmark workflows.")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default="run",
+        choices=("run", "analyze", "compare", "list-problems"),
+        help="Benchmark command to execute (default: run).",
+    )
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to runtime YAML config.")
     parser.add_argument("--preset", default="benchmark", help="Preset to use (default: benchmark).")
+    parser.add_argument(
+        "--output-root",
+        default=None,
+        help="Override benchmark output root from config (default: benchmark.output_root).",
+    )
+    parser.add_argument(
+        "--campaign",
+        default="manual",
+        help="Campaign label under output root for run mode (default: manual).",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Explicit run ID for run mode. Defaults to UTC timestamp + random suffix.",
+    )
+    parser.add_argument(
+        "--run-dir",
+        default=None,
+        help="Explicit run directory for run mode (overrides output-root/campaign/run-id layout).",
+    )
     parser.add_argument(
         "--sampled",
         action="store_true",
@@ -101,9 +133,50 @@ def build_parser() -> argparse.ArgumentParser:
         help="Per-sample orchestrated pipeline timeout in seconds (default: 180).",
     )
     parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow deleting pre-existing output directories for this run/mode.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a partially completed run by skipping samples with existing artifacts.",
+    )
+    parser.add_argument(
+        "--purge-queues",
+        action="store_true",
+        help="Purge benchmark queues before run mode starts (unsafe in shared environments).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run mode only: print planned execution details without generating samples.",
+    )
+    parser.add_argument(
         "--build-dir",
         default=None,
-        help="Analyze-only mode: existing build directory containing summary.csv/summary.txt.",
+        help="Analyze mode target directory containing summary.csv/summary.txt.",
+    )
+    parser.add_argument(
+        "--left-dir",
+        default=None,
+        help="Compare mode: left benchmark mode directory (or run directory with canonical/sampled).",
+    )
+    parser.add_argument(
+        "--right-dir",
+        default=None,
+        help="Compare mode: right benchmark mode directory (or run directory with canonical/sampled).",
+    )
+    parser.add_argument(
+        "--compare-out",
+        default=None,
+        help="Compare mode: optional JSON output path for diff report.",
+    )
+    parser.add_argument(
+        "--list-format",
+        choices=("text", "json"),
+        default="text",
+        help="List-problems output format (default: text).",
     )
     parser.add_argument(
         "--max-problems",
@@ -118,6 +191,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run only specific problem IDs (repeatable), e.g. --only-problem Prob079",
     )
     return parser
+
+
+def _slug_token(text: str | None, *, default: str) -> str:
+    raw = str(text or "").strip()
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-._")
+    return cleaned or default
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _resolve_git_sha(repo_root: Path) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return (proc.stdout or "").strip()
+
+
+def _safe_read_json(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _script_cmd(script: Path, args: list[str]) -> list[str]:
@@ -425,6 +533,94 @@ def _find_summary_files(build_dir: Path) -> tuple[Path, Path]:
             "Expected summary.txt and summary.csv."
         )
     return summary_txt, summary_csv
+
+
+def _resolve_mode_dir_for_compare(path_like: Path) -> Path:
+    path = path_like.resolve()
+    aggregate = path / "aggregate.json"
+    if aggregate.exists():
+        return path
+
+    candidates = [path / "canonical", path / "sampled"]
+    existing = [cand for cand in candidates if (cand / "aggregate.json").exists()]
+    if len(existing) == 1:
+        return existing[0]
+    if len(existing) > 1:
+        raise RuntimeError(
+            f"Compare path '{path}' contains both canonical and sampled outputs. "
+            "Pass an explicit mode directory."
+        )
+    raise RuntimeError(f"Could not resolve benchmark mode directory from '{path}'.")
+
+
+def _metric_number(metrics: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        if key not in metrics:
+            continue
+        try:
+            return float(metrics[key])
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def _build_compare_report(left_dir: Path, right_dir: Path) -> dict[str, Any]:
+    left_payload = _safe_read_json(left_dir / "aggregate.json")
+    right_payload = _safe_read_json(right_dir / "aggregate.json")
+    left_metrics = (
+        left_payload.get("aggregate", {}).get("official_metrics", {})
+        if isinstance(left_payload.get("aggregate"), dict)
+        else {}
+    )
+    right_metrics = (
+        right_payload.get("aggregate", {}).get("official_metrics", {})
+        if isinstance(right_payload.get("aggregate"), dict)
+        else {}
+    )
+    if not isinstance(left_metrics, dict):
+        left_metrics = {}
+    if not isinstance(right_metrics, dict):
+        right_metrics = {}
+
+    left_pass = _metric_number(left_metrics, "pass_rate")
+    right_pass = _metric_number(right_metrics, "pass_rate")
+    left_rows = left_payload.get("aggregate", {}).get("row_count") if isinstance(left_payload.get("aggregate"), dict) else None
+    right_rows = right_payload.get("aggregate", {}).get("row_count") if isinstance(right_payload.get("aggregate"), dict) else None
+
+    left_manifest = _safe_read_json(left_dir.parent / "run_manifest.json")
+    right_manifest = _safe_read_json(right_dir.parent / "run_manifest.json")
+    left_model = (
+        left_manifest.get("runtime", {}).get("llm", {}).get("default_model")
+        if isinstance(left_manifest.get("runtime"), dict)
+        else None
+    )
+    right_model = (
+        right_manifest.get("runtime", {}).get("llm", {}).get("default_model")
+        if isinstance(right_manifest.get("runtime"), dict)
+        else None
+    )
+
+    report: dict[str, Any] = {
+        "generated_at": _utc_now_iso(),
+        "left": {
+            "mode_dir": str(left_dir),
+            "model": left_model or "",
+            "pass_rate": left_pass,
+            "row_count": left_rows,
+            "official_metrics": left_metrics,
+        },
+        "right": {
+            "mode_dir": str(right_dir),
+            "model": right_model or "",
+            "pass_rate": right_pass,
+            "row_count": right_rows,
+            "official_metrics": right_metrics,
+        },
+        "delta": {
+            "pass_rate": (right_pass - left_pass) if left_pass is not None and right_pass is not None else None,
+        },
+    }
+    return report
 
 
 def _run_optional_failure_reports(root: Path, build_dir: Path, summary_csv: Path) -> None:
@@ -897,11 +1093,16 @@ def _generate_one_sample_legacy(
     case: PromptCase,
     sample_index: int,
     sample_dir: Path,
+    run_name: str,
 ) -> None:
     sample_dir.mkdir(parents=True, exist_ok=True)
     sample_name = f"{case.problem_id}_sample{sample_index:02d}"
     sample_sv = sample_dir / f"{sample_name}.sv"
     generate_log_path = sample_dir / f"{sample_name}-sv-generate.log"
+    configure_observability(
+        run_name=run_name,
+        default_tags=["benchmark", "legacy_lightweight"],
+    )
 
     execution_policy = {
         "preset": "benchmark",
@@ -977,6 +1178,7 @@ def _generate_one_sample_legacy(
             return
         finally:
             spec_flow.SPEC_DIR = prev_spec_dir
+            get_tracker().finalize()
 
 
 def _generate_one_sample_orchestrated(
@@ -986,6 +1188,7 @@ def _generate_one_sample_orchestrated(
     sample_index: int,
     sample_dir: Path,
     pipeline_timeout_s: float,
+    run_name: str,
     execution_policy: dict[str, Any],
     task_memory_root: Path,
 ) -> None:
@@ -998,7 +1201,6 @@ def _generate_one_sample_orchestrated(
     target_module_name = _resolve_target_module_name(case, prompt_text)
     expected_interface = _resolve_target_interface(case)
 
-    before = _tracker_totals()
     pipeline_status = TaskStatus.FAILURE
     detail_message = ""
 
@@ -1007,13 +1209,22 @@ def _generate_one_sample_orchestrated(
         spec_dir = runtime_root / "specs"
         generated_root = runtime_root / "generated"
         run_routing = create_run_routing()
+        configure_observability(
+            run_name=run_name,
+            run_id=run_routing.run_id,
+            default_tags=["benchmark", "orchestrated"],
+        )
+        before = _tracker_totals()
+        sample_execution_policy = dict(execution_policy)
+        sample_execution_policy["run_name"] = run_name
         metadata: dict[str, Any] = {
             "problem_id": case.problem_id,
             "sample_index": sample_index,
             "target_module": target_module_name,
+            "run_name": run_name,
             "run_id": run_routing.run_id,
             "results_routing_key": run_routing.results_routing_key,
-            "execution_policy": execution_policy,
+            "execution_policy": sample_execution_policy,
             "started_at": datetime.now(timezone.utc).isoformat(),
             "pipeline_timeout_s": pipeline_timeout_s,
         }
@@ -1032,7 +1243,7 @@ def _generate_one_sample_orchestrated(
             planner.generate_from_specs(
                 spec_dir=spec_dir,
                 out_dir=generated_root,
-                execution_policy=execution_policy,
+                execution_policy=sample_execution_policy,
             )
 
             design_context_path = generated_root / "design_context.json"
@@ -1060,7 +1271,7 @@ def _generate_one_sample_orchestrated(
                 run_id=run_routing.run_id,
                 results_routing_key=run_routing.results_routing_key,
                 allow_repair_loop=True,
-                execution_policy=execution_policy,
+                execution_policy=sample_execution_policy,
             ).run(timeout_s=pipeline_timeout_s)
             failed_nodes = sorted(node_id for node_id, state in final_states.items() if state != "DONE")
             if failed_nodes:
@@ -1123,6 +1334,7 @@ def _generate_one_sample_orchestrated(
                 task_memory_root=task_memory_root,
                 metadata=metadata,
             )
+            get_tracker().finalize()
 
 
 def _run_sample_test(
@@ -1209,9 +1421,21 @@ def _run_mode(
     vvp_bin: str,
     legacy_lightweight: bool,
     pipeline_timeout_s: float,
-) -> None:
+    resume: bool = False,
+    overwrite: bool = False,
+    purge_queues: bool = False,
+    run_name_prefix: str | None = None,
+) -> dict[str, Any]:
+    if resume and overwrite:
+        raise RuntimeError("Choose either resume or overwrite, not both.")
     if out_dir.exists():
-        shutil.rmtree(out_dir)
+        if overwrite:
+            shutil.rmtree(out_dir)
+        elif not resume:
+            raise RuntimeError(
+                f"Benchmark output directory already exists: {out_dir}\n"
+                "Use --resume to continue an existing run or --overwrite to replace it."
+            )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     baseline_cfg = get_runtime_config().model_copy(deep=True)
@@ -1219,10 +1443,17 @@ def _run_mode(
     run_cfg.llm.temperature = float(sample_cfg["temperature"])
     run_cfg.llm.top_p = float(sample_cfg["top_p"])
     set_runtime_config(run_cfg)
+    if run_name_prefix:
+        mode_run_name = _slug_token(f"{run_name_prefix}_{run_label}", default=f"benchmark_{run_label}")
+    else:
+        mode_run_name = f"benchmark_{run_label}_{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
     task_memory_root = Path("artifacts/task_memory").resolve()
     workers: list[threading.Thread] = []
     stop_event: threading.Event | None = None
+    generation_failures = 0
+    sample_test_failures = 0
+    skipped_samples = 0
 
     try:
         if legacy_lightweight:
@@ -1235,11 +1466,14 @@ def _run_mode(
         else:
             connection_params = connection_params_from_config()
             _ensure_broker_connection(connection_params)
-            _purge_benchmark_queues(connection_params)
+            if purge_queues:
+                _purge_benchmark_queues(connection_params)
             stop_event = threading.Event()
             workers = start_workers(connection_params, stop_event)
 
         n_samples = int(sample_cfg["n"])
+        total_samples = len(cases) * n_samples
+        sample_counter = 0
         execution_policy = {
             "preset": "benchmark",
             "spec_profile": "benchmark",
@@ -1250,44 +1484,61 @@ def _run_mode(
             "disable_tb_generation": True,
             "debug_rtl_only": True,
             "debug_max_retries": int(get_runtime_config().debug.max_retries),
+            "run_name": mode_run_name,
         }
 
         with _isolated_task_memory(task_memory_root):
             for case in cases:
                 sample_dir = out_dir / case.problem_id
                 for sample_index in range(1, n_samples + 1):
+                    sample_counter += 1
+                    progress_prefix = f"[{sample_counter}/{total_samples}] {case.problem_id} sample {sample_index:02d}/{n_samples}"
+                    sample_sv = _sample_sv_path(case, sample_index, sample_dir)
+                    sample_iv_log = _sample_iv_log_path(case, sample_index, sample_dir)
+                    if resume and sample_sv.exists() and sample_iv_log.exists():
+                        skipped_samples += 1
+                        print(f"{progress_prefix} skipped (resume: sample + iv log already exist)")
+                        continue
+
+                    print(f"{progress_prefix} running")
                     generation_error: Exception | None = None
-                    try:
-                        if legacy_lightweight:
-                            _generate_one_sample_legacy(
-                                worker=worker,
+                    if not (resume and sample_sv.exists()):
+                        try:
+                            if legacy_lightweight:
+                                _generate_one_sample_legacy(
+                                    worker=worker,
+                                    case=case,
+                                    sample_index=sample_index,
+                                    sample_dir=sample_dir,
+                                    run_name=mode_run_name,
+                                )
+                            else:
+                                _generate_one_sample_orchestrated(
+                                    connection_params=connection_params,
+                                    case=case,
+                                    sample_index=sample_index,
+                                    sample_dir=sample_dir,
+                                    pipeline_timeout_s=pipeline_timeout_s,
+                                    run_name=mode_run_name,
+                                    execution_policy=execution_policy,
+                                    task_memory_root=task_memory_root,
+                                )
+                        except Exception as exc:  # noqa: BLE001
+                            generation_error = exc
+                            generation_failures += 1
+                            _ensure_generate_failure_log(
                                 case=case,
                                 sample_index=sample_index,
                                 sample_dir=sample_dir,
+                                error=exc,
                             )
-                        else:
-                            _generate_one_sample_orchestrated(
-                                connection_params=connection_params,
-                                case=case,
-                                sample_index=sample_index,
-                                sample_dir=sample_dir,
-                                pipeline_timeout_s=pipeline_timeout_s,
-                                execution_policy=execution_policy,
-                                task_memory_root=task_memory_root,
+                            _ensure_placeholder_sample_sv(case, sample_index, sample_dir)
+                            print(
+                                f"[WARN] {case.problem_id} sample {sample_index:02d} generation failed; "
+                                f"marked as failed and continuing: {exc}"
                             )
-                    except Exception as exc:  # noqa: BLE001
-                        generation_error = exc
-                        _ensure_generate_failure_log(
-                            case=case,
-                            sample_index=sample_index,
-                            sample_dir=sample_dir,
-                            error=exc,
-                        )
-                        _ensure_placeholder_sample_sv(case, sample_index, sample_dir)
-                        print(
-                            f"[WARN] {case.problem_id} sample {sample_index:02d} generation failed; "
-                            f"marked as failed and continuing: {exc}"
-                        )
+                    else:
+                        print(f"{progress_prefix} reusing existing sample SV (resume)")
 
                     try:
                         _run_sample_test(
@@ -1305,6 +1556,7 @@ def _run_mode(
                             stage="sample_test",
                             error=exc,
                         )
+                        sample_test_failures += 1
                         print(
                             f"[WARN] {case.problem_id} sample {sample_index:02d} sample-test failed; "
                             f"marked as failed and continuing: {exc}"
@@ -1327,104 +1579,296 @@ def _run_mode(
             summary_txt=summary_txt,
             summary_csv=summary_csv,
         )
+        result = {
+            "out_dir": str(out_dir),
+            "summary_txt": str(summary_txt),
+            "summary_csv": str(summary_csv),
+            "aggregate_json": str(out_dir / "aggregate.json"),
+            "generation_failures": generation_failures,
+            "sample_test_failures": sample_test_failures,
+            "skipped_samples": skipped_samples,
+            "total_samples": total_samples,
+        }
+        print(
+            f"[mode:{run_label}] samples={total_samples}, skipped={skipped_samples}, "
+            f"generation_failures={generation_failures}, sample_test_failures={sample_test_failures}"
+        )
+        return result
     finally:
         if workers and stop_event is not None:
             stop_workers(workers, stop_event)
         set_runtime_config(baseline_cfg)
 
 
+def _run_analyze_mode(*, build_dir: Path) -> Path:
+    summary_txt, summary_csv = _find_summary_files(build_dir)
+    _write_internal_summary(
+        out_dir=build_dir,
+        run_label="analyze_only",
+        sample_cfg={},
+        summary_txt=summary_txt,
+        summary_csv=summary_csv,
+    )
+    return build_dir / "aggregate.json"
+
+
+def _resolve_run_root(*, output_root: Path, campaign: str, run_id: str | None, run_dir: str | None) -> Path:
+    if run_dir:
+        return Path(run_dir).resolve()
+    campaign_token = _slug_token(campaign, default="manual")
+    generated_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
+    run_token = _slug_token(run_id, default=generated_id)
+    return output_root / campaign_token / run_token
+
+
+def _print_problem_list(cases: list[PromptCase], *, output_format: str) -> None:
+    if output_format == "json":
+        payload = [
+            {
+                "problem_id": case.problem_id,
+                "prompt_path": str(case.prompt_path),
+                "test_sv": str(case.test_sv),
+                "ref_sv": str(case.ref_sv),
+            }
+            for case in cases
+        ]
+        print(json.dumps(payload, indent=2))
+        return
+    print(f"Discovered {len(cases)} benchmark problems:")
+    for case in cases:
+        print(f"- {case.problem_id} ({case.prompt_path.name})")
+
+
 def run_from_args(args: argparse.Namespace) -> None:
     runtime_cfg = get_runtime_config()
     benchmark_cfg = runtime_cfg.benchmark
+
+    command = str(getattr(args, "command", "run") or "run").strip().lower()
+    build_dir_arg = getattr(args, "build_dir", None)
+    if command == "run" and build_dir_arg:
+        command = "analyze"
+
     root = Path(benchmark_cfg.verilog_eval_root).resolve()
     prompts_dir = Path(benchmark_cfg.prompts_dir).resolve()
-    output_root = Path(benchmark_cfg.output_root).resolve()
+    output_root_arg = getattr(args, "output_root", None)
+    output_root = Path(output_root_arg).resolve() if output_root_arg else Path(benchmark_cfg.output_root).resolve()
+
+    if command == "compare":
+        left_raw = getattr(args, "left_dir", None)
+        right_raw = getattr(args, "right_dir", None)
+        if not left_raw or not right_raw:
+            raise RuntimeError("Compare mode requires both --left-dir and --right-dir.")
+        left_dir = _resolve_mode_dir_for_compare(Path(left_raw))
+        right_dir = _resolve_mode_dir_for_compare(Path(right_raw))
+        report = _build_compare_report(left_dir, right_dir)
+        compare_out = getattr(args, "compare_out", None)
+        if compare_out:
+            out_path = Path(compare_out).resolve()
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            print(f"Benchmark compare report written: {out_path}")
+        else:
+            print(json.dumps(report, indent=2))
+        delta = report.get("delta", {}).get("pass_rate")
+        if delta is not None:
+            print(f"Pass-rate delta (right - left): {float(delta):+.6f}")
+        return
+
+    if command == "analyze":
+        if not build_dir_arg:
+            raise RuntimeError("Analyze mode requires --build-dir.")
+        aggregate_path = _run_analyze_mode(build_dir=Path(build_dir_arg).resolve())
+        print(f"Benchmark analysis complete: {aggregate_path}")
+        return
 
     dataset_dir = _ensure_framework(root)
     if not prompts_dir.exists():
         raise RuntimeError(f"Benchmark prompt directory not found: {prompts_dir}")
-    if not _has_langchain_schema():
-        raise RuntimeError(
-            "Missing Python dependency 'langchain.schema' required by VerilogEval sv-iv-analyze. "
-            "Install with: poetry run pip install 'langchain<0.2'"
-        )
-
-    if args.build_dir:
-        build_dir = Path(args.build_dir).resolve()
-        summary_txt, summary_csv = _find_summary_files(build_dir)
-        _write_internal_summary(
-            out_dir=build_dir,
-            run_label="analyze_only",
-            sample_cfg={},
-            summary_txt=summary_txt,
-            summary_csv=summary_csv,
-        )
-        print(f"Benchmark analysis complete: {build_dir / 'aggregate.json'}")
-        return
-
-    verilator_bin = _resolve_tool(runtime_cfg.tools.verilator_path, "verilator")
-    iverilog_bin = _resolve_tool(runtime_cfg.tools.iverilog_path, "iverilog")
-    vvp_bin = _resolve_tool(runtime_cfg.tools.vvp_path, "vvp")
-
-    if not args.legacy_lightweight and not verilator_bin:
-        raise RuntimeError(
-            "Orchestrated benchmark mode requires verilator on PATH "
-            "(or configured in tools.verilator_path)."
-        )
-    if not iverilog_bin or not vvp_bin:
-        raise RuntimeError(
-            "Benchmark runs require both iverilog and vvp on PATH (or configured in tools.iverilog_path/tools.vvp_path)."
-        )
-
-    if not args.legacy_lightweight:
-        _ensure_broker_connection(connection_params_from_config())
 
     oracle_manifest: dict[str, dict[str, str]] | None = None
     if benchmark_cfg.oracle_manifest:
         oracle_manifest = _load_oracle_manifest(Path(benchmark_cfg.oracle_manifest).resolve())
 
+    max_problems = max(0, int(getattr(args, "max_problems", 0) or 0))
+    only_problem = getattr(args, "only_problem", []) or []
     cases = _discover_prompt_cases(
         prompts_dir=prompts_dir,
         dataset_dir=dataset_dir,
-        only_problem=args.only_problem or [],
-        max_problems=max(0, int(args.max_problems or 0)),
+        only_problem=only_problem,
+        max_problems=max_problems,
         oracle_manifest=oracle_manifest,
     )
+
+    if command == "list-problems":
+        _print_problem_list(cases, output_format=str(getattr(args, "list_format", "text")))
+        return
+
+    legacy_lightweight = bool(getattr(args, "legacy_lightweight", False))
+    sampled = bool(getattr(args, "sampled", False))
+    resume = bool(getattr(args, "resume", False))
+    overwrite = bool(getattr(args, "overwrite", False))
+    purge_queues = bool(getattr(args, "purge_queues", False))
+    dry_run = bool(getattr(args, "dry_run", False))
+    if resume and overwrite:
+        raise RuntimeError("Choose either --resume or --overwrite, not both.")
+
+    if not dry_run and not _has_langchain_schema():
+        raise RuntimeError(
+            "Missing Python dependency 'langchain.schema' required by VerilogEval sv-iv-analyze. "
+            "Install with: poetry run pip install 'langchain<0.2'"
+        )
+
+    verilator_bin = _resolve_tool(runtime_cfg.tools.verilator_path, "verilator")
+    iverilog_bin = _resolve_tool(runtime_cfg.tools.iverilog_path, "iverilog")
+    vvp_bin = _resolve_tool(runtime_cfg.tools.vvp_path, "vvp")
+
+    if not dry_run and not legacy_lightweight and not verilator_bin:
+        raise RuntimeError(
+            "Orchestrated benchmark mode requires verilator on PATH "
+            "(or configured in tools.verilator_path)."
+        )
+    if not dry_run and (not iverilog_bin or not vvp_bin):
+        raise RuntimeError(
+            "Benchmark runs require both iverilog and vvp on PATH (or configured in tools.iverilog_path/tools.vvp_path)."
+        )
+
+    if not dry_run and not legacy_lightweight:
+        _ensure_broker_connection(connection_params_from_config())
+
+    run_root = _resolve_run_root(
+        output_root=output_root,
+        campaign=str(getattr(args, "campaign", "manual")),
+        run_id=getattr(args, "run_id", None),
+        run_dir=getattr(args, "run_dir", None),
+    )
+    if run_root.exists():
+        if overwrite:
+            if not dry_run:
+                shutil.rmtree(run_root)
+        elif not resume:
+            raise RuntimeError(
+                f"Benchmark run directory already exists: {run_root}\n"
+                "Use --resume to continue or --overwrite to replace it."
+            )
+
     canonical_cfg = {
         "n": int(benchmark_cfg.canonical.n),
         "temperature": float(benchmark_cfg.canonical.temperature),
         "top_p": float(benchmark_cfg.canonical.top_p),
     }
-    canonical_dir = output_root / "canonical"
-    _run_mode(
-        root=root,
-        out_dir=canonical_dir,
-        cases=cases,
-        sample_cfg=canonical_cfg,
-        run_label="canonical",
-        iverilog_bin=iverilog_bin,
-        vvp_bin=vvp_bin,
-        legacy_lightweight=bool(args.legacy_lightweight),
-        pipeline_timeout_s=float(args.pipeline_timeout),
-    )
-    print(f"Canonical benchmark complete: {canonical_dir / 'aggregate.json'}")
+    sampled_cfg = {
+        "n": int(benchmark_cfg.sampled.n),
+        "temperature": float(benchmark_cfg.sampled.temperature),
+        "top_p": float(benchmark_cfg.sampled.top_p),
+    }
+    canonical_dir = run_root / "canonical"
+    sampled_dir = run_root / "sampled"
 
-    if args.sampled:
-        sampled_cfg = {
-            "n": int(benchmark_cfg.sampled.n),
-            "temperature": float(benchmark_cfg.sampled.temperature),
-            "top_p": float(benchmark_cfg.sampled.top_p),
-        }
-        sampled_dir = output_root / "sampled"
-        _run_mode(
+    if dry_run:
+        print("Benchmark dry-run plan:")
+        print(f"- run_root: {run_root}")
+        print(f"- campaign: {run_root.parent.name}")
+        print(f"- run_id: {run_root.name}")
+        print(f"- problems: {len(cases)}")
+        print(f"- sampled_profile: {sampled}")
+        print(f"- canonical_samples_per_problem: {canonical_cfg['n']}")
+        if sampled:
+            print(f"- sampled_samples_per_problem: {sampled_cfg['n']}")
+        print(f"- legacy_lightweight: {legacy_lightweight}")
+        print(f"- resume: {resume}")
+        print(f"- overwrite: {overwrite}")
+        print(f"- purge_queues: {purge_queues}")
+        return
+
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = run_root / "run_manifest.json"
+    manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "status": "running",
+        "started_at": _utc_now_iso(),
+        "finished_at": "",
+        "command_line": " ".join(sys.argv),
+        "config_path": str(Path(getattr(args, "config", DEFAULT_CONFIG_PATH)).resolve()),
+        "preset": str(getattr(args, "preset", runtime_cfg.active_preset)),
+        "campaign": run_root.parent.name if run_root.parent != output_root else "",
+        "run_id": run_root.name,
+        "run_root": str(run_root),
+        "git_sha": _resolve_git_sha(REPO_ROOT),
+        "runtime": {
+            "llm": {
+                "provider": runtime_cfg.llm.provider,
+                "default_model": runtime_cfg.llm.default_model,
+            },
+            "benchmark": {
+                "prompts_dir": str(prompts_dir),
+                "verilog_eval_root": str(root),
+                "canonical": canonical_cfg,
+                "sampled": sampled_cfg,
+            },
+        },
+        "flags": {
+            "sampled": sampled,
+            "legacy_lightweight": legacy_lightweight,
+            "pipeline_timeout": float(getattr(args, "pipeline_timeout", 180.0)),
+            "resume": resume,
+            "overwrite": overwrite,
+            "purge_queues": purge_queues,
+        },
+        "filters": {
+            "max_problems": max_problems,
+            "only_problem": list(only_problem),
+            "problem_count": len(cases),
+            "problem_ids": [case.problem_id for case in cases],
+        },
+        "modes": {},
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    mode_results: dict[str, Any] = {}
+    run_name_prefix = f"benchmark_{run_root.parent.name}_{run_root.name}"
+    try:
+        mode_results["canonical"] = _run_mode(
             root=root,
-            out_dir=sampled_dir,
+            out_dir=canonical_dir,
             cases=cases,
-            sample_cfg=sampled_cfg,
-            run_label="sampled",
+            sample_cfg=canonical_cfg,
+            run_label="canonical",
             iverilog_bin=iverilog_bin,
             vvp_bin=vvp_bin,
-            legacy_lightweight=bool(args.legacy_lightweight),
-            pipeline_timeout_s=float(args.pipeline_timeout),
+            legacy_lightweight=legacy_lightweight,
+            pipeline_timeout_s=float(getattr(args, "pipeline_timeout", 180.0)),
+            resume=resume,
+            overwrite=overwrite,
+            purge_queues=purge_queues,
+            run_name_prefix=run_name_prefix,
         )
-        print(f"Sampled benchmark complete: {sampled_dir / 'aggregate.json'}")
+        print(f"Canonical benchmark complete: {canonical_dir / 'aggregate.json'}")
+
+        if sampled:
+            mode_results["sampled"] = _run_mode(
+                root=root,
+                out_dir=sampled_dir,
+                cases=cases,
+                sample_cfg=sampled_cfg,
+                run_label="sampled",
+                iverilog_bin=iverilog_bin,
+                vvp_bin=vvp_bin,
+                legacy_lightweight=legacy_lightweight,
+                pipeline_timeout_s=float(getattr(args, "pipeline_timeout", 180.0)),
+                resume=resume,
+                overwrite=overwrite,
+                purge_queues=purge_queues,
+                run_name_prefix=run_name_prefix,
+            )
+            print(f"Sampled benchmark complete: {sampled_dir / 'aggregate.json'}")
+        manifest["status"] = "success"
+    except Exception as exc:  # noqa: BLE001
+        manifest["status"] = "failed"
+        manifest["error"] = str(exc)
+        raise
+    finally:
+        manifest["finished_at"] = _utc_now_iso()
+        manifest["modes"] = mode_results
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"Benchmark run manifest: {manifest_path}")

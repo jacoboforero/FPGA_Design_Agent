@@ -4,6 +4,7 @@ Simulation worker. Runs iverilog/vvp and fails hard if tools are missing.
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess
 import threading
@@ -166,6 +167,13 @@ class SimulationWorker(threading.Thread):
             if oracle_ref is not None:
                 sources.append(str(oracle_ref))
             sources = list(dict.fromkeys(sources))
+            ctx = task.context if isinstance(task.context, dict) else {}
+            execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
+            verification_scope = str(ctx.get("verification_scope", "")).strip()
+            benchmark_mode = bool(execution_policy.get("benchmark_mode")) or verification_scope == "oracle_compare"
+            benchmark_timeout_floor_s = (
+                float(runtime_cfg.benchmark.sim_run_timeout_s) if benchmark_mode else 0.0
+            )
             stage_dir = Path("artifacts/task_memory") / str(node_id or "node") / _stage_dir("sim", attempt)
             stage_dir.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix=f"sim_{str(node_id or 'node')}_") as tmpdir:
@@ -197,13 +205,10 @@ class SimulationWorker(threading.Thread):
                     vvp_path=vvp,
                     sim_bin=sim_bin,
                     tool_spec=vvp_tool,
+                    benchmark_timeout_floor_s=benchmark_timeout_floor_s,
                 )
                 run = _run_subprocess(run_cmd, timeout=run_timeout, cwd=workdir)
                 run_output = "\n".join(part for part in [run.stdout, run.stderr] if part).strip()
-                ctx = task.context if isinstance(task.context, dict) else {}
-                execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
-                verification_scope = str(ctx.get("verification_scope", "")).strip()
-                benchmark_mode = bool(execution_policy.get("benchmark_mode")) or verification_scope == "oracle_compare"
                 has_failure_marker = _has_failure_marker(run_output)
                 benchmark_failure_reason = _benchmark_failure_reason(run_output) if benchmark_mode else None
                 if run.returncode != 0 or has_failure_marker or benchmark_failure_reason:
@@ -401,7 +406,8 @@ def _build_iverilog_command(
     if tool_spec is not None:
         try:
             spec = tool_spec.cmd("build")
-            cmd = spec.build(tool=iverilog_path, output=str(sim_bin), sources=" ".join(sources))
+            quoted_sources = " ".join(shlex.quote(str(src)) for src in sources)
+            cmd = spec.build(tool=iverilog_path, output=str(sim_bin), sources=quoted_sources)
             if cmd:
                 return cmd, float(spec.timeout_seconds)
         except Exception:  # noqa: BLE001
@@ -414,16 +420,18 @@ def _build_vvp_run_command(
     vvp_path: str,
     sim_bin: Path,
     tool_spec: ToolSpec | None,
+    benchmark_timeout_floor_s: float = 0.0,
 ) -> tuple[list[str], float]:
+    timeout_floor = max(0.0, float(benchmark_timeout_floor_s or 0.0))
     if tool_spec is not None:
         try:
             spec = tool_spec.cmd("run")
             cmd = [part for part in spec.build(tool=vvp_path, binary=str(sim_bin)) if part]
             if cmd:
-                return cmd, float(spec.timeout_seconds)
+                return cmd, max(float(spec.timeout_seconds), timeout_floor)
         except Exception:  # noqa: BLE001
             pass
-    return [vvp_path, str(sim_bin)], 30.0
+    return [vvp_path, str(sim_bin)], max(30.0, timeout_floor)
 
 
 def _benchmark_failure_reason(text: str | None) -> str | None:
@@ -468,7 +476,7 @@ def _maybe_rerun_with_dump(
     after = int(sim_cfg.fail_window_after)
     start_cycle = max(0, cycle - before)
     end_cycle = cycle + after
-    waveform_path = stage_dir / "waveform.vcd"
+    waveform_path = (stage_dir / "waveform.vcd").resolve()
     waveform_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Many benches gate dumping with $dumpoff/$dumpon and (incorrectly) treat DUMP_START=0 as "disabled".
@@ -502,8 +510,42 @@ def _maybe_rerun_with_dump(
     if rerun_output:
         log_lines.append(rerun_output)
     if waveform_path.exists():
-        log_lines.append(f"Waveform written to {waveform_path}.")
-        return {"waveform_path": str(waveform_path)}
+        if use_window and not _waveform_has_activity(waveform_path):
+            log_lines.append(
+                "Windowed waveform contained no timestamp activity; "
+                "retrying without DUMP_START/DUMP_END (bench may interpret window args as absolute time)."
+            )
+            try:
+                waveform_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            fallback_cmd, fallback_timeout = _build_vvp_dump_command(
+                vvp_path=vvp,
+                sim_bin=sim_bin,
+                waveform_path=waveform_path,
+                window_args="",
+                tool_spec=tool_spec,
+            )
+            log_lines.append("[rerun]")
+            log_lines.append("Retrying waveform capture without window args.")
+            log_lines.append(f"cmd: {' '.join(fallback_cmd)}")
+            log_lines.append(f"cwd: {workdir}")
+            try:
+                fallback = _run_subprocess(fallback_cmd, timeout=fallback_timeout, cwd=workdir)
+            except Exception as exc:  # noqa: BLE001
+                log_lines.append(f"Fallback waveform rerun failed: {exc}")
+                return {}
+            fallback_output = "\n".join(part for part in [fallback.stdout, fallback.stderr] if part).strip()
+            if fallback_output:
+                log_lines.append(fallback_output)
+
+        if waveform_path.exists():
+            if _waveform_has_activity(waveform_path):
+                log_lines.append(f"Waveform written to {waveform_path}.")
+                return {"waveform_path": str(waveform_path)}
+            log_lines.append("Waveform file was produced but has no timestamp activity.")
+            return {}
     log_lines.append("Waveform not generated; testbench may not support dump plusargs.")
     return {}
 
@@ -548,9 +590,9 @@ def _build_vvp_dump_command(
         try:
             spec = tool_spec.cmd("run_with_dump")
             cmd = spec.build(
-                tool=vvp_path,
-                binary=str(sim_bin),
-                waveform_path=str(waveform_path),
+                tool=shlex.quote(vvp_path),
+                binary=shlex.quote(str(sim_bin)),
+                waveform_path=shlex.quote(str(waveform_path)),
                 window_args=window_args,
             )
             cmd = [part for part in cmd if part]
@@ -563,3 +605,15 @@ def _build_vvp_dump_command(
     if window_args:
         cmd.extend(window_args.split())
     return cmd, 30.0
+
+
+def _waveform_has_activity(path: Path) -> bool:
+    try:
+        with path.open() as handle:
+            for raw in handle:
+                line = raw.lstrip()
+                if line.startswith("#"):
+                    return True
+    except Exception:
+        return False
+    return False

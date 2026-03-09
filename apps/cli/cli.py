@@ -291,9 +291,14 @@ def run_full(args: argparse.Namespace) -> None:
     }
 
     run_name = args.run_name or _default_run_name("cli_full")
+    run_routing = create_run_routing()
     execution_policy["run_name"] = run_name
     _purge_task_memory(REPO_ROOT / "artifacts" / "task_memory")
-    configure_observability(run_name=run_name, default_tags=["cli", "full", f"preset:{cfg.active_preset}"])
+    configure_observability(
+        run_name=run_name,
+        run_id=run_routing.run_id,
+        default_tags=["cli", "full", f"preset:{cfg.active_preset}"],
+    )
     # 1) Collect specs interactively
     if args.direct_spec and not args.spec_file:
         raise RuntimeError("--direct-spec requires --spec-file.")
@@ -321,7 +326,6 @@ def run_full(args: argparse.Namespace) -> None:
     planner_stop = threading.Event()
     planner_worker = PlannerWorker(params, planner_stop)
     planner_worker.start()
-    run_routing = create_run_routing()
     try:
         _run_planner_task(
             params,

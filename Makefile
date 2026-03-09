@@ -3,7 +3,7 @@ APP_SERVICE = app
 RABBIT_SERVICE = rabbitmq
 CLI_TIMEOUT ?= 0
 
-.PHONY: build up down shell deps cli test logs
+.PHONY: build up down shell deps cli test logs docs-check docs-check-full
 
 build:
 	$(COMPOSE) build $(APP_SERVICE)
@@ -28,3 +28,9 @@ test:
 
 logs:
 	$(COMPOSE) logs -f $(RABBIT_SERVICE)
+
+docs-check:
+	python3 scripts/validate_docs.py
+
+docs-check-full:
+	python3 scripts/validate_docs.py --run-commands

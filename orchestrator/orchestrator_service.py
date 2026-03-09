@@ -41,6 +41,29 @@ from orchestrator.context_builder import DemoContextBuilder
 from orchestrator.state_machine import Node, NodeState
 from orchestrator.task_memory import TaskMemory
 
+_BENCHMARK_MISMATCH_RE = re.compile(r"\bMismatches:\s*(\d+)\b", re.IGNORECASE)
+_TIMEOUT_RE = re.compile(r"\bTIMEOUT\b", re.IGNORECASE)
+
+
+def _extract_benchmark_mismatch_count(log_output: str | None) -> int | None:
+    if not log_output:
+        return None
+    matches = list(_BENCHMARK_MISMATCH_RE.finditer(log_output))
+    if not matches:
+        return None
+    return int(matches[-1].group(1))
+
+
+def _is_near_miss_sim_failure(log_output: str | None, *, max_mismatches: int) -> bool:
+    if not log_output:
+        return False
+    if _TIMEOUT_RE.search(log_output):
+        return False
+    mismatches = _extract_benchmark_mismatch_count(log_output)
+    if mismatches is None:
+        return False
+    return 0 < mismatches <= max_mismatches
+
 
 class DemoOrchestrator:
     """
@@ -182,23 +205,31 @@ class DemoOrchestrator:
             done_nodes = set()
             succeeded_nodes = set()
             tracker = get_tracker()
+            effective_run_name = str(self.execution_policy.get("run_name") or getattr(tracker, "run_name", "run"))
+            effective_run_id = str(self.run_id or getattr(tracker, "run_id", "unknown"))
             metrics = ExecutionMetricsRecorder(
-                run_id=self.run_id,
-                run_name=str(self.execution_policy.get("run_name") or getattr(tracker, "run_name", "run")),
+                run_id=effective_run_id,
+                run_name=effective_run_name,
             )
-            configured_retries = int(get_runtime_config().debug.max_retries)
+            runtime_cfg = get_runtime_config()
+            configured_retries = int(runtime_cfg.debug.max_retries)
             max_debug_retries = int(
                 self.execution_policy.get("debug_max_retries", configured_retries)
             )
+            near_miss_extra_retry_enabled = bool(runtime_cfg.benchmark.near_miss_extra_retry_enabled)
+            near_miss_max_mismatches = max(1, int(runtime_cfg.benchmark.near_miss_max_mismatches))
+            near_miss_extra_debug_retries = max(0, int(runtime_cfg.benchmark.near_miss_extra_debug_retries))
             disable_tb_generation = bool(self.execution_policy.get("disable_tb_generation", False))
             attempt_by_node: dict[str, int] = {}
             debug_attempts_by_node: dict[str, dict[str, int]] = {}
+            sim_near_miss_bonus_by_node: dict[str, int] = {}
+            sim_near_miss_mismatch_by_node: dict[str, int | None] = {}
             tb_generated_by_node: dict[str, bool] = {}
             post_lint_next_kind: dict[str, str] = {}
             pending_debug: dict[str, dict[str, Any]] = {}
             attempt_history_by_node: dict[str, dict[int, dict[str, Any]]] = {}
-            obs_run_dir = get_run_artifacts_dir()
-            results_consume_mode = str(get_runtime_config().broker.results_consume_mode or "consume").strip().lower()
+            obs_run_dir = get_run_artifacts_dir(run_name=effective_run_name, run_id=effective_run_id)
+            results_consume_mode = str(runtime_cfg.broker.results_consume_mode or "consume").strip().lower()
 
             def _dump_model(payload: Any) -> Any:
                 if payload is None:
@@ -426,6 +457,24 @@ class DemoOrchestrator:
                 debug_attempts_by_node.setdefault(node_id, {})
                 debug_attempts_by_node[node_id][reason] = 0
 
+            def _effective_debug_retry_limit(node_id: str, reason: str) -> int:
+                if reason != "sim":
+                    return max_debug_retries
+                return max_debug_retries + max(0, int(sim_near_miss_bonus_by_node.get(node_id, 0)))
+
+            def _set_sim_near_miss_bonus(node_id: str, log_output: str | None) -> int:
+                mismatch_count = _extract_benchmark_mismatch_count(log_output)
+                sim_near_miss_mismatch_by_node[node_id] = mismatch_count
+                if (
+                    near_miss_extra_retry_enabled
+                    and near_miss_extra_debug_retries > 0
+                    and _is_near_miss_sim_failure(log_output, max_mismatches=near_miss_max_mismatches)
+                ):
+                    sim_near_miss_bonus_by_node[node_id] = near_miss_extra_debug_retries
+                    return near_miss_extra_debug_retries
+                sim_near_miss_bonus_by_node[node_id] = 0
+                return 0
+
             def _snapshot_failure_sources(node_id: str, stage_key: str, *, kind: str) -> None:
                 if kind not in ("lint", "tb_lint", "sim", "debug"):
                     return
@@ -461,6 +510,8 @@ class DemoOrchestrator:
             def start_node(node_id: str) -> None:
                 attempt_by_node[node_id] = 1
                 debug_attempts_by_node[node_id] = {}
+                sim_near_miss_bonus_by_node[node_id] = 0
+                sim_near_miss_mismatch_by_node[node_id] = None
                 tb_generated_by_node[node_id] = disable_tb_generation
                 attempt_history_by_node[node_id] = {}
                 self._advance(node_id, NodeState.IMPLEMENTING)
@@ -500,6 +551,8 @@ class DemoOrchestrator:
                 self._advance(node_id, NodeState.FAILED)
                 active_nodes.discard(node_id)
                 done_nodes.add(node_id)
+                sim_near_miss_bonus_by_node.pop(node_id, None)
+                sim_near_miss_mismatch_by_node.pop(node_id, None)
                 fail_dependents(node_id)
                 start_ready_nodes()
 
@@ -508,6 +561,8 @@ class DemoOrchestrator:
                 active_nodes.discard(node_id)
                 done_nodes.add(node_id)
                 succeeded_nodes.add(node_id)
+                sim_near_miss_bonus_by_node.pop(node_id, None)
+                sim_near_miss_mismatch_by_node.pop(node_id, None)
                 start_ready_nodes()
 
             start_ready_nodes()
@@ -694,6 +749,25 @@ class DemoOrchestrator:
                         if stage_attempt is None:
                             _finish_failed(target_node)
                             continue
+                        near_miss_bonus = _set_sim_near_miss_bonus(target_node, result.log_output)
+                        near_miss_mismatches = sim_near_miss_mismatch_by_node.get(target_node)
+                        if near_miss_bonus > 0:
+                            self._emit_progress(
+                                (
+                                    f"{target_node} near-miss benchmark failure "
+                                    f"(mismatches={near_miss_mismatches}, threshold={near_miss_max_mismatches}); "
+                                    f"allowing +{near_miss_bonus} sim debug retry."
+                                ),
+                                event_type="execution_note",
+                                payload={
+                                    "node_id": target_node,
+                                    "reason": "sim_near_miss",
+                                    "attempt": stage_attempt,
+                                    "mismatches": near_miss_mismatches,
+                                    "near_miss_max_mismatches": near_miss_max_mismatches,
+                                    "near_miss_bonus_retries": near_miss_bonus,
+                                },
+                            )
                         self._advance(target_node, NodeState.DISTILLING)
                         distill_key = _stage_key("distill", stage_attempt)
                         distill = self._publish_task(
@@ -821,6 +895,8 @@ class DemoOrchestrator:
                     _register_task(target_node, sim_key, sim_task)
                 elif kind == "sim":
                     _reset_debug_attempts(target_node, "sim")
+                    sim_near_miss_bonus_by_node[target_node] = 0
+                    sim_near_miss_mismatch_by_node[target_node] = None
                     attempt = stage_attempt or attempt_by_node.get(target_node, 1)
                     self._advance(target_node, NodeState.ACCEPTING)
                     accept_key = _stage_key("acceptance", attempt)
@@ -858,11 +934,19 @@ class DemoOrchestrator:
                         _finish_failed(target_node)
                         continue
                     reason = "sim"
-                    if _get_debug_attempts(target_node, reason) >= max_debug_retries:
+                    effective_max_debug_retries = _effective_debug_retry_limit(target_node, reason)
+                    if _get_debug_attempts(target_node, reason) >= effective_max_debug_retries:
                         self._emit_progress(
-                            f"{target_node} debug retries exhausted for {reason} ({max_debug_retries}); failing.",
+                            f"{target_node} debug retries exhausted for {reason} ({effective_max_debug_retries}); failing.",
                             event_type="execution_note",
-                            payload={"node_id": target_node, "reason": reason, "attempt": attempt, "max_debug_retries": max_debug_retries},
+                            payload={
+                                "node_id": target_node,
+                                "reason": reason,
+                                "attempt": attempt,
+                                "max_debug_retries": max_debug_retries,
+                                "effective_max_debug_retries": effective_max_debug_retries,
+                                "near_miss_bonus_retries": sim_near_miss_bonus_by_node.get(target_node, 0),
+                            },
                         )
                         _finish_failed(target_node)
                         continue
@@ -881,6 +965,9 @@ class DemoOrchestrator:
                     debug_extra_ctx = {
                         "debug_reason": reason,
                         "attempt_history": _attempt_history_context(target_node, attempt),
+                        "near_miss_bonus_retries": sim_near_miss_bonus_by_node.get(target_node, 0),
+                        "near_miss_mismatches": sim_near_miss_mismatch_by_node.get(target_node),
+                        "near_miss_max_mismatches": near_miss_max_mismatches,
                     }
                     debug_extra_ctx.update(_stagnation_context(target_node, attempt))
                     debug = self._publish_task(

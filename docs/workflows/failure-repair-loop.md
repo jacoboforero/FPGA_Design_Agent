@@ -1,28 +1,24 @@
 # Failure Repair Loop Workflow
 
-## Purpose
-Document bounded retry behavior used after verification failures.
-
-## Audience
-Engineers debugging orchestrator retry decisions and stage transitions.
-
-## Scope
-Failure-loop transitions and stop conditions.
+When verification fails, the orchestrator can trigger a bounded repair loop instead of failing immediately.
 
 ## Loop Shape
-- Simulation failure may trigger: `DISTILLING -> REFLECTING -> DEBUGGING -> retry`.
-- Lint/TB-lint failures may trigger direct `DEBUGGING -> retry`.
-- Retry count is bounded by runtime policy.
+- Simulation failure path:
+  - `SIMULATING -> DISTILLING -> REFLECTING -> DEBUGGING -> retry`
+- Lint/TB-lint failure path:
+  - `LINTING/TB_LINTING -> DEBUGGING -> retry`
 
-## Stop Conditions
-- No meaningful code delta from debug patch.
-- Retry limit reached for failure class.
-- Non-recoverable stage failure.
+## Retry And Stop Conditions
+A node is failed when any of these happen:
+- debug retries are exhausted for that failure reason,
+- debug produces no meaningful code change,
+- a non-recoverable stage fails,
+- repair loop is disabled by policy.
 
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/orchestrator/orchestrator_service.py`
-- `/home/jacobo/school/FPGA_Design_Agent/core/runtime/config.py`
+## Debug Context Passed Between Attempts
+The loop can pass attempt history and stagnation context into reflection/debug tasks so repeated failure signatures are handled with strategy changes.
 
-## Related Docs
-- [../overview.md](../overview.md)
-- [../components/orchestrator.md](../components/orchestrator.md)
+## Related Code
+- `orchestrator/orchestrator_service.py`
+- `orchestrator/state_machine.py`
+- `core/runtime/config.py`

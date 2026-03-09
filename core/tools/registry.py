@@ -5,6 +5,7 @@ configs to workers. Resolution order: env var → YAML path → shutil.which.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -24,9 +25,9 @@ class CommandSpec:
     timeout_seconds: int = 30
 
     def build(self, **kwargs: Any) -> list[str]:
-        """Render the template and split into an argv list."""
+        """Render the template and parse it into an argv list."""
         rendered = self.template.format(**kwargs)
-        return rendered.split()
+        return shlex.split(rendered)
 
 
 @dataclass(frozen=True)

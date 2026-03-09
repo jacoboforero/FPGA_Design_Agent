@@ -1,29 +1,22 @@
 # LLM Gateway Component
 
-## Purpose
-Explain how model providers are selected and invoked for agent runtime calls.
+The LLM gateway provides provider/model abstraction for agent workers.
 
-## Audience
-Engineers changing provider adapters, model settings, or LLM error handling.
-
-## Scope
-Gateway initialization, provider selection, and adapter behavior.
-
-## Current Providers
+## Supported Providers
 - OpenAI adapter
 - Groq adapter
-- Optional local Qwen adapter utilities (kept as legacy/optional tooling)
+- Optional local/experimental adapters
 
-## Selection Rules
-- Runtime config selects provider/model defaults.
-- Secret presence gates initialization (missing key => gateway unavailable).
-- Agents should fail explicitly when LLM is required but unavailable.
+## Selection And Initialization
+- Provider/model defaults come from runtime config.
+- Provider credentials come from environment variables.
+- If credentials are missing, LLM-dependent agents return explicit failure instead of silently degrading.
 
-## Source of Truth
-- `/home/jacobo/school/FPGA_Design_Agent/agents/common/llm_gateway.py`
-- `/home/jacobo/school/FPGA_Design_Agent/adapters/llm/`
-- `/home/jacobo/school/FPGA_Design_Agent/core/runtime/config.py`
+## Reliability Notes
+- Agent workers should treat gateway unavailability as a clear task failure.
+- Retry behavior is controlled by caller/runtime policy, not by hidden gateway loops.
 
-## Related Docs
-- [../agents.md](../agents.md)
-- [../reference/runtime-config.md](../reference/runtime-config.md)
+## Related Code
+- `agents/common/llm_gateway.py`
+- `adapters/llm/`
+- `core/runtime/config.py`

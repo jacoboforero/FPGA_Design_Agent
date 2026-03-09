@@ -26,6 +26,13 @@ def get_run_artifacts_dir(*, run_name: Optional[str] = None, run_id: Optional[st
     return root
 
 
+def get_run_observability_dir(*, run_name: Optional[str] = None, run_id: Optional[str] = None) -> Path:
+    """Directory for run-scoped observability files (events/summary/metrics/costs)."""
+    root = get_run_artifacts_dir(run_name=run_name, run_id=run_id) / "observability"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def mirror_directory(src: Path, dst: Path) -> None:
     if not src.exists():
         return

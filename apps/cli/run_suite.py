@@ -169,7 +169,9 @@ Acceptance:
 
 def run_case(case: Dict[str, str], timeout: float) -> Dict[str, str]:
     clean_artifacts()
-    configure_observability(run_name=f"suite_{case['name']}", default_tags=["suite"])
+    run_routing = create_run_routing()
+    run_name = f"suite_{case['name']}"
+    configure_observability(run_name=run_name, run_id=run_routing.run_id, default_tags=["suite"])
     spec_flow.collect_specs_from_text(case["name"], case["spec"], interactive=False)
 
     design_context = ARTIFACTS_GEN / "design_context.json"
@@ -177,7 +179,6 @@ def run_case(case: Dict[str, str], timeout: float) -> Dict[str, str]:
 
     params = connection_params_from_env()
     _purge_broker_queues(params)
-    run_routing = create_run_routing()
     runtime_cfg = get_runtime_config()
     preset = runtime_cfg.resolved_preset
     execution_policy = {
@@ -187,6 +188,7 @@ def run_case(case: Dict[str, str], timeout: float) -> Dict[str, str]:
         "allow_repair_loop": preset.allow_repair_loop,
         "benchmark_mode": preset.benchmark_mode,
         "debug_max_retries": runtime_cfg.debug.max_retries,
+        "run_name": run_name,
     }
     stop_event = threading.Event()
     workers = start_workers(params, stop_event)

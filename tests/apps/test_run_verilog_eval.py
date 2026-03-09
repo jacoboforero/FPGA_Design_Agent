@@ -12,10 +12,12 @@ import apps.cli.run_verilog_eval as run_verilog_eval
 from apps.cli.run_verilog_eval import (
     PromptCase,
     _assert_generated_interface_matches,
+    _build_compare_report,
     _bind_benchmark_oracle_assets,
     _discover_prompt_cases,
     _ensure_framework,
     _load_oracle_manifest,
+    _resolve_mode_dir_for_compare,
     _run_official_analyze,
     _script_cmd,
     _run_mode,
@@ -432,8 +434,13 @@ def test_bind_benchmark_oracle_assets_repoints_design_context(tmp_path: Path):
 def test_build_parser_includes_orchestrated_flags():
     parser = build_parser()
     args = parser.parse_args([])
+    assert args.command == "run"
     assert hasattr(args, "legacy_lightweight")
     assert hasattr(args, "pipeline_timeout")
+    assert hasattr(args, "resume")
+    assert hasattr(args, "overwrite")
+    assert hasattr(args, "purge_queues")
+    assert hasattr(args, "dry_run")
     assert args.legacy_lightweight is False
     assert args.pipeline_timeout == 180.0
 
@@ -526,6 +533,88 @@ def test_run_from_args_legacy_flag_uses_legacy_mode(tmp_path: Path, monkeypatch)
     )
     run_from_args(args)
     assert captured["legacy"] is True
+
+
+def test_run_from_args_dry_run_skips_tool_and_execution_checks(tmp_path: Path, monkeypatch):
+    framework_root, prompts_dir = _benchmark_fixture_tree(tmp_path)
+    cfg = load_runtime_config()
+    cfg.benchmark.verilog_eval_root = str(framework_root)
+    cfg.benchmark.prompts_dir = str(prompts_dir)
+    cfg.benchmark.output_root = str(tmp_path / "out")
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval.get_runtime_config", lambda: cfg)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._resolve_tool", lambda configured, default_name: None)
+    monkeypatch.setattr(
+        "apps.cli.run_verilog_eval._run_mode",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("should not execute in dry-run")),
+    )
+
+    args = argparse.Namespace(
+        command="run",
+        config="config/runtime.yaml",
+        preset="benchmark",
+        output_root=None,
+        campaign="dryrun_demo",
+        run_id="run001",
+        run_dir=None,
+        sampled=False,
+        legacy_lightweight=False,
+        pipeline_timeout=180.0,
+        overwrite=False,
+        resume=False,
+        purge_queues=False,
+        dry_run=True,
+        build_dir=None,
+        left_dir=None,
+        right_dir=None,
+        compare_out=None,
+        list_format="text",
+        max_problems=0,
+        only_problem=[],
+    )
+    run_from_args(args)
+
+
+def test_run_from_args_dry_run_overwrite_is_non_destructive(tmp_path: Path, monkeypatch):
+    framework_root, prompts_dir = _benchmark_fixture_tree(tmp_path)
+    cfg = load_runtime_config()
+    cfg.benchmark.verilog_eval_root = str(framework_root)
+    cfg.benchmark.prompts_dir = str(prompts_dir)
+    cfg.benchmark.output_root = str(tmp_path / "out")
+
+    existing_run = Path(cfg.benchmark.output_root) / "dryrun_demo" / "run001"
+    existing_run.mkdir(parents=True)
+    marker = existing_run / "keep.txt"
+    marker.write_text("keep\n", encoding="utf-8")
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval.get_runtime_config", lambda: cfg)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._resolve_tool", lambda configured, default_name: None)
+
+    args = argparse.Namespace(
+        command="run",
+        config="config/runtime.yaml",
+        preset="benchmark",
+        output_root=None,
+        campaign="dryrun_demo",
+        run_id="run001",
+        run_dir=None,
+        sampled=False,
+        legacy_lightweight=False,
+        pipeline_timeout=180.0,
+        overwrite=True,
+        resume=False,
+        purge_queues=False,
+        dry_run=True,
+        build_dir=None,
+        left_dir=None,
+        right_dir=None,
+        compare_out=None,
+        list_format="text",
+        max_problems=0,
+        only_problem=[],
+    )
+    run_from_args(args)
+    assert marker.exists()
 
 
 def test_run_mode_continues_on_orchestrated_failure(tmp_path: Path, monkeypatch):
@@ -719,6 +808,48 @@ def test_write_generate_log_uses_resp_tokens_key(tmp_path: Path):
     assert "prompt_tokens = 123" in text
     assert "resp_tokens = 45" in text
     assert "response_tokens" not in text
+
+
+def test_run_mode_refuses_existing_output_without_resume_or_overwrite(tmp_path: Path):
+    out_dir = tmp_path / "existing"
+    out_dir.mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="already exists"):
+        _run_mode(
+            root=tmp_path,
+            out_dir=out_dir,
+            cases=[],
+            sample_cfg={"n": 1, "temperature": 0.0, "top_p": 0.01},
+            run_label="canonical",
+            iverilog_bin="/bin/true",
+            vvp_bin="/bin/true",
+            legacy_lightweight=True,
+            pipeline_timeout_s=1.0,
+        )
+
+
+def test_resolve_mode_dir_for_compare_accepts_mode_dir(tmp_path: Path):
+    mode_dir = tmp_path / "campaign" / "run_a" / "canonical"
+    mode_dir.mkdir(parents=True)
+    (mode_dir / "aggregate.json").write_text("{}\n")
+    assert _resolve_mode_dir_for_compare(mode_dir) == mode_dir.resolve()
+
+
+def test_build_compare_report_uses_nested_official_metrics(tmp_path: Path):
+    left_dir = tmp_path / "left"
+    right_dir = tmp_path / "right"
+    left_dir.mkdir()
+    right_dir.mkdir()
+    (left_dir / "aggregate.json").write_text(
+        json.dumps({"aggregate": {"official_metrics": {"pass_rate": 0.25}, "row_count": 10}, "per_problem": []}) + "\n"
+    )
+    (right_dir / "aggregate.json").write_text(
+        json.dumps({"aggregate": {"official_metrics": {"pass_rate": 0.4}, "row_count": 10}, "per_problem": []}) + "\n"
+    )
+
+    report = _build_compare_report(left_dir, right_dir)
+    assert report["left"]["pass_rate"] == 0.25
+    assert report["right"]["pass_rate"] == 0.4
+    assert report["delta"]["pass_rate"] == pytest.approx(0.15)
 
 
 def test_isolated_task_memory_falls_back_when_default_backup_is_not_removable(tmp_path: Path, monkeypatch):
