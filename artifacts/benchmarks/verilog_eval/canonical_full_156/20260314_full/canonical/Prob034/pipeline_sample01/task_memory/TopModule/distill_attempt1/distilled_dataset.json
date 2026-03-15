@@ -1,0 +1,222 @@
+{
+  "node_id": "TopModule",
+  "attempt": 1,
+  "failure_cycle": null,
+  "failure_time": 5,
+  "failure_window": null,
+  "failure_line_index": null,
+  "failure_line": null,
+  "failure_signal_snapshot": {},
+  "log_excerpt": "1: [build]\n2: cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_5engef5x/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob034_orchestrated_icc7xtlu/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob034_dff8_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob034_dff8_ref.sv\n3: cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_5engef5x\n4: [run]\n5: cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_5engef5x/sim.out\n6: cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_5engef5x\n7: VCD info: dumpfile wave.vcd opened for output.\n8: /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob034_dff8_test.sv:36: $finish called at 206 (1ps)\n9: Hint: Output 'q' has 1 mismatches. First mismatch occurred at time 5.\n10: Hint: Total mismatched samples is 1 out of 41 samples\n11: \n12: Simulation finished at 206 ps\n13: Mismatches: 1 in 41 samples\n14: [analysis]\n15: Benchmark oracle comparison reported failure (nonzero mismatches=1); treating as failure.\n16: Detected failure cycle=unknown time=5.\n17: [rerun]\n18: Skipping waveform rerun (failure cycle not found; enable cycle logging in testbench).",
+  "log_length": 1301,
+  "waveform_path": "artifacts/task_memory/TopModule/sim_attempt1/wave.vcd",
+  "waveform_source": "artifact_path",
+  "signal_hints": [
+    "clk",
+    "clock",
+    "count",
+    "en",
+    "load",
+    "load_value",
+    "reset",
+    "reset_n",
+    "rollover",
+    "rst",
+    "rst_n",
+    "saturate"
+  ],
+  "waveform_excerpt": {
+    "time_window": {
+      "start": 0,
+      "end": 2005
+    },
+    "failure_time": 5,
+    "selected_signals": [
+      {
+        "name": "tb.clk",
+        "id": "!",
+        "initial_value": "0",
+        "pre_window_value": null,
+        "pre_window_transition": null,
+        "value_at_failure_time": "1",
+        "last_value": "1",
+        "changes": [
+          [
+            0,
+            "0"
+          ],
+          [
+            5,
+            "1"
+          ],
+          [
+            10,
+            "0"
+          ],
+          [
+            15,
+            "1"
+          ],
+          [
+            20,
+            "0"
+          ],
+          [
+            25,
+            "1"
+          ],
+          [
+            30,
+            "0"
+          ],
+          [
+            35,
+            "1"
+          ],
+          [
+            40,
+            "0"
+          ],
+          [
+            45,
+            "1"
+          ],
+          [
+            50,
+            "0"
+          ],
+          [
+            55,
+            "1"
+          ],
+          [
+            60,
+            "0"
+          ],
+          [
+            65,
+            "1"
+          ],
+          [
+            70,
+            "0"
+          ],
+          [
+            75,
+            "1"
+          ],
+          [
+            80,
+            "0"
+          ],
+          [
+            85,
+            "1"
+          ],
+          [
+            90,
+            "0"
+          ],
+          [
+            95,
+            "1"
+          ],
+          [
+            100,
+            "0"
+          ],
+          [
+            105,
+            "1"
+          ],
+          [
+            110,
+            "0"
+          ],
+          [
+            115,
+            "1"
+          ],
+          [
+            120,
+            "0"
+          ],
+          [
+            125,
+            "1"
+          ],
+          [
+            130,
+            "0"
+          ],
+          [
+            135,
+            "1"
+          ],
+          [
+            140,
+            "0"
+          ],
+          [
+            145,
+            "1"
+          ],
+          [
+            150,
+            "0"
+          ],
+          [
+            155,
+            "1"
+          ],
+          [
+            160,
+            "0"
+          ],
+          [
+            165,
+            "1"
+          ],
+          [
+            170,
+            "0"
+          ],
+          [
+            175,
+            "1"
+          ],
+          [
+            180,
+            "0"
+          ],
+          [
+            185,
+            "1"
+          ],
+          [
+            190,
+            "0"
+          ],
+          [
+            195,
+            "1"
+          ],
+          [
+            200,
+            "0"
+          ],
+          [
+            205,
+            "1"
+          ]
+        ],
+        "truncated": false
+      }
+    ],
+    "selected_signal_count": 1,
+    "notes": "Includes pre-window transitions and value_at_failure_time to reduce stale-endpoint ambiguity."
+  },
+  "waveform_failure_snapshot": {
+    "tb.clk": "1"
+  }
+}

@@ -1,0 +1,19 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_67hoqdft/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob082_orchestrated_mjwzc9l0/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob082_lfsr32_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob082_lfsr32_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_67hoqdft
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_67hoqdft/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_67hoqdft
+VCD info: dumpfile wave.vcd opened for output.
+TIMEOUT
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob082_lfsr32_test.sv:114: $finish called at 1000000 (1ps)
+Hint: Output 'q' has 199953 mismatches. First mismatch occurred at time 190.
+Hint: Total mismatched samples is 199953 out of 200000 samples
+
+Simulation finished at 1000000 ps
+Mismatches: 199953 in 200000 samples
+[analysis]
+Benchmark oracle comparison reported failure (timeout reported by benchmark harness; nonzero mismatches=199953); treating as failure.
+Detected failure cycle=unknown time=190.
+[rerun]
+Skipping waveform rerun (failure cycle not found; enable cycle logging in testbench).

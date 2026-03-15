@@ -1,0 +1,13 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_j7uk7k4w/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob121_orchestrated_n0wj60xw/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob121_2014_q3bfsm_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob121_2014_q3bfsm_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_j7uk7k4w
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_j7uk7k4w/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_j7uk7k4w
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob121_2014_q3bfsm_test.sv:26: $finish called at 5031 (1ps)
+Hint: Output 'z' has no mismatches.
+Hint: Total mismatched samples is 0 out of 1006 samples
+
+Simulation finished at 5031 ps
+Mismatches: 0 in 1006 samples

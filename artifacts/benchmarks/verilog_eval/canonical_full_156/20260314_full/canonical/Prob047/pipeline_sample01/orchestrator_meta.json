@@ -1,0 +1,34 @@
+{
+  "problem_id": "Prob047",
+  "sample_index": 1,
+  "target_module": "TopModule",
+  "run_name": "benchmark_canonical_full_156_20260314_full_canonical",
+  "run_id": "66cc31e0-3d9d-4801-84ae-c35dcb742808",
+  "results_routing_key": "RESULTS.66cc31e0-3d9d-4801-84ae-c35dcb742808",
+  "execution_policy": {
+    "preset": "benchmark",
+    "spec_profile": "benchmark",
+    "verification_profile": "oracle_compare",
+    "allow_repair_loop": true,
+    "benchmark_mode": true,
+    "benchmark_use_public_testbench": true,
+    "disable_tb_generation": true,
+    "debug_rtl_only": true,
+    "debug_max_retries": 2,
+    "run_name": "benchmark_canonical_full_156_20260314_full_canonical"
+  },
+  "started_at": "2026-03-14T20:32:26.452532+00:00",
+  "pipeline_timeout_s": 180.0,
+  "oracle_context": {
+    "bound_node": "TopModule",
+    "testbench_path": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob047_dff8ar_test.sv",
+    "ref_path": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob047_dff8ar_ref.sv"
+  },
+  "error": "Pipeline did not complete successfully for all nodes: TopModule=IMPLEMENTING",
+  "status": "FAILURE",
+  "prompt_tokens": 0,
+  "resp_tokens": 0,
+  "total_tokens": 0,
+  "estimated_cost_usd": 0.0,
+  "finished_at": "2026-03-14T20:35:26.590013+00:00"
+}

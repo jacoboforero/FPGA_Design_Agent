@@ -1,0 +1,19 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_usijc1tn/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob127_orchestrated_g2kcbb31/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob127_lemmings1_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob127_lemmings1_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_usijc1tn
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_usijc1tn/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_usijc1tn
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob127_lemmings1_test.sv:73: $finish called at 1146 (1ps)
+Hint: Output 'walk_left' has 83 mismatches. First mismatch occurred at time 120.
+Hint: Output 'walk_right' has 83 mismatches. First mismatch occurred at time 120.
+Hint: Total mismatched samples is 83 out of 229 samples
+
+Simulation finished at 1146 ps
+Mismatches: 83 in 229 samples
+[analysis]
+Benchmark oracle comparison reported failure (nonzero mismatches=83); treating as failure.
+Detected failure cycle=unknown time=120.
+[rerun]
+Skipping waveform rerun (failure cycle not found; enable cycle logging in testbench).

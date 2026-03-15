@@ -1,0 +1,20 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_unddjmaq/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob070_orchestrated_b4r5xzrm/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob070_ece241_2013_q2_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob070_ece241_2013_q2_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_unddjmaq
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_unddjmaq/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_unddjmaq
+VCD info: dumpfile wave.vcd opened for output.
+Hint: Your circuit passes on the 12 required input combinations, but doesn't match the don't-care cases. Are you using minimal SOP and POS?
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob070_ece241_2013_q2_test.sv:63: $finish called at 535 (1ps)
+Hint: Output 'out_sop' has 10 mismatches. First mismatch occurred at time 170.
+Hint: Output 'out_pos' has 7 mismatches. First mismatch occurred at time 170.
+Hint: Total mismatched samples is 10 out of 107 samples
+
+Simulation finished at 535 ps
+Mismatches: 10 in 107 samples
+[analysis]
+Benchmark oracle comparison reported failure (nonzero mismatches=10); treating as failure.
+Detected failure cycle=unknown time=170.
+[rerun]
+Skipping waveform rerun (failure cycle not found; enable cycle logging in testbench).

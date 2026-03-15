@@ -1,0 +1,27 @@
+{
+  "summary": "No RTL change is needed. The simulation failure is due to a testbench race condition: the testbench drives 'd' on both posedge and negedge clk, causing 'd' to potentially change in the same timestep as the DUT samples it. The DUT RTL is correct and implements 8 DFFs as required. No RTL patch is appropriate; the issue must be fixed in the testbench.",
+  "touched_files": [
+    "rtl"
+  ],
+  "rtl_lines": [
+    "module TopModule (",
+    "    input clk,",
+    "    input [7:0] d,",
+    "    output reg [7:0] q",
+    ");",
+    "",
+    "always @(posedge clk) begin",
+    "    q <= d;",
+    "end",
+    "",
+    "endmodule"
+  ],
+  "tb_lines": null,
+  "risks": [
+    "No risks from this patch, as the RTL is unchanged and already correct. The simulation failure will persist until the testbench race is resolved."
+  ],
+  "next_steps": [
+    "Request a testbench fix: ensure 'd' is only driven on negedge clk or with a small delay after posedge clk to avoid races.",
+    "Re-run simulation after testbench fix to confirm that the DUT passes all checks."
+  ]
+}

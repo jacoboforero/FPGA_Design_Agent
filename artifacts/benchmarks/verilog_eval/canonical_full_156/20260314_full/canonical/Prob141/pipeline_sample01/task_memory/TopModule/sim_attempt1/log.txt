@@ -1,0 +1,22 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_4mgxw7i8/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob141_orchestrated_w09_fvne/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob141_count_clock_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob141_count_clock_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_4mgxw7i8
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_4mgxw7i8/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_4mgxw7i8
+VCD info: dumpfile wave.vcd opened for output.
+TIMEOUT
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob141_count_clock_test.sv:261: $finish called at 1000000 (1ps)
+Hint: Output 'pm' has 177947 mismatches. First mismatch occurred at time 38270.
+Hint: Output 'hh' has no mismatches.
+Hint: Output 'mm' has no mismatches.
+Hint: Output 'ss' has no mismatches.
+Hint: Total mismatched samples is 177947 out of 200000 samples
+
+Simulation finished at 1000000 ps
+Mismatches: 177947 in 200000 samples
+[analysis]
+Benchmark oracle comparison reported failure (timeout reported by benchmark harness; nonzero mismatches=177947); treating as failure.
+Detected failure cycle=unknown time=38270.
+[rerun]
+Skipping waveform rerun (failure cycle not found; enable cycle logging in testbench).

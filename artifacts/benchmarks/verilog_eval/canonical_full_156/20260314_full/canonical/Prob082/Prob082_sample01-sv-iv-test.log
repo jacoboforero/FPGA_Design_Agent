@@ -1,0 +1,6 @@
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob082_lfsr32_test.sv:69: error: port ``clk'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob082_lfsr32_test.sv:69: error: port ``reset'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob082_lfsr32_test.sv:69: error: port ``q'' is not a port of top_module1.
+3 error(s) during elaboration.
+RUNNER_ERROR stage=generation
+exception = RuntimeError: Orchestrated benchmark generation failed for Prob082 sample 01: Pipeline did not complete successfully for all nodes: TopModule=FAILED

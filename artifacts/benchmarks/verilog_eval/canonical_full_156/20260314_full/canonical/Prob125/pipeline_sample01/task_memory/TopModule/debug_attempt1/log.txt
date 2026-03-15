@@ -1,0 +1,1 @@
+Debug LLM call failed: Error code: 429 - {'error': {'message': 'Rate limit reached for gpt-4.1 in organization org-uYtaBxtTwj3wVjEgtshCfECH on tokens per min (TPM): Limit 30000, Used 24765, Requested 6219. Please try again in 1.968s. Visit https://platform.openai.com/account/rate-limits to learn more.', 'type': 'tokens', 'param': None, 'code': 'rate_limit_exceeded'}}

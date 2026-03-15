@@ -1,0 +1,7 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob130_circuit5_test.sv:42: $finish called at 705 (1ps)
+Hint: Output 'q' has no mismatches.
+Hint: Total mismatched samples is 0 out of 141 samples
+
+Simulation finished at 705 ps
+Mismatches: 0 in 141 samples

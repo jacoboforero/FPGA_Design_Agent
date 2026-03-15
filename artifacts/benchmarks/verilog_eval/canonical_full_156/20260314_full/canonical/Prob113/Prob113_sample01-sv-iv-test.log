@@ -1,0 +1,5 @@
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob113_2012_q1g_test.sv:64: error: port ``x'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob113_2012_q1g_test.sv:64: error: port ``f'' is not a port of top_module1.
+2 error(s) during elaboration.
+RUNNER_ERROR stage=generation
+exception = RuntimeError: Orchestrated benchmark generation failed for Prob113 sample 01: Pipeline did not complete successfully for all nodes: TopModule=FAILED

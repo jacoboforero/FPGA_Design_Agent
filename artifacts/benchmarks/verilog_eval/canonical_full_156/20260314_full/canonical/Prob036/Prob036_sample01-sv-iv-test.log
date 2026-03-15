@@ -1,0 +1,8 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob036_ringer_test.sv:35: $finish called at 97 (1ps)
+Hint: Output 'ringer' has no mismatches.
+Hint: Output 'motor' has no mismatches.
+Hint: Total mismatched samples is 0 out of 19 samples
+
+Simulation finished at 97 ps
+Mismatches: 0 in 19 samples

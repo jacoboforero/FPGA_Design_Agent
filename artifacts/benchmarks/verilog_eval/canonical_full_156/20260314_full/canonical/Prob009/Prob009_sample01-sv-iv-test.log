@@ -1,0 +1,7 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob009_popcount3_test.sv:36: $finish called at 1100 (1ps)
+Hint: Output 'out' has no mismatches.
+Hint: Total mismatched samples is 0 out of 220 samples
+
+Simulation finished at 1100 ps
+Mismatches: 0 in 220 samples

@@ -1,0 +1,21 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_1v8qjaes/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob149_orchestrated_hne467tj/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob149_ece241_2013_q4_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob149_ece241_2013_q4_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_1v8qjaes
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_1v8qjaes/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_1v8qjaes
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob149_ece241_2013_q4_test.sv:84: $finish called at 10200 (1ps)
+Hint: Output 'fr2' has 308 mismatches. First mismatch occurred at time 30.
+Hint: Output 'fr1' has 282 mismatches. First mismatch occurred at time 130.
+Hint: Output 'fr0' has 256 mismatches. First mismatch occurred at time 140.
+Hint: Output 'dfr' has 949 mismatches. First mismatch occurred at time 30.
+Hint: Total mismatched samples is 1221 out of 2040 samples
+
+Simulation finished at 10200 ps
+Mismatches: 1221 in 2040 samples
+[analysis]
+Benchmark oracle comparison reported failure (nonzero mismatches=1221); treating as failure.
+Detected failure cycle=unknown time=30.
+[rerun]
+Skipping waveform rerun (failure cycle not found; enable cycle logging in testbench).

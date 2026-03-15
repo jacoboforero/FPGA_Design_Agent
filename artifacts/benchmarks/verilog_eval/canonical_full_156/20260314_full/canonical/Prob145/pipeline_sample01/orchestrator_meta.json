@@ -1,0 +1,34 @@
+{
+  "problem_id": "Prob145",
+  "sample_index": 1,
+  "target_module": "TopModule",
+  "run_name": "benchmark_canonical_full_156_20260314_full_canonical",
+  "run_id": "9a501a01-1e7f-4e53-972e-32495de34be9",
+  "results_routing_key": "RESULTS.9a501a01-1e7f-4e53-972e-32495de34be9",
+  "execution_policy": {
+    "preset": "benchmark",
+    "spec_profile": "benchmark",
+    "verification_profile": "oracle_compare",
+    "allow_repair_loop": true,
+    "benchmark_mode": true,
+    "benchmark_use_public_testbench": true,
+    "disable_tb_generation": true,
+    "debug_rtl_only": true,
+    "debug_max_retries": 2,
+    "run_name": "benchmark_canonical_full_156_20260314_full_canonical"
+  },
+  "started_at": "2026-03-14T21:10:51.354696+00:00",
+  "pipeline_timeout_s": 180.0,
+  "oracle_context": {
+    "bound_node": "TopModule",
+    "testbench_path": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob145_circuit8_test.sv",
+    "ref_path": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob145_circuit8_ref.sv"
+  },
+  "error": "Pipeline did not complete successfully for all nodes: TopModule=FAILED",
+  "status": "FAILURE",
+  "prompt_tokens": 36635,
+  "resp_tokens": 3762,
+  "total_tokens": 40397,
+  "estimated_cost_usd": 0.103366,
+  "finished_at": "2026-03-14T21:12:18.295299+00:00"
+}

@@ -1,0 +1,34 @@
+{
+  "problem_id": "Prob146",
+  "sample_index": 1,
+  "target_module": "TopModule",
+  "run_name": "benchmark_canonical_full_156_20260314_full_canonical",
+  "run_id": "fe240668-ceb7-4338-82a7-887dad25ce1a",
+  "results_routing_key": "RESULTS.fe240668-ceb7-4338-82a7-887dad25ce1a",
+  "execution_policy": {
+    "preset": "benchmark",
+    "spec_profile": "benchmark",
+    "verification_profile": "oracle_compare",
+    "allow_repair_loop": true,
+    "benchmark_mode": true,
+    "benchmark_use_public_testbench": true,
+    "disable_tb_generation": true,
+    "debug_rtl_only": true,
+    "debug_max_retries": 2,
+    "run_name": "benchmark_canonical_full_156_20260314_full_canonical"
+  },
+  "started_at": "2026-03-14T21:12:18.369311+00:00",
+  "pipeline_timeout_s": 180.0,
+  "oracle_context": {
+    "bound_node": "TopModule",
+    "testbench_path": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob146_fsm_serialdata_test.sv",
+    "ref_path": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob146_fsm_serialdata_ref.sv"
+  },
+  "error": "Pipeline did not complete successfully for all nodes: TopModule=FAILED",
+  "status": "FAILURE",
+  "prompt_tokens": 36419,
+  "resp_tokens": 4799,
+  "total_tokens": 41218,
+  "estimated_cost_usd": 0.11123,
+  "finished_at": "2026-03-14T21:13:40.944306+00:00"
+}

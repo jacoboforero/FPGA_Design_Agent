@@ -1,0 +1,1 @@
+Distillation complete. waveform_path=artifacts/task_memory/TopModule/sim_attempt2/wave.vcd waveform_source=artifact_path

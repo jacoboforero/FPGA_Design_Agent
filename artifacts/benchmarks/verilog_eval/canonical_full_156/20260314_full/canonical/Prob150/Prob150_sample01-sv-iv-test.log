@@ -1,0 +1,15 @@
+/Users/jacoboforero/Desktop/School/SD1 Proj/artifacts/benchmarks/verilog_eval/canonical_full_156/20260314_full/canonical/Prob150/Prob150_sample01.sv:31: warning: implicit definition of wire 'S11_next'.
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob150_review2015_fsmonehot_test.sv:22: $finish called at 1501 (1ps)
+Hint: Output 'B3_next' has no mismatches.
+Hint: Output 'S_next' has no mismatches.
+Hint: Output 'S1_next' has no mismatches.
+Hint: Output 'Count_next' has no mismatches.
+Hint: Output 'Wait_next' has no mismatches.
+Hint: Output 'done' has no mismatches.
+Hint: Output 'counting' has no mismatches.
+Hint: Output 'shift_ena' has no mismatches.
+Hint: Total mismatched samples is 0 out of 300 samples
+
+Simulation finished at 1501 ps
+Mismatches: 0 in 300 samples

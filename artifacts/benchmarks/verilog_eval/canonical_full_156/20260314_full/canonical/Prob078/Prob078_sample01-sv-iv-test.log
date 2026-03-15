@@ -1,0 +1,7 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob078_dualedge_test.sv:36: $finish called at 1121 (1ps)
+Hint: Output 'q' has 93 mismatches. First mismatch occurred at time 10.
+Hint: Total mismatched samples is 0 out of 224 samples
+
+Simulation finished at 1121 ps
+Mismatches: 0 in 224 samples

@@ -1,0 +1,16 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_q1ttii5v/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob106_orchestrated_4uhmeq6t/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob106_always_nolatches_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob106_always_nolatches_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_q1ttii5v
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_q1ttii5v/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_q1ttii5v
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob106_always_nolatches_test.sv:43: $finish called at 150100 (1ps)
+Hint: Output 'left' has no mismatches.
+Hint: Output 'down' has no mismatches.
+Hint: Output 'right' has no mismatches.
+Hint: Output 'up' has no mismatches.
+Hint: Total mismatched samples is 0 out of 30020 samples
+
+Simulation finished at 150100 ps
+Mismatches: 0 in 30020 samples

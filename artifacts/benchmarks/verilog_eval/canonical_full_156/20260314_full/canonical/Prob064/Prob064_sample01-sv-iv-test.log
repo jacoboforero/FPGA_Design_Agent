@@ -1,0 +1,10 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob064_vector3_test.sv:44: $finish called at 630 (1ps)
+Hint: Output 'w' has no mismatches.
+Hint: Output 'x' has no mismatches.
+Hint: Output 'y' has no mismatches.
+Hint: Output 'z' has no mismatches.
+Hint: Total mismatched samples is 0 out of 126 samples
+
+Simulation finished at 630 ps
+Mismatches: 0 in 126 samples

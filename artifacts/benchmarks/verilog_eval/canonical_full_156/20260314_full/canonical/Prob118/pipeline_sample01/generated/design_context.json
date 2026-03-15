@@ -1,0 +1,145 @@
+{
+  "design_context_hash": "cb1b5f20ea4db82b",
+  "nodes": {
+    "TopModule": {
+      "rtl_file": "rtl/TopModule.sv",
+      "rtl_files": [
+        "rtl/TopModule.sv"
+      ],
+      "testbench_file": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob118_history_shift_test.sv",
+      "interface": {
+        "signals": [
+          {
+            "name": "clk",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "areset",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "predict_valid",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "predict_taken",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "train_mispredicted",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "train_taken",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "train_history",
+            "direction": "INPUT",
+            "width": "32",
+            "semantics": null
+          },
+          {
+            "name": "predict_history",
+            "direction": "OUTPUT",
+            "width": "32",
+            "semantics": null
+          }
+        ]
+      },
+      "uses_library": [],
+      "clocking": [
+        {
+          "clock_name": "clk",
+          "clock_polarity": "POSEDGE",
+          "reset_name": null,
+          "reset_polarity": null,
+          "reset_is_async": null,
+          "description": null
+        }
+      ],
+      "coverage_goals": {},
+      "demo_behavior": "Module: TopModule I would like you to implement a module named TopModule with the following interface. All input and output ports are one bit unless otherwise specified. - input  clk - input  areset - input  predict_valid - input  predict_taken - input  train_mispredicted - input  train_taken - input  train_history   (32 bits) - output predict_history (32 bits) The module should implement a 32-bit global history shift register, including support for rolling back state in response to a pipeline flush caused by a branch misprediction. When a branch prediction is made (predict_valid = 1), shift in predict_taken from the LSB side to update the branch history for the predicted branch. (predict_history[0] is the direction of the youngest branch.) When a branch misprediction occurs (train_mispredicted = 1), load the branch history register with the history after the completion of the mispredicted branch. This is the history before the mispredicted branch (train_history) concatenated with the actual result of the branch (train_taken). If both a prediction and misprediction occur at the same time, the misprediction takes precedence, because the pipeline flush will also flush out the branch that is currently making a prediction. predict_history is the value of the branch history register. areset is a positive edge triggered asynchronous reset that resets the history counter to zero. Assume all sequential logic is triggered on the positive edge of the clock.\nKey rules: Implement behavior exactly as described in the prompt.\nReset: Only as explicitly described in the prompt.\nCorner cases: No additional corner cases beyond prompt requirements.\nPerformance: Use prompt-defined timing/latency behavior.",
+      "verification": {
+        "test_goals": [
+          "Pass benchmark harness checks for all provided tests."
+        ],
+        "oracle_strategy": "Use benchmark-provided reference outputs as oracle.",
+        "stimulus_strategy": "Use benchmark-provided test stimuli.",
+        "pass_fail_criteria": [
+          "DUT outputs match oracle outputs for benchmark tests."
+        ],
+        "coverage_targets": [],
+        "reset_constraints": {
+          "min_cycles_after_reset": 0,
+          "ordering_notes": null
+        }
+      },
+      "acceptance": {
+        "required_artifacts": [
+          {
+            "name": "rtl",
+            "description": "Generated RTL source",
+            "mandatory": true
+          },
+          {
+            "name": "sim_log",
+            "description": "Simulation log from harness",
+            "mandatory": true
+          }
+        ],
+        "acceptance_metrics": [
+          {
+            "metric_id": "benchmark_pass",
+            "description": "All benchmark tests pass.",
+            "operator": "==",
+            "target_value": "1",
+            "metric_source": "sim_log"
+          }
+        ],
+        "exclusions": [],
+        "synthesis_target": "fpga_generic"
+      },
+      "verification_scope": "oracle_compare",
+      "children": [],
+      "connections": [],
+      "module_contract": {
+        "node_type": "module",
+        "style": "integration",
+        "description": "Top module for TopModule.",
+        "allow_internal_state": true
+      },
+      "oracle_ref_file": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob118_history_shift_ref.sv"
+    }
+  },
+  "standard_library": {},
+  "top_module": "TopModule",
+  "modules": [
+    "TopModule"
+  ],
+  "connections": [],
+  "execution_policy": {
+    "preset": "benchmark",
+    "spec_profile": "benchmark",
+    "verification_profile": "oracle_compare",
+    "allow_repair_loop": true,
+    "benchmark_mode": true,
+    "benchmark_use_public_testbench": true,
+    "disable_tb_generation": true,
+    "debug_rtl_only": true,
+    "debug_max_retries": 2,
+    "run_name": "benchmark_canonical_full_156_20260314_full_canonical"
+  }
+}

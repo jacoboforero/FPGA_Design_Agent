@@ -1,0 +1,25 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_acabq8qf/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob143_orchestrated_ng2kgozg/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob143_fsm_onehot_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob143_fsm_onehot_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_acabq8qf
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_acabq8qf/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_acabq8qf
+VCD info: dumpfile wave.vcd opened for output.
+Hint: next_state[0] is   correct.
+Hint: next_state[1] is   correct.
+Hint: next_state[2] is   correct.
+Hint: next_state[3] is   correct.
+Hint: next_state[4] is   correct.
+Hint: next_state[5] is   correct.
+Hint: next_state[6] is   correct.
+Hint: next_state[7] is   correct.
+Hint: next_state[8] is   correct.
+Hint: next_state[9] is   correct.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob143_fsm_onehot_test.sv:62: $finish called at 1121 (1ps)
+Hint: Output 'next_state' has no mismatches.
+Hint: Output 'out1' has no mismatches.
+Hint: Output 'out2' has no mismatches.
+Hint: Total mismatched samples is 0 out of 224 samples
+
+Simulation finished at 1121 ps
+Mismatches: 0 in 224 samples

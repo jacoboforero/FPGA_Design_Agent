@@ -1,0 +1,7 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob118_history_shift_test.sv:104: $finish called at 10276 (1ps)
+Hint: Output 'predict_history' has no mismatches.
+Hint: Total mismatched samples is 0 out of 2055 samples
+
+Simulation finished at 10276 ps
+Mismatches: 0 in 2055 samples

@@ -1,0 +1,9 @@
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob140_fsm_hdlc_test.sv:82: error: port ``clk'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob140_fsm_hdlc_test.sv:82: error: port ``reset'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob140_fsm_hdlc_test.sv:82: error: port ``in'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob140_fsm_hdlc_test.sv:82: error: port ``disc'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob140_fsm_hdlc_test.sv:82: error: port ``flag'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob140_fsm_hdlc_test.sv:82: error: port ``err'' is not a port of top_module1.
+6 error(s) during elaboration.
+RUNNER_ERROR stage=generation
+exception = RuntimeError: Orchestrated benchmark generation failed for Prob140 sample 01: Pipeline did not complete successfully for all nodes: TopModule=FAILED

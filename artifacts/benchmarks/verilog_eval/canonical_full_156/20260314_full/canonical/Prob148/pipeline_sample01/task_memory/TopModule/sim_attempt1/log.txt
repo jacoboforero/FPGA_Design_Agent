@@ -1,0 +1,18 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_bz2pc7lp/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob148_orchestrated_py586b3d/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob148_2013_q2afsm_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob148_2013_q2afsm_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_bz2pc7lp
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_bz2pc7lp/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_bz2pc7lp
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob148_2013_q2afsm_test.sv:93: $finish called at 5271 (1ps)
+Hint: Output 'g' has 56 mismatches. First mismatch occurred at time 190.
+Hint: Total mismatched samples is 56 out of 1054 samples
+
+Simulation finished at 5271 ps
+Mismatches: 56 in 1054 samples
+[analysis]
+Benchmark oracle comparison reported failure (nonzero mismatches=56); treating as failure.
+Detected failure cycle=unknown time=190.
+[rerun]
+Skipping waveform rerun (failure cycle not found; enable cycle logging in testbench).

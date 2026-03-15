@@ -1,0 +1,1 @@
+Debug agent returned no patch (touched_files empty).

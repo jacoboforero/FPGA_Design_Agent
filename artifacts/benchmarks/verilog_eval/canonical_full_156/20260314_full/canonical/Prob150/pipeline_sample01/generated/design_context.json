@@ -1,0 +1,160 @@
+{
+  "design_context_hash": "b920cf79f9f45d46",
+  "nodes": {
+    "TopModule": {
+      "rtl_file": "rtl/TopModule.sv",
+      "rtl_files": [
+        "rtl/TopModule.sv"
+      ],
+      "testbench_file": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob150_review2015_fsmonehot_test.sv",
+      "interface": {
+        "signals": [
+          {
+            "name": "d",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "done_counting",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "ack",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "state",
+            "direction": "INPUT",
+            "width": "10",
+            "semantics": null
+          },
+          {
+            "name": "B3_next",
+            "direction": "OUTPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "S_next",
+            "direction": "OUTPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "S1_next",
+            "direction": "OUTPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "Count_next",
+            "direction": "OUTPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "Wait_next",
+            "direction": "OUTPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "done",
+            "direction": "OUTPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "counting",
+            "direction": "OUTPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "shift_ena",
+            "direction": "OUTPUT",
+            "width": "1",
+            "semantics": null
+          }
+        ]
+      },
+      "uses_library": [],
+      "clocking": [],
+      "coverage_goals": {},
+      "demo_behavior": "Module: TopModule I would like you to implement a module named TopModule with the following interface. All input and output ports are one bit unless otherwise specified. - input  d - input  done_counting - input  ack - input  state (10 bits) - output B3_next - output S_next - output S1_next - output Count_next - output Wait_next - output done - output counting - output shift_ena The module should implement the following Moore state machine with 3 input (d, done_counting, ack) and 3 outputs (shift_ena, counting, done). Unless otherwise stated in the diagram below, assume outputs are 0 and inputs are don't cares. state   (output)      --input--> next state ------------------------------------------- S     ()            --d=0--> S S     ()            --d=1--> S1 S1    ()            --d=0--> S S1    ()            --d=1--> S11 S11   ()            --d=0--> S110 S11   ()            --d=1--> S11 S110  ()            --d=0--> S S110  ()            --d=1--> B0 B0    (shift_ena=1) --(always go to next cycle)--> B1 B1    (shift_ena=1) --(always go to next cycle)--> B2 B2    (shift_ena=1) --(always go to next cycle)--> B3 B3    (shift_ena=1) --(always go to next cycle)--> Count Count (counting=1)  --done_counting=0--> Count Count (counting=1)  --done_counting=1--> Wait Wait  (done=1)      --ack=0--> Wait Wait  (done=1)      --ack=1--> S At reset, the state machine starts in state \"S\". Derive next-state logic equations and output logic equations by inspection assuming the following one-hot encoding is used: (S, S1, S11, S110, B0, B1, B2, B3, Count, Wait) = (10'b0000000001, 10'b0000000010, 10'b0000000100, ... , 10'b1000000000) Derive state transition and output logic equations by inspection assuming a one-hot encoding. Implement only the state transition logic and output logic (the combinational logic portion) for this state machine. Write code that generates the following signals: - B3_next -- Assert when next-state is B3 state - S_next -- Assert when next-state is S state - S1_next -- Assert when next-state is S1 state - Count_next -- Assert when next-state is Count state - Wait_next -- Assert when next-state is Wait state - done -- output logic - counting -- output logic - shift_ena -- output logic\nKey rules: Implement behavior exactly as described in the prompt.\nReset: Only as explicitly described in the prompt.\nCorner cases: No additional corner cases beyond prompt requirements.\nPerformance: Use prompt-defined timing/latency behavior.",
+      "verification": {
+        "test_goals": [
+          "Pass benchmark harness checks for all provided tests."
+        ],
+        "oracle_strategy": "Use benchmark-provided reference outputs as oracle.",
+        "stimulus_strategy": "Use benchmark-provided test stimuli.",
+        "pass_fail_criteria": [
+          "DUT outputs match oracle outputs for benchmark tests."
+        ],
+        "coverage_targets": [],
+        "reset_constraints": {
+          "min_cycles_after_reset": 0,
+          "ordering_notes": null
+        }
+      },
+      "acceptance": {
+        "required_artifacts": [
+          {
+            "name": "rtl",
+            "description": "Generated RTL source",
+            "mandatory": true
+          },
+          {
+            "name": "sim_log",
+            "description": "Simulation log from harness",
+            "mandatory": true
+          }
+        ],
+        "acceptance_metrics": [
+          {
+            "metric_id": "benchmark_pass",
+            "description": "All benchmark tests pass.",
+            "operator": "==",
+            "target_value": "1",
+            "metric_source": "sim_log"
+          }
+        ],
+        "exclusions": [],
+        "synthesis_target": "fpga_generic"
+      },
+      "verification_scope": "oracle_compare",
+      "children": [],
+      "connections": [],
+      "module_contract": {
+        "node_type": "module",
+        "style": "integration",
+        "description": "Top module for TopModule.",
+        "allow_internal_state": true
+      },
+      "oracle_ref_file": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob150_review2015_fsmonehot_ref.sv"
+    }
+  },
+  "standard_library": {},
+  "top_module": "TopModule",
+  "modules": [
+    "TopModule"
+  ],
+  "connections": [],
+  "execution_policy": {
+    "preset": "benchmark",
+    "spec_profile": "benchmark",
+    "verification_profile": "oracle_compare",
+    "allow_repair_loop": true,
+    "benchmark_mode": true,
+    "benchmark_use_public_testbench": true,
+    "disable_tb_generation": true,
+    "debug_rtl_only": true,
+    "debug_max_retries": 2,
+    "run_name": "benchmark_canonical_full_156_20260314_full_canonical"
+  }
+}

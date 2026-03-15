@@ -1,0 +1,1 @@
+Debug patched TopModule: touched=['rtl'] (attempt=1). Local validation passed: rtl_lint=PASS (llm_attempt=2/3).

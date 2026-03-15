@@ -1,0 +1,7 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob055_conditional_test.sv:38: $finish called at 560 (1ps)
+Hint: Output 'min' has no mismatches.
+Hint: Total mismatched samples is 0 out of 112 samples
+
+Simulation finished at 560 ps
+Mismatches: 0 in 112 samples

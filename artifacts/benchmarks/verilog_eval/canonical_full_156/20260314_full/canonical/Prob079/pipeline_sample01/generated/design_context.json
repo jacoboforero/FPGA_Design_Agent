@@ -1,0 +1,112 @@
+{
+  "design_context_hash": "c3d94badc2fff390",
+  "nodes": {
+    "TopModule": {
+      "rtl_file": "rtl/TopModule.sv",
+      "rtl_files": [
+        "rtl/TopModule.sv"
+      ],
+      "testbench_file": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob079_fsm3onehot_test.sv",
+      "interface": {
+        "signals": [
+          {
+            "name": "in",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": null
+          },
+          {
+            "name": "state",
+            "direction": "INPUT",
+            "width": "4",
+            "semantics": null
+          },
+          {
+            "name": "next_state",
+            "direction": "OUTPUT",
+            "width": "4",
+            "semantics": null
+          },
+          {
+            "name": "out",
+            "direction": "OUTPUT",
+            "width": "1",
+            "semantics": null
+          }
+        ]
+      },
+      "uses_library": [],
+      "clocking": [],
+      "coverage_goals": {},
+      "demo_behavior": "Module: TopModule I would like you to implement a module named TopModule with the following interface. All input and output ports are one bit unless otherwise specified. - input  in - input  state (4 bits) - output next_state (4 bits) - output out The module should implement the state transition table for a Moore state machine with one input, one output, and four states. Use the following one-hot state encoding: A=4'b0001, B=4'b0010, C=4'b0100, D=4'b1000. Derive state transition and output logic equations by inspection assuming a one-hot encoding. Implement only the state transition logic and output logic (the combinational logic portion) for this state machine. State | Next state in=0, Next state in=1 | Output A     | A, B                             | 0 B     | C, B                             | 0 C     | A, D                             | 0 D     | C, B                             | 1\nKey rules: Implement behavior exactly as described in the prompt.\nReset: Only as explicitly described in the prompt.\nCorner cases: No additional corner cases beyond prompt requirements.\nPerformance: Use prompt-defined timing/latency behavior.",
+      "verification": {
+        "test_goals": [
+          "Pass benchmark harness checks for all provided tests."
+        ],
+        "oracle_strategy": "Use benchmark-provided reference outputs as oracle.",
+        "stimulus_strategy": "Use benchmark-provided test stimuli.",
+        "pass_fail_criteria": [
+          "DUT outputs match oracle outputs for benchmark tests."
+        ],
+        "coverage_targets": [],
+        "reset_constraints": {
+          "min_cycles_after_reset": 0,
+          "ordering_notes": null
+        }
+      },
+      "acceptance": {
+        "required_artifacts": [
+          {
+            "name": "rtl",
+            "description": "Generated RTL source",
+            "mandatory": true
+          },
+          {
+            "name": "sim_log",
+            "description": "Simulation log from harness",
+            "mandatory": true
+          }
+        ],
+        "acceptance_metrics": [
+          {
+            "metric_id": "benchmark_pass",
+            "description": "All benchmark tests pass.",
+            "operator": "==",
+            "target_value": "1",
+            "metric_source": "sim_log"
+          }
+        ],
+        "exclusions": [],
+        "synthesis_target": "fpga_generic"
+      },
+      "verification_scope": "oracle_compare",
+      "children": [],
+      "connections": [],
+      "module_contract": {
+        "node_type": "module",
+        "style": "integration",
+        "description": "Top module for TopModule.",
+        "allow_internal_state": true
+      },
+      "oracle_ref_file": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob079_fsm3onehot_ref.sv"
+    }
+  },
+  "standard_library": {},
+  "top_module": "TopModule",
+  "modules": [
+    "TopModule"
+  ],
+  "connections": [],
+  "execution_policy": {
+    "preset": "benchmark",
+    "spec_profile": "benchmark",
+    "verification_profile": "oracle_compare",
+    "allow_repair_loop": true,
+    "benchmark_mode": true,
+    "benchmark_use_public_testbench": true,
+    "disable_tb_generation": true,
+    "debug_rtl_only": true,
+    "debug_max_retries": 2,
+    "run_name": "benchmark_canonical_full_156_20260314_full_canonical"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "summary": "The original RTL assigns 'done' in two always blocks, which can cause simulation mismatches and glitches. Additionally, the bit counter and state transition logic are convoluted, leading to possible off-by-one errors in the DATA state and incorrect assertion of 'done'. This patch refactors the FSM to use a single always block for all sequential logic, including 'done', and ensures 'done' is asserted for exactly one cycle after a valid stop bit is detected following 8 data bits. The bit counter is incremented only in the DATA state, and the FSM transitions are clarified to match the protocol: IDLE (wait for start bit), DATA (count 8 bits), WAIT_STOP (wait for stop bit), and then assert 'done' for one cycle before returning to IDLE. This should resolve the simulation mismatches and align the output with the reference.",
+  "touched_files": [
+    "rtl"
+  ],
+  "attempt": 1,
+  "debug_reason": "sim",
+  "rtl_sha256": "092e4d16a7e929f2bd50d6e28869a1ade61f03fd5dfebb95dd45abf7572773b6",
+  "tb_sha256": null,
+  "local_validation": [
+    {
+      "name": "rtl_lint",
+      "ok": true,
+      "output": "Verilator local validation passed.\n[rtl_semantic] PASS"
+    }
+  ],
+  "llm_attempts_used": 2,
+  "risks": [
+    "If the testbench expects 'done' to be asserted for more than one cycle, this implementation may not match.",
+    "If the protocol requires handling of back-to-back frames with no idle cycles, further adjustment may be needed.",
+    "If the testbench stimulus is not aligned with the FSM's expected timing, mismatches may persist."
+  ],
+  "next_steps": [
+    "Run simulation to verify that 'done' now matches the reference output.",
+    "If mismatches persist, probe 'state', 'bit_cnt', and 'done' in the waveform to further debug timing alignment.",
+    "If the testbench expects a different 'done' pulse width, adjust the DONE state accordingly."
+  ]
+}

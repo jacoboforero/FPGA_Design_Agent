@@ -1,0 +1,7 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob001_zero_test.sv:30: $finish called at 102 (1ps)
+Hint: Output 'zero' has no mismatches.
+Hint: Total mismatched samples is 0 out of 20 samples
+
+Simulation finished at 102 ps
+Mismatches: 0 in 20 samples

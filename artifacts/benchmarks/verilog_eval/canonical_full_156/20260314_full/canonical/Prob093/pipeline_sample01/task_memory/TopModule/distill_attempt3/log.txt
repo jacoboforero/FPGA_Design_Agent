@@ -1,0 +1,1 @@
+Distillation complete. failure_cycle=unknown failure_time=5 waveform_path=artifacts/task_memory/TopModule/sim_attempt3/wave.vcd waveform_source=artifact_path

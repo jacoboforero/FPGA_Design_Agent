@@ -1,0 +1,7 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob045_edgedetect2_test.sv:45: $finish called at 1140 (1ps)
+Hint: Output 'anyedge' has no mismatches.
+Hint: Total mismatched samples is 0 out of 228 samples
+
+Simulation finished at 1140 ps
+Mismatches: 0 in 228 samples

@@ -1,0 +1,6 @@
+%Warning-CASEINCOMPLETE: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:89:9: Case values incompletely covered (example pattern 0x6)
+   89 |         case (state)
+      |         ^~~~
+                         ... For warning description see https://verilator.org/warn/CASEINCOMPLETE?v=5.044
+                         ... Use "/* verilator lint_off CASEINCOMPLETE */" and lint_on around source to disable this message.
+[rtl_semantic] PASS

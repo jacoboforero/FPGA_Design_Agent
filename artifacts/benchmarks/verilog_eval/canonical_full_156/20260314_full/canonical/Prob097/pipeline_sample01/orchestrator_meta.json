@@ -1,0 +1,34 @@
+{
+  "problem_id": "Prob097",
+  "sample_index": 1,
+  "target_module": "TopModule",
+  "run_name": "benchmark_canonical_full_156_20260314_full_canonical",
+  "run_id": "903693fd-33e5-49b2-bdfe-b2c20dd21837",
+  "results_routing_key": "RESULTS.903693fd-33e5-49b2-bdfe-b2c20dd21837",
+  "execution_policy": {
+    "preset": "benchmark",
+    "spec_profile": "benchmark",
+    "verification_profile": "oracle_compare",
+    "allow_repair_loop": true,
+    "benchmark_mode": true,
+    "benchmark_use_public_testbench": true,
+    "disable_tb_generation": true,
+    "debug_rtl_only": true,
+    "debug_max_retries": 2,
+    "run_name": "benchmark_canonical_full_156_20260314_full_canonical"
+  },
+  "started_at": "2026-03-14T20:54:10.471888+00:00",
+  "pipeline_timeout_s": 180.0,
+  "oracle_context": {
+    "bound_node": "TopModule",
+    "testbench_path": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob097_mux9to1v_test.sv",
+    "ref_path": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob097_mux9to1v_ref.sv"
+  },
+  "rtl_source": "/private/var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob097_orchestrated_ajs4lo7h/generated/rtl/TopModule.sv",
+  "status": "SUCCESS",
+  "prompt_tokens": 811,
+  "resp_tokens": 233,
+  "total_tokens": 1044,
+  "estimated_cost_usd": 0.003486,
+  "finished_at": "2026-03-14T20:54:14.389759+00:00"
+}

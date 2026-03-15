@@ -1,0 +1,28 @@
+{
+  "summary": "The original RTL incorrectly implements the Galois LFSR update logic. The feedback and shifting assignments do not match the standard Galois LFSR for the polynomial with taps at 32, 22, 2, and 1. The correct Galois LFSR should shift right, with the feedback (q[0]) XORed into the tap positions (bits 31, 21, 1, and 0) on each clock. This patch rewrites the always block to use a temporary variable for the next state, applying the feedback only to the correct tap positions, and then updates q in a single assignment. This matches the canonical Galois LFSR structure for the given polynomial.",
+  "touched_files": [
+    "rtl"
+  ],
+  "attempt": 1,
+  "debug_reason": "sim",
+  "rtl_sha256": "65bbab094426dcca5fe0e2bddd93774705555e4baff03b8cf745f93060df51dd",
+  "tb_sha256": null,
+  "local_validation": [
+    {
+      "name": "rtl_lint",
+      "ok": true,
+      "output": "Verilator local validation passed.\n[rtl_semantic] PASS"
+    }
+  ],
+  "llm_attempts_used": 2,
+  "risks": [
+    "If the reference expects a different bit ordering (e.g., left shift instead of right), further adjustment may be needed.",
+    "If the testbench expects a Fibonacci LFSR instead of Galois, this implementation may still mismatch.",
+    "If the tap positions are off by one due to 1-based vs 0-based indexing, further correction may be required."
+  ],
+  "next_steps": [
+    "Re-run simulation to verify that the output sequence matches the reference.",
+    "If mismatches persist, check the bit ordering and tap positions against the reference implementation.",
+    "If still failing, compare the first 10-20 cycles of q with the reference to diagnose any off-by-one or ordering issues."
+  ]
+}

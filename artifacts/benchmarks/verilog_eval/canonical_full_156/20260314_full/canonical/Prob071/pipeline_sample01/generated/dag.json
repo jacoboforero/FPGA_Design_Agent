@@ -1,0 +1,12 @@
+{
+  "nodes": [
+    {
+      "id": "TopModule",
+      "type": "module",
+      "deps": [],
+      "state": "PENDING",
+      "artifacts": {},
+      "metrics": {}
+    }
+  ]
+}

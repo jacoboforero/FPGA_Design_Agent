@@ -1,0 +1,7 @@
+status = SUCCESS
+prompt_tokens = 16320
+resp_tokens = 2373
+cost = 0.051624
+pipeline_status = success
+run_id = 02dd84df-a45c-4003-ac53-9fe9b35a97a4
+rtl_source = /private/var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob142_orchestrated_v3l984kj/generated/rtl/TopModule.sv

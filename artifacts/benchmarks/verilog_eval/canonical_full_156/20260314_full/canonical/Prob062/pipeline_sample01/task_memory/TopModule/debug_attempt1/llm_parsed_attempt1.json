@@ -1,0 +1,27 @@
+{
+  "summary": "The DUT implements a standard 2:1 mux with 'assign out = sel ? b : a;', but the testbench and/or reference expect the opposite polarity: sel=0 should select b, sel=1 should select a. This is evidenced by persistent mismatches starting at the first stimulus. To fix, invert the mux select logic so that 'sel' selects 'a' when high and 'b' when low, matching the testbench's expectation.",
+  "touched_files": [
+    "rtl"
+  ],
+  "rtl_lines": [
+    "module TopModule (",
+    "    input        sel,",
+    "    input  [7:0] a,",
+    "    input  [7:0] b,",
+    "    output [7:0] out",
+    ");",
+    "",
+    "assign out = sel ? a : b;",
+    "",
+    "endmodule"
+  ],
+  "tb_lines": null,
+  "risks": [
+    "If the reference module is incorrect and the DUT was originally correct, this change could cause new mismatches.",
+    "If the testbench or reference is later changed to expect standard mux polarity, this fix would become incorrect."
+  ],
+  "next_steps": [
+    "Re-run simulation to confirm that mismatches are resolved and all benchmark tests pass.",
+    "If mismatches persist, probe both DUT and reference outputs to confirm select polarity expectations."
+  ]
+}

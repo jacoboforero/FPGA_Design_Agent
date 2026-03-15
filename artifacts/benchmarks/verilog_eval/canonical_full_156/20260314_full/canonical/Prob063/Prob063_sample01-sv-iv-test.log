@@ -1,0 +1,8 @@
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob063_review2015_shiftcount_test.sv:118: error: port ``clk'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob063_review2015_shiftcount_test.sv:118: error: port ``shift_ena'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob063_review2015_shiftcount_test.sv:118: error: port ``count_ena'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob063_review2015_shiftcount_test.sv:118: error: port ``data'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob063_review2015_shiftcount_test.sv:118: error: port ``q'' is not a port of top_module1.
+5 error(s) during elaboration.
+RUNNER_ERROR stage=generation
+exception = RuntimeError: Orchestrated benchmark generation failed for Prob063 sample 01: Pipeline did not complete successfully for all nodes: TopModule=REFLECTING

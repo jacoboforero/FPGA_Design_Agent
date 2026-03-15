@@ -1,0 +1,34 @@
+{
+  "problem_id": "Prob141",
+  "sample_index": 1,
+  "target_module": "TopModule",
+  "run_name": "benchmark_canonical_full_156_20260314_full_canonical",
+  "run_id": "d1a3beee-b5db-46cd-a782-f28c5df15162",
+  "results_routing_key": "RESULTS.d1a3beee-b5db-46cd-a782-f28c5df15162",
+  "execution_policy": {
+    "preset": "benchmark",
+    "spec_profile": "benchmark",
+    "verification_profile": "oracle_compare",
+    "allow_repair_loop": true,
+    "benchmark_mode": true,
+    "benchmark_use_public_testbench": true,
+    "disable_tb_generation": true,
+    "debug_rtl_only": true,
+    "debug_max_retries": 2,
+    "run_name": "benchmark_canonical_full_156_20260314_full_canonical"
+  },
+  "started_at": "2026-03-14T21:08:34.899547+00:00",
+  "pipeline_timeout_s": 180.0,
+  "oracle_context": {
+    "bound_node": "TopModule",
+    "testbench_path": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob141_count_clock_test.sv",
+    "ref_path": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob141_count_clock_ref.sv"
+  },
+  "error": "Pipeline did not complete successfully for all nodes: TopModule=FAILED",
+  "status": "FAILURE",
+  "prompt_tokens": 35307,
+  "resp_tokens": 4565,
+  "total_tokens": 39872,
+  "estimated_cost_usd": 0.107134,
+  "finished_at": "2026-03-14T21:10:02.488618+00:00"
+}

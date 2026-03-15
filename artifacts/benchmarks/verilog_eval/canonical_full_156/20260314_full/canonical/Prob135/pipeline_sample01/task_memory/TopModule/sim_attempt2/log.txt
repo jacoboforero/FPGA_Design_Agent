@@ -1,0 +1,18 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_0pofsxmg/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob135_orchestrated_9bztr3ty/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob135_m2014_q6b_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob135_m2014_q6b_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_0pofsxmg
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_0pofsxmg/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_0pofsxmg
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob135_m2014_q6b_test.sv:17: $finish called at 501 (1ps)
+Hint: Output 'Y1' has 15 mismatches. First mismatch occurred at time 10.
+Hint: Total mismatched samples is 15 out of 100 samples
+
+Simulation finished at 501 ps
+Mismatches: 15 in 100 samples
+[analysis]
+Benchmark oracle comparison reported failure (nonzero mismatches=15); treating as failure.
+Detected failure cycle=unknown time=10.
+[rerun]
+Skipping waveform rerun (failure cycle not found; enable cycle logging in testbench).

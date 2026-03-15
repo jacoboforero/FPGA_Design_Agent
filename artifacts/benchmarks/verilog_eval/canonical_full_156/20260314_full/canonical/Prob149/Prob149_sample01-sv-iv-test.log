@@ -1,0 +1,10 @@
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob149_ece241_2013_q4_test.sv:151: error: port ``clk'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob149_ece241_2013_q4_test.sv:151: error: port ``reset'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob149_ece241_2013_q4_test.sv:151: error: port ``s'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob149_ece241_2013_q4_test.sv:151: error: port ``fr2'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob149_ece241_2013_q4_test.sv:151: error: port ``fr1'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob149_ece241_2013_q4_test.sv:151: error: port ``fr0'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob149_ece241_2013_q4_test.sv:151: error: port ``dfr'' is not a port of top_module1.
+7 error(s) during elaboration.
+RUNNER_ERROR stage=generation
+exception = RuntimeError: Orchestrated benchmark generation failed for Prob149 sample 01: Pipeline did not complete successfully for all nodes: TopModule=FAILED

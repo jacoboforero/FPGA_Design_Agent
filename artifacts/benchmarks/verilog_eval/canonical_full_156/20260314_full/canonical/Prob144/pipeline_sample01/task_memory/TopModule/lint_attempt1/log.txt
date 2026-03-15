@@ -1,0 +1,7 @@
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob144_orchestrated_wofe7v1e/generated/rtl/TopModule.sv:33:61: Operator ADD expects 4 bits on the RHS, but RHS's SEL generates 1 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   33 |                             neighbor_count = neighbor_count + q[nidx];
+      |                                                             ^
+                      ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=5.044
+                      ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
+[rtl_semantic] PASS

@@ -1,0 +1,11 @@
+%Warning-UNOPTFLAT: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob078_orchestrated_wrybiju3/generated/rtl/TopModule.sv:4:16: Signal unoptimizable: Circular combinational logic: 'q'
+    4 |     output reg q
+      |                ^
+                    ... For warning description see https://verilator.org/warn/UNOPTFLAT?v=5.044
+                    ... Use "/* verilator lint_off UNOPTFLAT */" and lint_on around source to disable this message.
+                    /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob078_orchestrated_wrybiju3/generated/rtl/TopModule.sv:4:16:      Example path: q
+                    /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob078_orchestrated_wrybiju3/generated/rtl/TopModule.sv:29:11:      Example path: ASSIGNW
+                    /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob078_orchestrated_wrybiju3/generated/rtl/TopModule.sv:4:16:      Example path: TopModule.__VdfgSynthJoin_q_h17b0b4cc_0_2
+                    /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob078_orchestrated_wrybiju3/generated/rtl/TopModule.sv:26:11:      Example path: ASSIGNW
+                    /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob078_orchestrated_wrybiju3/generated/rtl/TopModule.sv:4:16:      Example path: q
+[rtl_semantic] PASS

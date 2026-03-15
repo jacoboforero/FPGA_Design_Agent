@@ -1,0 +1,9 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob072_thermostat_test.sv:63: $finish called at 1241 (1ps)
+Hint: Output 'heater' has no mismatches.
+Hint: Output 'aircon' has no mismatches.
+Hint: Output 'fan' has no mismatches.
+Hint: Total mismatched samples is 0 out of 248 samples
+
+Simulation finished at 1241 ps
+Mismatches: 0 in 248 samples

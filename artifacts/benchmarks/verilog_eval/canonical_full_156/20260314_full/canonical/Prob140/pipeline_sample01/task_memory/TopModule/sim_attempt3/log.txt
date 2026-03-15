@@ -1,0 +1,20 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_71cx9t7e/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob140_orchestrated_cjebw7og/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob140_fsm_hdlc_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob140_fsm_hdlc_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_71cx9t7e
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_71cx9t7e/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_71cx9t7e
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob140_fsm_hdlc_test.sv:20: $finish called at 4006 (1ps)
+Hint: Output 'disc' has no mismatches.
+Hint: Output 'flag' has no mismatches.
+Hint: Output 'err' has 182 mismatches. First mismatch occurred at time 80.
+Hint: Total mismatched samples is 182 out of 801 samples
+
+Simulation finished at 4006 ps
+Mismatches: 182 in 801 samples
+[analysis]
+Benchmark oracle comparison reported failure (nonzero mismatches=182); treating as failure.
+Detected failure cycle=unknown time=80.
+[rerun]
+Skipping waveform rerun (failure cycle not found; enable cycle logging in testbench).

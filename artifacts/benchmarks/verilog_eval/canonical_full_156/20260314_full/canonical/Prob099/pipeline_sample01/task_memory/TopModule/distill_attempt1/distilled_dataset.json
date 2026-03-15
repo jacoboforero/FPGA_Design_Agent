@@ -1,0 +1,30 @@
+{
+  "node_id": "TopModule",
+  "attempt": 1,
+  "failure_cycle": null,
+  "failure_time": null,
+  "failure_window": null,
+  "failure_line_index": 3,
+  "failure_line": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob099_m2014_q6c_test.sv:71: error: port ``Y2'' is not a port of good1.",
+  "failure_signal_snapshot": {},
+  "log_excerpt": "1: [build]\n2: cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_k2o72xo3/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob099_orchestrated_9_5h6xwp/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob099_m2014_q6c_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob099_m2014_q6c_ref.sv\n3: cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_k2o72xo3\n4: /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob099_m2014_q6c_test.sv:71: error: port ``Y2'' is not a port of good1.\n5: /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob099_m2014_q6c_test.sv:71: error: port ``Y4'' is not a port of good1.\n6: /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob099_m2014_q6c_test.sv:77: error: port ``Y2'' is not a port of top_module1.\n7: /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob099_m2014_q6c_test.sv:77: error: port ``Y4'' is not a port of top_module1.\n8: 4 error(s) during elaboration.",
+  "log_length": 1224,
+  "waveform_path": null,
+  "waveform_source": null,
+  "signal_hints": [
+    "clk",
+    "clock",
+    "count",
+    "en",
+    "load",
+    "load_value",
+    "reset",
+    "reset_n",
+    "rollover",
+    "rst",
+    "rst_n",
+    "saturate"
+  ],
+  "waveform_excerpt": null,
+  "waveform_failure_snapshot": {}
+}

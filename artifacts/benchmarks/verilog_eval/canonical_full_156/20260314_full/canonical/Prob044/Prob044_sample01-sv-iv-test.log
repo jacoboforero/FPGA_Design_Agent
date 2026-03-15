@@ -1,0 +1,9 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob044_vectorgates_test.sv:39: $finish called at 1306 (1ps)
+Hint: Output 'out_or_bitwise' has no mismatches.
+Hint: Output 'out_or_logical' has no mismatches.
+Hint: Output 'out_not' has no mismatches.
+Hint: Total mismatched samples is 0 out of 261 samples
+
+Simulation finished at 1306 ps
+Mismatches: 0 in 261 samples

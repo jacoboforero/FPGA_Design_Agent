@@ -1,0 +1,7 @@
+status = FAILURE
+prompt_tokens = 33378
+resp_tokens = 3190
+cost = 0.092276
+pipeline_status = failure
+run_id = bb6b748f-0878-4e74-82ae-1f1512ecd008
+error = Pipeline did not complete successfully for all nodes: TopModule=FAILED

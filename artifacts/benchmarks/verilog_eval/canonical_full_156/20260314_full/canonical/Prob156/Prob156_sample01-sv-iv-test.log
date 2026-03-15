@@ -1,0 +1,10 @@
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob156_review2015_fancytimer_test.sv:157: error: port ``clk'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob156_review2015_fancytimer_test.sv:157: error: port ``reset'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob156_review2015_fancytimer_test.sv:157: error: port ``data'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob156_review2015_fancytimer_test.sv:157: error: port ``ack'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob156_review2015_fancytimer_test.sv:157: error: port ``count'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob156_review2015_fancytimer_test.sv:157: error: port ``counting'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob156_review2015_fancytimer_test.sv:157: error: port ``done'' is not a port of top_module1.
+7 error(s) during elaboration.
+RUNNER_ERROR stage=generation
+exception = RuntimeError: Orchestrated benchmark generation failed for Prob156 sample 01: Pipeline did not complete successfully for all nodes: TopModule=FAILED

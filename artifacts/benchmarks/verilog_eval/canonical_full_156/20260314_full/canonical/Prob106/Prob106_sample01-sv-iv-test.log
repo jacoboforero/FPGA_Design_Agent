@@ -1,0 +1,10 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob106_always_nolatches_test.sv:43: $finish called at 150100 (1ps)
+Hint: Output 'left' has no mismatches.
+Hint: Output 'down' has no mismatches.
+Hint: Output 'right' has no mismatches.
+Hint: Output 'up' has no mismatches.
+Hint: Total mismatched samples is 0 out of 30020 samples
+
+Simulation finished at 150100 ps
+Mismatches: 0 in 30020 samples

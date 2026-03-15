@@ -1,0 +1,7 @@
+status = FAILURE
+prompt_tokens = 29968
+resp_tokens = 4370
+cost = 0.094896
+pipeline_status = failure
+run_id = 7be6879e-93e3-465e-97ac-cfb49769f8c2
+error = Generated interface mismatch for module 'TopModule' in /private/var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob068_orchestrated_qbciauhd/generated/rtl/TopModule.sv: mismatched ports: ena expected=('OUTPUT', '(3:1)+1') actual=('OUTPUT', 3)

@@ -1,0 +1,7 @@
+status = SUCCESS
+prompt_tokens = 719
+resp_tokens = 104
+cost = 0.002270
+pipeline_status = success
+run_id = 47834594-0f74-497c-8302-956d0f4c43c3
+rtl_source = /private/var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob044_orchestrated_salggdua/generated/rtl/TopModule.sv

@@ -1,0 +1,106 @@
+{
+  "design_context_hash": "f6e8d0ceac28d6b1",
+  "nodes": {
+    "TopModule": {
+      "rtl_file": "rtl/TopModule.sv",
+      "rtl_files": [
+        "rtl/TopModule.sv"
+      ],
+      "testbench_file": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob114_bugs_case_test.sv",
+      "interface": {
+        "signals": [
+          {
+            "name": "code",
+            "direction": "INPUT",
+            "width": "8",
+            "semantics": null
+          },
+          {
+            "name": "out",
+            "direction": "OUTPUT",
+            "width": "4",
+            "semantics": null
+          },
+          {
+            "name": "valid",
+            "direction": "OUTPUT",
+            "width": "1",
+            "semantics": null
+          }
+        ]
+      },
+      "uses_library": [],
+      "clocking": [],
+      "coverage_goals": {},
+      "demo_behavior": "Module: TopModule I would like you to implement a module named TopModule with the following interface. All input and output ports are one bit unless otherwise specified. - input  code (8 bits) - output out  (4 bits) - output valid The module should recognize 8-bit keyboard scancodes for keys 0 through 9. It should indicate whether one of the 10 cases were recognized (valid), and if so, which key was detected. If the 8-bit input is 8'h45, 8'h16, 8'h1e, 8'h26, 8'h25, 8'h2e, 8'h36, 8'h3d, 8'h3e, or 8'h46, the 4-bit output will be set to 0, 1, 2, 3, 4, 5, 6, 7, 8, or 9 respectively, the 1-bit valid would be set to 1. If the input does not match any of the cases, both output signals would be set to 0.\nKey rules: Implement behavior exactly as described in the prompt.\nReset: Only as explicitly described in the prompt.\nCorner cases: No additional corner cases beyond prompt requirements.\nPerformance: Use prompt-defined timing/latency behavior.",
+      "verification": {
+        "test_goals": [
+          "Pass benchmark harness checks for all provided tests."
+        ],
+        "oracle_strategy": "Use benchmark-provided reference outputs as oracle.",
+        "stimulus_strategy": "Use benchmark-provided test stimuli.",
+        "pass_fail_criteria": [
+          "DUT outputs match oracle outputs for benchmark tests."
+        ],
+        "coverage_targets": [],
+        "reset_constraints": {
+          "min_cycles_after_reset": 0,
+          "ordering_notes": null
+        }
+      },
+      "acceptance": {
+        "required_artifacts": [
+          {
+            "name": "rtl",
+            "description": "Generated RTL source",
+            "mandatory": true
+          },
+          {
+            "name": "sim_log",
+            "description": "Simulation log from harness",
+            "mandatory": true
+          }
+        ],
+        "acceptance_metrics": [
+          {
+            "metric_id": "benchmark_pass",
+            "description": "All benchmark tests pass.",
+            "operator": "==",
+            "target_value": "1",
+            "metric_source": "sim_log"
+          }
+        ],
+        "exclusions": [],
+        "synthesis_target": "fpga_generic"
+      },
+      "verification_scope": "oracle_compare",
+      "children": [],
+      "connections": [],
+      "module_contract": {
+        "node_type": "module",
+        "style": "integration",
+        "description": "Top module for TopModule.",
+        "allow_internal_state": true
+      },
+      "oracle_ref_file": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob114_bugs_case_ref.sv"
+    }
+  },
+  "standard_library": {},
+  "top_module": "TopModule",
+  "modules": [
+    "TopModule"
+  ],
+  "connections": [],
+  "execution_policy": {
+    "preset": "benchmark",
+    "spec_profile": "benchmark",
+    "verification_profile": "oracle_compare",
+    "allow_repair_loop": true,
+    "benchmark_mode": true,
+    "benchmark_use_public_testbench": true,
+    "disable_tb_generation": true,
+    "debug_rtl_only": true,
+    "debug_max_retries": 2,
+    "run_name": "benchmark_canonical_full_156_20260314_full_canonical"
+  }
+}

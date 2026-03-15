@@ -1,0 +1,9 @@
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob139_2013_q2bfsm_test.sv:84: error: port ``clk'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob139_2013_q2bfsm_test.sv:84: error: port ``resetn'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob139_2013_q2bfsm_test.sv:84: error: port ``x'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob139_2013_q2bfsm_test.sv:84: error: port ``y'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob139_2013_q2bfsm_test.sv:84: error: port ``f'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob139_2013_q2bfsm_test.sv:84: error: port ``g'' is not a port of top_module1.
+6 error(s) during elaboration.
+RUNNER_ERROR stage=generation
+exception = RuntimeError: Orchestrated benchmark generation failed for Prob139 sample 01: Pipeline did not complete successfully for all nodes: TopModule=FAILED

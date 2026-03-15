@@ -1,0 +1,7 @@
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob068_countbcd_test.sv:122: error: port ``clk'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob068_countbcd_test.sv:122: error: port ``reset'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob068_countbcd_test.sv:122: error: port ``ena'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob068_countbcd_test.sv:122: error: port ``q'' is not a port of top_module1.
+4 error(s) during elaboration.
+RUNNER_ERROR stage=generation
+exception = RuntimeError: Orchestrated benchmark generation failed for Prob068 sample 01: Generated interface mismatch for module 'TopModule' in /private/var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob068_orchestrated_qbciauhd/generated/rtl/TopModule.sv: mismatched ports: ena expected=('OUTPUT', '(3:1)+1') actual=('OUTPUT', 3)

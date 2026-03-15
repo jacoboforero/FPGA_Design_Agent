@@ -1,0 +1,6 @@
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob093_ece241_2014_q3_test.sv:89: error: port ``c'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob093_ece241_2014_q3_test.sv:89: error: port ``d'' is not a port of top_module1.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob093_ece241_2014_q3_test.sv:89: error: port ``mux_in'' is not a port of top_module1.
+3 error(s) during elaboration.
+RUNNER_ERROR stage=generation
+exception = RuntimeError: Orchestrated benchmark generation failed for Prob093 sample 01: Pipeline did not complete successfully for all nodes: TopModule=FAILED

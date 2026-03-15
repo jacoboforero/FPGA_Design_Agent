@@ -1,0 +1,94 @@
+{
+  "design_context_hash": "5c0786cc1a02a711",
+  "nodes": {
+    "TopModule": {
+      "rtl_file": "rtl/TopModule.sv",
+      "rtl_files": [
+        "rtl/TopModule.sv"
+      ],
+      "testbench_file": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob002_m2014_q4i_test.sv",
+      "interface": {
+        "signals": [
+          {
+            "name": "out",
+            "direction": "OUTPUT",
+            "width": "1",
+            "semantics": null
+          }
+        ]
+      },
+      "uses_library": [],
+      "clocking": [],
+      "coverage_goals": {},
+      "demo_behavior": "Module: TopModule I would like you to implement a module named TopModule with the following interface. All input and output ports are one bit unless otherwise specified. - output out The module should always drive 0 (or logic low).\nKey rules: Implement behavior exactly as described in the prompt.\nReset: Only as explicitly described in the prompt.\nCorner cases: No additional corner cases beyond prompt requirements.\nPerformance: Use prompt-defined timing/latency behavior.",
+      "verification": {
+        "test_goals": [
+          "Pass benchmark harness checks for all provided tests."
+        ],
+        "oracle_strategy": "Use benchmark-provided reference outputs as oracle.",
+        "stimulus_strategy": "Use benchmark-provided test stimuli.",
+        "pass_fail_criteria": [
+          "DUT outputs match oracle outputs for benchmark tests."
+        ],
+        "coverage_targets": [],
+        "reset_constraints": {
+          "min_cycles_after_reset": 0,
+          "ordering_notes": null
+        }
+      },
+      "acceptance": {
+        "required_artifacts": [
+          {
+            "name": "rtl",
+            "description": "Generated RTL source",
+            "mandatory": true
+          },
+          {
+            "name": "sim_log",
+            "description": "Simulation log from harness",
+            "mandatory": true
+          }
+        ],
+        "acceptance_metrics": [
+          {
+            "metric_id": "benchmark_pass",
+            "description": "All benchmark tests pass.",
+            "operator": "==",
+            "target_value": "1",
+            "metric_source": "sim_log"
+          }
+        ],
+        "exclusions": [],
+        "synthesis_target": "fpga_generic"
+      },
+      "verification_scope": "oracle_compare",
+      "children": [],
+      "connections": [],
+      "module_contract": {
+        "node_type": "module",
+        "style": "integration",
+        "description": "Top module for TopModule.",
+        "allow_internal_state": true
+      },
+      "oracle_ref_file": "/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob002_m2014_q4i_ref.sv"
+    }
+  },
+  "standard_library": {},
+  "top_module": "TopModule",
+  "modules": [
+    "TopModule"
+  ],
+  "connections": [],
+  "execution_policy": {
+    "preset": "benchmark",
+    "spec_profile": "benchmark",
+    "verification_profile": "oracle_compare",
+    "allow_repair_loop": true,
+    "benchmark_mode": true,
+    "benchmark_use_public_testbench": true,
+    "disable_tb_generation": true,
+    "debug_rtl_only": true,
+    "debug_max_retries": 2,
+    "run_name": "benchmark_canonical_full_156_20260314_full_canonical"
+  }
+}

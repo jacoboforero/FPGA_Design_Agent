@@ -1,0 +1,8 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob091_2012_q2b_test.sv:45: $finish called at 3001 (1ps)
+Hint: Output 'Y1' has no mismatches.
+Hint: Output 'Y3' has no mismatches.
+Hint: Total mismatched samples is 0 out of 600 samples
+
+Simulation finished at 3001 ps
+Mismatches: 0 in 600 samples

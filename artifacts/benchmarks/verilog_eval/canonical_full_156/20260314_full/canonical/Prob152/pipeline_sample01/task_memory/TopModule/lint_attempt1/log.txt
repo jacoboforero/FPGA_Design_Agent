@@ -1,0 +1,150 @@
+%Warning-WIDTHTRUNC: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:19:31: Value too large for 2 bit number: 4
+   19 |     localparam S_DIG_LEFT   = 2'd4;
+      |                               ^~~~
+                     ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=5.044
+                     ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
+%Warning-WIDTHTRUNC: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:20:31: Value too large for 2 bit number: 5
+   20 |     localparam S_DIG_RIGHT  = 2'd5;
+      |                               ^~~~
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:27:19: Operator ASSIGNDLY expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_WALK_LEFT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   27 |             state <= S_WALK_LEFT;
+      |                   ^~
+                      ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=5.044
+                      ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:37:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_FALL_LEFT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   37 |                     next_state = S_FALL_LEFT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:39:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_DIG_LEFT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   39 |                     next_state = S_DIG_LEFT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:41:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_WALK_RIGHT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   41 |                     next_state = S_WALK_RIGHT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:43:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_WALK_LEFT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   43 |                     next_state = S_WALK_LEFT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:47:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_FALL_RIGHT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   47 |                     next_state = S_FALL_RIGHT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:49:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_DIG_RIGHT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   49 |                     next_state = S_DIG_RIGHT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:51:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_WALK_LEFT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   51 |                     next_state = S_WALK_LEFT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:53:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_WALK_RIGHT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   53 |                     next_state = S_WALK_RIGHT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:57:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_WALK_LEFT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   57 |                     next_state = S_WALK_LEFT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:59:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_FALL_LEFT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   59 |                     next_state = S_FALL_LEFT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:63:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_WALK_RIGHT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   63 |                     next_state = S_WALK_RIGHT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:65:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_FALL_RIGHT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   65 |                     next_state = S_FALL_RIGHT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:69:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_FALL_LEFT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   69 |                     next_state = S_FALL_LEFT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:71:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_DIG_LEFT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   71 |                     next_state = S_DIG_LEFT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:75:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_FALL_RIGHT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   75 |                     next_state = S_FALL_RIGHT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:77:32: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_DIG_RIGHT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   77 |                     next_state = S_DIG_RIGHT;
+      |                                ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:79:33: Operator ASSIGN expects 3 bits on the Assign RHS, but Assign RHS's VARREF 'S_WALK_LEFT' generates 2 bits.
+                                                                                                                                     : ... note: In instance 'TopModule'
+   79 |             default: next_state = S_WALK_LEFT;
+      |                                 ^
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:34:9: Operator CASE expects 3 bits on the Case Item, but Case Item's VARREF 'S_WALK_LEFT' generates 2 bits.
+                                                                                                                                    : ... note: In instance 'TopModule'
+   34 |         case (state)
+      |         ^~~~
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:34:9: Operator CASE expects 3 bits on the Case Item, but Case Item's VARREF 'S_WALK_RIGHT' generates 2 bits.
+                                                                                                                                    : ... note: In instance 'TopModule'
+   34 |         case (state)
+      |         ^~~~
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:34:9: Operator CASE expects 3 bits on the Case Item, but Case Item's VARREF 'S_FALL_LEFT' generates 2 bits.
+                                                                                                                                    : ... note: In instance 'TopModule'
+   34 |         case (state)
+      |         ^~~~
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:34:9: Operator CASE expects 3 bits on the Case Item, but Case Item's VARREF 'S_FALL_RIGHT' generates 2 bits.
+                                                                                                                                    : ... note: In instance 'TopModule'
+   34 |         case (state)
+      |         ^~~~
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:34:9: Operator CASE expects 3 bits on the Case Item, but Case Item's VARREF 'S_DIG_LEFT' generates 2 bits.
+                                                                                                                                    : ... note: In instance 'TopModule'
+   34 |         case (state)
+      |         ^~~~
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:34:9: Operator CASE expects 3 bits on the Case Item, but Case Item's VARREF 'S_DIG_RIGHT' generates 2 bits.
+                                                                                                                                    : ... note: In instance 'TopModule'
+   34 |         case (state)
+      |         ^~~~
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:89:9: Operator CASE expects 3 bits on the Case Item, but Case Item's VARREF 'S_WALK_LEFT' generates 2 bits.
+                                                                                                                                    : ... note: In instance 'TopModule'
+   89 |         case (state)
+      |         ^~~~
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:89:9: Operator CASE expects 3 bits on the Case Item, but Case Item's VARREF 'S_WALK_RIGHT' generates 2 bits.
+                                                                                                                                    : ... note: In instance 'TopModule'
+   89 |         case (state)
+      |         ^~~~
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:89:9: Operator CASE expects 3 bits on the Case Item, but Case Item's VARREF 'S_FALL_LEFT' generates 2 bits.
+                                                                                                                                    : ... note: In instance 'TopModule'
+   89 |         case (state)
+      |         ^~~~
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:89:9: Operator CASE expects 3 bits on the Case Item, but Case Item's VARREF 'S_FALL_RIGHT' generates 2 bits.
+                                                                                                                                    : ... note: In instance 'TopModule'
+   89 |         case (state)
+      |         ^~~~
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:89:9: Operator CASE expects 3 bits on the Case Item, but Case Item's VARREF 'S_DIG_LEFT' generates 2 bits.
+                                                                                                                                    : ... note: In instance 'TopModule'
+   89 |         case (state)
+      |         ^~~~
+%Warning-WIDTHEXPAND: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:89:9: Operator CASE expects 3 bits on the Case Item, but Case Item's VARREF 'S_DIG_RIGHT' generates 2 bits.
+                                                                                                                                    : ... note: In instance 'TopModule'
+   89 |         case (state)
+      |         ^~~~
+%Warning-CASEOVERLAP: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:67:13: Case conditions overlap
+   67 |             S_DIG_LEFT: begin
+      |             ^~~~~~~~~~
+                      /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:35:13: ... Location of overlapping condition
+   35 |             S_WALK_LEFT: begin
+      |             ^~~~~~~~~~~
+                      ... For warning description see https://verilator.org/warn/CASEOVERLAP?v=5.044
+                      ... Use "/* verilator lint_off CASEOVERLAP */" and lint_on around source to disable this message.
+%Warning-CASEOVERLAP: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:94:13: Case conditions overlap
+   94 |             S_DIG_LEFT:   digging    = 1;
+      |             ^~~~~~~~~~
+                      /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:90:13: ... Location of overlapping condition
+   90 |             S_WALK_LEFT:  walk_left  = 1;
+      |             ^~~~~~~~~~~
+%Warning-CASEINCOMPLETE: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob152_orchestrated_2f3e_uk1/generated/rtl/TopModule.sv:89:9: Case values incompletely covered (example pattern 0x4)
+   89 |         case (state)
+      |         ^~~~
+                         ... For warning description see https://verilator.org/warn/CASEINCOMPLETE?v=5.044
+                         ... Use "/* verilator lint_off CASEINCOMPLETE */" and lint_on around source to disable this message.
+[rtl_semantic] PASS

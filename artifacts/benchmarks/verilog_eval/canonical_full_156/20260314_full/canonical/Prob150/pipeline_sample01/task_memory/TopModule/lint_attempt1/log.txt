@@ -1,0 +1,7 @@
+%Warning-IMPLICIT: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob150_orchestrated_b24i9g8x/generated/rtl/TopModule.sv:31:8: Signal definition not found, creating implicitly: 'S11_next'
+                                                                                                                                 : ... Suggested alternative: 'S110_next'
+   31 | assign S11_next    = (S1 & d) | (S11 & d);
+      |        ^~~~~~~~
+                   ... For warning description see https://verilator.org/warn/IMPLICIT?v=5.044
+                   ... Use "/* verilator lint_off IMPLICIT */" and lint_on around source to disable this message.
+[rtl_semantic] PASS

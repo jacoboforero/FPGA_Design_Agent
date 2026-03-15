@@ -1,0 +1,41 @@
+{
+  "summary": "The original LFSR logic in TopModule incorrectly updates q[0] through q[4] in parallel, causing all assignments to use the old q values and resulting in an invalid LFSR sequence. This patch rewrites the always block to compute the next state using a temporary variable, ensuring correct Galois LFSR behavior with taps at bit positions 5 and 3. The output q is updated in a single assignment per clock edge, matching the maximal-length LFSR specification.",
+  "touched_files": [
+    "rtl"
+  ],
+  "rtl_lines": [
+    "module TopModule (",
+    "    input clk,",
+    "    input reset,",
+    "    output reg [4:0] q",
+    ");",
+    "",
+    "always @(posedge clk) begin",
+    "    if (reset) begin",
+    "        q <= 5'b00001;",
+    "    end else begin",
+    "        reg feedback;",
+    "        reg [4:0] next_q;",
+    "        feedback = q[0];",
+    "        next_q[0] = q[4];",
+    "        next_q[1] = q[0];",
+    "        next_q[2] = q[1];",
+    "        next_q[3] = q[2] ^ feedback;",
+    "        next_q[4] = q[3];",
+    "        q <= next_q;",
+    "    end",
+    "end",
+    "",
+    "endmodule"
+  ],
+  "tb_lines": null,
+  "risks": [
+    "If the tap positions or feedback polynomial are misunderstood, the LFSR may not be maximal-length.",
+    "If the bit ordering is inconsistent with the reference, the output sequence may be bit-reversed."
+  ],
+  "next_steps": [
+    "Run simulation to verify that the output q matches the reference LFSR sequence.",
+    "Check that the LFSR cycles through all nonzero 5-bit values before repeating.",
+    "If mismatches persist, confirm tap positions and bit ordering with the reference implementation."
+  ]
+}

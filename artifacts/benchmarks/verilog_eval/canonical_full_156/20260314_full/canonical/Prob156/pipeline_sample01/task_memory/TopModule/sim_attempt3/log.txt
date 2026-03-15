@@ -1,0 +1,24 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_yjn90glb/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob156_orchestrated_3stp7gyz/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob156_review2015_fancytimer_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob156_review2015_fancytimer_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_yjn90glb
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_yjn90glb/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_yjn90glb
+VCD info: dumpfile wave.vcd opened for output.
+Hint: The first test case should count for 2000 cycles. Your circuit counted 1000
+Hint: The second test case should count for 15000 cycles. Your circuit counted 11000
+Hint: Your FSM didn't pass the sample timing diagram posted with the problem statement. Perhaps try debugging that?
+TIMEOUT
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob156_review2015_fancytimer_test.sv:216: $finish called at 1000000 (1ps)
+Hint: Output 'count' has 191101 mismatches. First mismatch occurred at time 130.
+Hint: Output 'counting' has 11864 mismatches. First mismatch occurred at time 130.
+Hint: Output 'done' has 11116 mismatches. First mismatch occurred at time 10140.
+Hint: Total mismatched samples is 195587 out of 200000 samples
+
+Simulation finished at 1000000 ps
+Mismatches: 195587 in 200000 samples
+[analysis]
+Benchmark oracle comparison reported failure (timeout reported by benchmark harness; nonzero mismatches=195587); treating as failure.
+Detected failure cycle=unknown time=130.
+[rerun]
+Skipping waveform rerun (failure cycle not found; enable cycle logging in testbench).

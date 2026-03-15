@@ -1,0 +1,18 @@
+[build]
+cmd: iverilog -g2012 -g2005-sv -o /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_dzv76cv3/sim.out /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/Prob050_orchestrated_nddosqfn/generated/rtl/TopModule.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob050_kmap1_test.sv /Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob050_kmap1_ref.sv
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_dzv76cv3
+[run]
+cmd: vvp /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_dzv76cv3/sim.out
+cwd: /var/folders/h7/yvdr9htd0xd1nm0n2qyxc49m0000gn/T/sim_TopModule_dzv76cv3
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob050_kmap1_test.sv:38: $finish called at 1096 (1ps)
+Hint: Output 'out' has 83 mismatches. First mismatch occurred at time 60.
+Hint: Total mismatched samples is 83 out of 219 samples
+
+Simulation finished at 1096 ps
+Mismatches: 83 in 219 samples
+[analysis]
+Benchmark oracle comparison reported failure (nonzero mismatches=83); treating as failure.
+Detected failure cycle=unknown time=60.
+[rerun]
+Skipping waveform rerun (failure cycle not found; enable cycle logging in testbench).

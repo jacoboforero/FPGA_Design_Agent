@@ -1,0 +1,7 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob080_timer_test.sv:55: $finish called at 35636 (1ps)
+Hint: Output 'tc' has no mismatches.
+Hint: Total mismatched samples is 0 out of 7127 samples
+
+Simulation finished at 35636 ps
+Mismatches: 0 in 7127 samples

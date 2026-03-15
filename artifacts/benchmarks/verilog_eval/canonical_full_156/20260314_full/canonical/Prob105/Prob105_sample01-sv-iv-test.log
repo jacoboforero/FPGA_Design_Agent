@@ -1,0 +1,7 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob105_rotate100_test.sv:25: $finish called at 20026 (1ps)
+Hint: Output 'q' has no mismatches.
+Hint: Total mismatched samples is 0 out of 4005 samples
+
+Simulation finished at 20026 ps
+Mismatches: 0 in 4005 samples

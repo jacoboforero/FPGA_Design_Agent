@@ -1,0 +1,7 @@
+VCD info: dumpfile wave.vcd opened for output.
+/Users/jacoboforero/Desktop/School/SD1 Proj/third_party/verilog-eval/dataset_spec-to-rtl/Prob148_2013_q2afsm_test.sv:93: $finish called at 5271 (1ps)
+Hint: Output 'g' has no mismatches.
+Hint: Total mismatched samples is 0 out of 1054 samples
+
+Simulation finished at 5271 ps
+Mismatches: 0 in 1054 samples
