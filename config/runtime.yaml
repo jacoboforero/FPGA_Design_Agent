@@ -56,7 +56,7 @@ workers:
 llm:
   enabled: true
   provider: openai
-  default_model: gpt-4.1
+  default_model: gpt-4.1-mini
   request_timeout_s: 120.0
   agent_overrides: {}
   narrative_fallback_model: gpt-4.1
@@ -116,6 +116,13 @@ benchmark:
   prompts_dir: third_party/verilog-eval/dataset_spec-to-rtl
   output_root: artifacts/benchmarks/verilog_eval
   oracle_manifest: null
+  flow_mode: direct_single_module
+  prompt_mode: raw_verilog_eval
+  disable_tb_generation: true
+  debug_rtl_only: true
+  use_public_testbench: true
+  interface_equivalence: canonical_width
+  rtl_language: systemverilog
   sim_run_timeout_s: 90.0
   near_miss_extra_retry_enabled: true
   near_miss_max_mismatches: 20

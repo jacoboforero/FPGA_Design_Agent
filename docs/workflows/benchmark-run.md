@@ -1,6 +1,6 @@
 # Benchmark Run Workflow
 
-Last verified against runtime behavior: March 8, 2026.
+Last verified against runtime behavior: March 15, 2026.
 
 This runbook covers how to run VerilogEval-compatible benchmarks in this repo and how to interpret outputs.
 
@@ -30,40 +30,70 @@ A successful benchmark workflow means:
 
 Default behavior remains `run` if no command is provided.
 
-Legacy compatibility: `PYTHONPATH=. python3 apps/cli/cli.py benchmark --preset benchmark` still maps to `benchmark run`.
+Legacy compatibility: `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark --preset benchmark` still maps to `benchmark run`.
 
 ## Fastest Path (15-Minute Research First Success)
 From repo root:
 
 ```bash
-git submodule update --init --recursive
-PYTHONPATH=. python3 apps/cli/cli.py doctor --preset benchmark --benchmark
-PYTHONPATH=. python3 apps/cli/cli.py benchmark list-problems --preset benchmark --max-problems 3
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke --run-id smoke001 --max-problems 3 --dry-run
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke --run-id smoke001 --max-problems 3
+make build
+make up
+make deps
+make shell
 ```
+
+Then inside the container shell:
+
+```bash
+export RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
+echo "$RABBITMQ_URL"
+git submodule update --init --recursive
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset benchmark --benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --preset benchmark --max-problems 3
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke --run-id smoke001 --max-problems 3 --dry-run
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke --run-id smoke001 --max-problems 3
+```
+
+The `echo` line should print `amqp://user:password@rabbitmq:5672/`.
+Use that explicit export even if `.env` points to `localhost`; inside the container, the broker host is `rabbitmq`.
 
 Then compare against a second run (for example, another config/model setting):
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark compare \
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark compare \
   --left-dir artifacts/benchmarks/verilog_eval/smoke/smoke001/canonical \
   --right-dir artifacts/benchmarks/verilog_eval/smoke/smoke002/canonical \
   --compare-out artifacts/benchmarks/verilog_eval/smoke/compare_smoke001_vs_smoke002.json
 ```
 
+Host fallback:
+
+```bash
+poetry install -E openai --with dev
+git submodule update --init --recursive
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset benchmark --benchmark
+```
+
 ## End-to-End Run Flow
 For each sample in `run` mode:
 1. Load prompt/test/reference assets for a problem.
-2. Build benchmark-mode L1-L5 spec artifacts.
-3. Run planner to produce design context and DAG.
-4. Run orchestrated generation pipeline (or legacy lightweight path) to produce RTL.
-5. Run sample compile/simulation logs (`iverilog` + `vvp`) against benchmark oracle assets.
+2. Select the benchmark flow from runtime config (`benchmark.flow_mode`) unless `--legacy-lightweight` is set.
+3. In `direct_single_module` mode, build a one-node design context directly from the benchmark prompt and resolved target interface.
+4. In `orchestrated` mode, run the benchmark spec-normalization and planner path to produce design context and DAG artifacts.
+5. In `legacy_lightweight` mode, use the compatibility generation path without the orchestrated worker pipeline.
+6. Bind benchmark oracle assets according to benchmark execution policy.
+7. Run generation, lint/debug/repair, and sample compile/simulation (`iverilog` + `vvp`) against benchmark oracle assets.
 
 After sample generation/testing completes, official analyzer (`sv-iv-analyze`) produces `summary.txt` and `summary.csv`.
 
 ## Important Runtime Behavior
-- In orchestrated benchmark mode, TB generation/edit is disabled and benchmark oracle TB/reference files are used.
+- Default benchmark flow is `direct_single_module`.
+- Default benchmark prompt handling is `raw_verilog_eval`, so implementation/debug workers receive the original prompt text instead of only a normalized summary.
+- `--legacy-lightweight` overrides YAML flow selection for one run and forces the compatibility path.
+- To reproduce the older planner-normalized benchmark path, set `benchmark.flow_mode: orchestrated` in the runtime YAML used for the run.
+- Benchmark defaults disable TB generation, restrict debug to RTL edits, and bind the benchmark-provided public testbench/reference assets.
+- Benchmark RTL defaults to `systemverilog`; set `benchmark.rtl_language: verilog2001` if you want the older restriction.
+- Interface checks canonicalize numeric ranges by width by default, so equivalent declarations such as `[3:1]` and `[2:0]` are accepted.
 - Sample generation failures are logged per sample and execution continues to remaining samples.
 - Placeholder sample files may be emitted so official analysis can still run to completion.
 - Final benchmark scoring still comes from official analyzer outputs.
@@ -81,57 +111,72 @@ You need:
 Quick preflight command:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py doctor --preset benchmark --benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset benchmark --benchmark
 ```
 
 ## Main Commands
 List discovered benchmark cases:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark list-problems --preset benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --preset benchmark
 ```
 
 Canonical run (safe run directory layout):
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke
 ```
 
 Canonical + sampled:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --sampled
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --sampled
 ```
 
 Legacy lightweight fallback:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --legacy-lightweight
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --legacy-lightweight
+```
+
+Config-controlled orchestrated fallback:
+
+```yaml
+benchmark:
+  flow_mode: orchestrated
+  prompt_mode: normalized
+  rtl_language: verilog2001
+```
+
+Run it with:
+
+```bash
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.your_benchmark.yaml --preset benchmark --campaign wavefix_smoke
 ```
 
 Targeted runs:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --max-problems 25
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --only-problem Prob079
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --max-problems 25
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --only-problem Prob079
 ```
 
 Dry-run plan only:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --max-problems 10 --dry-run
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --max-problems 10 --dry-run
 ```
 
 Analyze existing run outputs:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark analyze --build-dir artifacts/benchmarks/verilog_eval/wavefix_smoke/run_001/canonical
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark analyze --build-dir artifacts/benchmarks/verilog_eval/wavefix_smoke/run_001/canonical
 ```
 
 Compare two runs:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark compare \
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark compare \
   --left-dir artifacts/benchmarks/verilog_eval/wavefix_smoke/run_001/canonical \
   --right-dir artifacts/benchmarks/verilog_eval/wavefix_smoke/run_002/canonical \
   --compare-out artifacts/benchmarks/verilog_eval/wavefix_smoke/compare_run001_vs_run002.json
@@ -140,7 +185,7 @@ PYTHONPATH=. python3 apps/cli/cli.py benchmark compare \
 Campaign sweeps from YAML:
 
 ```bash
-python3 scripts/run_benchmark_campaign.py --campaign-file benchmarks/verilog_eval/campaign.example.yaml
+PYTHONPATH=. poetry run python3 scripts/run_benchmark_campaign.py --campaign-file benchmarks/verilog_eval/campaign.example.yaml
 ```
 
 Campaign authoring details:
@@ -150,7 +195,7 @@ Campaign authoring details:
 - `--campaign <name>` and `--run-id <id>`: deterministic run directory naming.
 - `--run-dir <path>`: explicit run directory override.
 - `--sampled`: run sampled profile in addition to canonical.
-- `--legacy-lightweight`: bypass orchestrated path and use compatibility generation path.
+- `--legacy-lightweight`: override `benchmark.flow_mode` and use the compatibility generation path.
 - `--pipeline-timeout <seconds>`: per-sample orchestrated timeout.
 - `--max-problems <N>` and `--only-problem`: restrict problem scope.
 - `--resume`: skip samples that already have sample SV and sample test log.
@@ -164,7 +209,7 @@ These checkpoints make long-running benchmark jobs easier to operate and debug.
 ### Checkpoint 1: Discovery and Plan
 What you should observe:
 - `list-problems` returns recognized problem IDs.
-- `run --dry-run` prints run directory, campaign, run id, problem count, and profile choices.
+- `run --dry-run` prints run directory, campaign, run id, problem count, benchmark `flow_mode`, prompt mode, and profile choices.
 
 ### Checkpoint 2: Run Directory and Manifest
 What you should observe:
@@ -191,7 +236,8 @@ Each mode should include:
 ### Checkpoint 4: Per-Problem Logs
 What you should observe:
 - `<ProbNNN>/` folders with sample SV outputs and sample logs.
-- `pipeline_sampleXX/` snapshots for orchestrated traceability.
+- `pipeline_sampleXX/` snapshots for orchestrated and direct benchmark worker traces.
+- `generated/benchmark_prompt.txt` for direct and raw-prompt benchmark runs.
 
 ### Checkpoint 5: Compare Report
 What you should observe:
@@ -233,9 +279,18 @@ Symptoms:
 - Broker unreachable, or missing `verilator`/`iverilog`/`vvp`.
 
 Actions:
-1. Run `PYTHONPATH=. python3 apps/cli/cli.py doctor --preset benchmark --benchmark`.
+1. Run `PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset benchmark --benchmark`.
 2. Fix broker reachability and tool path resolution (`tools.*` in runtime config).
 3. Retry with `run --dry-run` first to confirm setup.
+
+### Symptom: `ModuleNotFoundError: pika` or other Python package import errors
+Symptoms:
+- CLI exits immediately before doctor or benchmark logic starts.
+
+Actions:
+1. In Docker, run `make deps` before opening `make shell`.
+2. Invoke the CLI with `PYTHONPATH=. poetry run python3 ...` instead of bare `python3`.
+3. On the host, run `poetry install -E openai --with dev` before using the CLI.
 
 ### Symptom: run fails because output directory already exists
 Symptoms:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import csv
+import hashlib
 import importlib.util
 import json
 import re
@@ -55,6 +56,11 @@ BODY_PORT_DECL_RE = re.compile(
     re.IGNORECASE,
 )
 IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+NUMERIC_RANGE_RE = re.compile(r"(-?\d+)\s*:\s*(-?\d+)$")
+PROMPT_PORT_RE = re.compile(
+    r"^\s*-\s*(input|output|inout)\s+([A-Za-z_][A-Za-z0-9_$]*)(?:\s*\(([^)]*)\))?\s*$",
+    re.IGNORECASE,
+)
 
 _BENCHMARK_QUEUE_PURGE_LIST = (
     "agent_tasks",
@@ -197,6 +203,53 @@ def _slug_token(text: str | None, *, default: str) -> str:
     raw = str(text or "").strip()
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-._")
     return cleaned or default
+
+
+def _hash_json_payload(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def _compact_prompt_text(prompt_text: str) -> str:
+    return " ".join(line.strip() for line in prompt_text.splitlines() if line.strip())
+
+
+def _benchmark_behavior_text(prompt_text: str, *, prompt_mode: str) -> str:
+    if prompt_mode == "raw_verilog_eval":
+        return prompt_text.strip()
+    return _compact_prompt_text(prompt_text)
+
+
+def _effective_benchmark_flow_mode(*, legacy_lightweight: bool) -> str:
+    if legacy_lightweight:
+        return "legacy_lightweight"
+    return str(get_runtime_config().benchmark.flow_mode)
+
+
+def _benchmark_execution_policy(
+    *,
+    run_name: str,
+    allow_repair_loop: bool,
+    flow_mode: str,
+) -> dict[str, Any]:
+    runtime_cfg = get_runtime_config()
+    benchmark_cfg = runtime_cfg.benchmark
+    return {
+        "preset": "benchmark",
+        "spec_profile": "benchmark",
+        "verification_profile": "oracle_compare",
+        "allow_repair_loop": allow_repair_loop,
+        "benchmark_mode": True,
+        "benchmark_flow_mode": flow_mode,
+        "benchmark_prompt_mode": str(benchmark_cfg.prompt_mode),
+        "benchmark_interface_equivalence": str(benchmark_cfg.interface_equivalence),
+        "benchmark_use_public_testbench": bool(benchmark_cfg.use_public_testbench),
+        "disable_tb_generation": bool(benchmark_cfg.disable_tb_generation),
+        "debug_rtl_only": bool(benchmark_cfg.debug_rtl_only),
+        "debug_max_retries": int(runtime_cfg.debug.max_retries),
+        "rtl_language": str(benchmark_cfg.rtl_language),
+        "run_name": run_name,
+    }
 
 
 def _utc_now_iso() -> str:
@@ -675,17 +728,8 @@ def _resolve_target_interface(case: PromptCase) -> list[dict[str, Any]]:
     signals: list[dict[str, Any]] = []
     for match in MODULE_PORT_RE.finditer(header):
         direction = match.group(1).upper()
-        width_token = (match.group(2) or "").strip()
         name = match.group(3)
-        width: int | str = 1
-        if width_token:
-            inner = width_token[1:-1].strip()
-            simple = re.match(r"(\d+)\s*:\s*0$", inner)
-            if simple:
-                width = int(simple.group(1)) + 1
-            else:
-                width = f"({inner})+1"
-        signals.append({"name": name, "direction": direction, "width": width})
+        signals.append({"name": name, "direction": direction, "width": _width_from_range_token(match.group(2))})
     return signals
 
 
@@ -694,10 +738,196 @@ def _width_from_range_token(width_token: str | None) -> int | str:
     if not text:
         return 1
     inner = text[1:-1].strip() if text.startswith("[") and text.endswith("]") else text
-    simple = re.match(r"(\d+)\s*:\s*0$", inner)
-    if simple:
-        return int(simple.group(1)) + 1
+    numeric = NUMERIC_RANGE_RE.fullmatch(inner)
+    if numeric:
+        msb = int(numeric.group(1))
+        lsb = int(numeric.group(2))
+        return abs(msb - lsb) + 1
     return f"({inner})+1"
+
+
+def _prompt_width(width_hint: str | None) -> int | str:
+    text = str(width_hint or "").strip()
+    if not text:
+        return 1
+    match = re.search(r"(\d+)", text)
+    if match:
+        return int(match.group(1))
+    return 1
+
+
+def _resolve_prompt_interface(prompt_text: str) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    for line in prompt_text.splitlines():
+        match = PROMPT_PORT_RE.match(line)
+        if not match:
+            continue
+        direction_raw, name, width_hint = match.groups()
+        signals.append(
+            {
+                "name": name.strip(),
+                "direction": direction_raw.upper(),
+                "width": _prompt_width(width_hint),
+            }
+        )
+    return signals
+
+
+def _resolve_effective_interface(case: PromptCase, prompt_text: str) -> list[dict[str, Any]]:
+    ref_interface = _resolve_target_interface(case)
+    if ref_interface:
+        return ref_interface
+    return _resolve_prompt_interface(prompt_text)
+
+
+def _infer_benchmark_clocking(interface_signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    signal_names = {
+        str(signal.get("name", "")).strip().lower()
+        for signal in interface_signals
+        if isinstance(signal, dict)
+    }
+    clk_name = "clk" if "clk" in signal_names else ("clock" if "clock" in signal_names else "")
+    if not clk_name:
+        return []
+    rst_name = "rst_n" if "rst_n" in signal_names else ("reset" if "reset" in signal_names else None)
+    return [{"clock_name": clk_name, "clock_polarity": "POSEDGE", "reset_name": rst_name}]
+
+
+def _infer_direct_contract_style(prompt_text: str, interface_signals: list[dict[str, Any]]) -> str:
+    text = prompt_text.lower()
+    signal_names = {
+        str(signal.get("name", "")).strip().lower()
+        for signal in interface_signals
+        if isinstance(signal, dict)
+    }
+    if "combinational logic" in text or ("clk" not in signal_names and "clock" not in signal_names):
+        return "combinational"
+    if any(token in text for token in ("fsm", "state machine", "counter", "register", "sequential", "timer")):
+        return "sequential"
+    if "clk" in signal_names or "clock" in signal_names:
+        return "sequential"
+    return "unknown"
+
+
+def _write_benchmark_prompt_artifact(generated_root: Path, prompt_text: str) -> Path:
+    generated_root.mkdir(parents=True, exist_ok=True)
+    prompt_path = generated_root / "benchmark_prompt.txt"
+    prompt_path.write_text(prompt_text.strip() + "\n", encoding="utf-8")
+    return prompt_path
+
+
+def _build_direct_design_context(
+    *,
+    generated_root: Path,
+    prompt_text: str,
+    target_module_name: str,
+    interface_signals: list[dict[str, Any]],
+    execution_policy: dict[str, Any],
+) -> tuple[Path, Path]:
+    generated_root.mkdir(parents=True, exist_ok=True)
+    prompt_mode = str(execution_policy.get("benchmark_prompt_mode", "raw_verilog_eval")).strip().lower()
+    behavior = _benchmark_behavior_text(prompt_text, prompt_mode=prompt_mode)
+    clocking = _infer_benchmark_clocking(interface_signals)
+    contract_style = _infer_direct_contract_style(prompt_text, interface_signals)
+    node = {
+        "rtl_file": f"rtl/{target_module_name}.sv",
+        "rtl_files": [f"rtl/{target_module_name}.sv"],
+        "testbench_file": f"rtl/{target_module_name}_tb.sv",
+        "interface": {"signals": interface_signals},
+        "uses_library": [],
+        "clocking": clocking,
+        "coverage_goals": {},
+        "demo_behavior": behavior,
+        "benchmark_prompt": prompt_text,
+        "verification": {
+            "test_goals": ["Pass benchmark harness checks for all provided tests."],
+            "oracle_strategy": "Use benchmark-provided reference outputs as oracle.",
+            "stimulus_strategy": "Use benchmark-provided test stimuli.",
+            "pass_fail_criteria": ["DUT outputs match oracle outputs for benchmark tests."],
+            "coverage_targets": [],
+            "reset_constraints": {"min_cycles_after_reset": 0},
+        },
+        "acceptance": {
+            "required_artifacts": [
+                {"name": "rtl", "description": "Generated RTL source", "mandatory": True},
+                {"name": "sim_log", "description": "Simulation log from harness", "mandatory": True},
+            ],
+            "acceptance_metrics": [
+                {
+                    "metric_id": "benchmark_pass",
+                    "description": "All benchmark tests pass.",
+                    "operator": "==",
+                    "target_value": "1",
+                    "metric_source": "sim_log",
+                }
+            ],
+            "exclusions": [],
+            "synthesis_target": "fpga_generic",
+        },
+        "verification_scope": str(execution_policy.get("verification_profile", "oracle_compare")),
+        "children": [],
+        "connections": [],
+        "module_contract": {
+            "node_type": "module",
+            "style": contract_style,
+            "description": f"Direct benchmark module for {target_module_name}.",
+        },
+    }
+    design_context = {
+        "design_context_hash": None,
+        "nodes": {target_module_name: node},
+        "standard_library": {},
+        "top_module": target_module_name,
+        "modules": [target_module_name],
+        "connections": [],
+        "execution_policy": execution_policy,
+        "benchmark_prompt": prompt_text,
+    }
+    design_context["design_context_hash"] = _hash_json_payload(design_context["nodes"])
+    dag = {
+        "nodes": [
+            {
+                "id": target_module_name,
+                "type": "module",
+                "deps": [],
+                "state": "PENDING",
+                "artifacts": {},
+                "metrics": {},
+            }
+        ]
+    }
+    design_context_path = generated_root / "design_context.json"
+    dag_path = generated_root / "dag.json"
+    design_context_path.write_text(json.dumps(design_context, indent=2), encoding="utf-8")
+    dag_path.write_text(json.dumps(dag, indent=2), encoding="utf-8")
+    _write_benchmark_prompt_artifact(generated_root, prompt_text)
+    return design_context_path, dag_path
+
+
+def _apply_benchmark_prompt_policy(
+    *,
+    design_context_path: Path,
+    prompt_text: str,
+    target_module_name: str,
+) -> None:
+    if not design_context_path.exists():
+        return
+    payload = json.loads(design_context_path.read_text(encoding="utf-8"))
+    nodes = payload.get("nodes") if isinstance(payload.get("nodes"), dict) else {}
+    execution_policy = payload.get("execution_policy") if isinstance(payload.get("execution_policy"), dict) else {}
+    prompt_mode = str(execution_policy.get("benchmark_prompt_mode", "normalized")).strip().lower()
+    payload["benchmark_prompt"] = prompt_text
+    if prompt_mode != "raw_verilog_eval":
+        design_context_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return
+
+    node_key = target_module_name if target_module_name in nodes else (next(iter(nodes.keys())) if nodes else None)
+    if node_key is not None:
+        node = nodes.get(node_key, {})
+        node["benchmark_prompt"] = prompt_text
+        if len(nodes) == 1:
+            node["demo_behavior"] = prompt_text
+    design_context_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def _canonical_width(width: Any) -> int | str:
@@ -781,16 +1011,27 @@ def _assert_generated_interface_matches(
     rtl_path: Path,
     module_name: str,
     expected_signals: list[dict[str, Any]],
+    equivalence_mode: str = "canonical_width",
 ) -> None:
     actual_signals = _extract_generated_interface(rtl_path, module_name)
-    expected_map = {
-        str(sig["name"]): (str(sig["direction"]).upper(), _canonical_width(sig.get("width", 1)))
-        for sig in expected_signals
-    }
-    actual_map = {
-        str(sig["name"]): (str(sig["direction"]).upper(), _canonical_width(sig.get("width", 1)))
-        for sig in actual_signals
-    }
+    if equivalence_mode == "strict":
+        expected_map = {
+            str(sig["name"]): (str(sig["direction"]).upper(), str(sig.get("width", 1)))
+            for sig in expected_signals
+        }
+        actual_map = {
+            str(sig["name"]): (str(sig["direction"]).upper(), str(sig.get("width", 1)))
+            for sig in actual_signals
+        }
+    else:
+        expected_map = {
+            str(sig["name"]): (str(sig["direction"]).upper(), _canonical_width(sig.get("width", 1)))
+            for sig in expected_signals
+        }
+        actual_map = {
+            str(sig["name"]): (str(sig["direction"]).upper(), _canonical_width(sig.get("width", 1)))
+            for sig in actual_signals
+        }
 
     missing = sorted(set(expected_map) - set(actual_map))
     extra = sorted(set(actual_map) - set(expected_map))
@@ -954,6 +1195,7 @@ def _bind_benchmark_oracle_assets(
     target_module_name: str,
     test_sv: Path,
     ref_sv: Path,
+    execution_policy: dict[str, Any] | None = None,
 ) -> tuple[str, str, str]:
     if not design_context_path.exists():
         raise RuntimeError(f"design_context.json not found: {design_context_path}")
@@ -972,16 +1214,16 @@ def _bind_benchmark_oracle_assets(
         bound_node = next(iter(nodes.keys()))
     node = nodes[bound_node]
 
+    policy = payload.get("execution_policy") if isinstance(payload.get("execution_policy"), dict) else {}
+    for key, value in (execution_policy or {}).items():
+        policy.setdefault(key, value)
+    payload["execution_policy"] = policy
+
     test_path = str(test_sv.resolve())
     ref_path = str(ref_sv.resolve())
-    node["testbench_file"] = test_path
-    node["oracle_ref_file"] = ref_path
-
-    execution_policy = payload.get("execution_policy") if isinstance(payload.get("execution_policy"), dict) else {}
-    execution_policy.setdefault("disable_tb_generation", True)
-    execution_policy.setdefault("debug_rtl_only", True)
-    execution_policy.setdefault("benchmark_use_public_testbench", True)
-    payload["execution_policy"] = execution_policy
+    if bool(policy.get("benchmark_use_public_testbench", True)):
+        node["testbench_file"] = test_path
+        node["oracle_ref_file"] = ref_path
 
     design_context_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return bound_node, test_path, ref_path
@@ -1103,14 +1345,11 @@ def _generate_one_sample_legacy(
         run_name=run_name,
         default_tags=["benchmark", "legacy_lightweight"],
     )
-
-    execution_policy = {
-        "preset": "benchmark",
-        "spec_profile": "benchmark",
-        "verification_profile": "oracle_compare",
-        "allow_repair_loop": False,
-        "benchmark_mode": True,
-    }
+    execution_policy = _benchmark_execution_policy(
+        run_name=run_name,
+        allow_repair_loop=False,
+        flow_mode="legacy_lightweight",
+    )
 
     with tempfile.TemporaryDirectory(prefix=f"{case.problem_id}_") as tmp:
         tmp_root = Path(tmp)
@@ -1135,6 +1374,12 @@ def _generate_one_sample_legacy(
             design_context_path = out_dir / "design_context.json"
             if not design_context_path.exists():
                 raise RuntimeError("Planner did not produce design_context.json")
+            _apply_benchmark_prompt_policy(
+                design_context_path=design_context_path,
+                prompt_text=prompt_text,
+                target_module_name=target_module_name,
+            )
+            _write_benchmark_prompt_artifact(out_dir, prompt_text)
             context_payload = json.loads(design_context_path.read_text(encoding="utf-8"))
             nodes = context_payload.get("nodes") if isinstance(context_payload.get("nodes"), dict) else {}
             if not nodes:
@@ -1145,10 +1390,11 @@ def _generate_one_sample_legacy(
             task_ctx = DemoContextBuilder(design_context_path, out_dir).build(top_module)
             task_ctx["execution_policy"] = execution_policy
             task_ctx["node_id"] = target_module_name
-            ref_interface = _resolve_target_interface(case)
+            ref_interface = _resolve_effective_interface(case, prompt_text)
             if ref_interface:
                 task_ctx["interface"] = {"signals": ref_interface}
             task_ctx["clocking"] = {}
+            task_ctx["benchmark_prompt"] = prompt_text
             task_ctx["demo_behavior"] = prompt_text
             result = worker.handle_task(
                 TaskMessage(
@@ -1181,6 +1427,150 @@ def _generate_one_sample_legacy(
             get_tracker().finalize()
 
 
+def _generate_one_sample_direct(
+    *,
+    connection_params: pika.ConnectionParameters,
+    case: PromptCase,
+    sample_index: int,
+    sample_dir: Path,
+    pipeline_timeout_s: float,
+    run_name: str,
+    execution_policy: dict[str, Any],
+    task_memory_root: Path,
+) -> None:
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    sample_name = f"{case.problem_id}_sample{sample_index:02d}"
+    sample_sv = sample_dir / f"{sample_name}.sv"
+    generate_log_path = sample_dir / f"{sample_name}-sv-generate.log"
+
+    prompt_text = case.prompt_path.read_text(encoding="utf-8", errors="ignore")
+    target_module_name = _resolve_target_module_name(case, prompt_text)
+    expected_interface = _resolve_effective_interface(case, prompt_text)
+
+    pipeline_status = TaskStatus.FAILURE
+    detail_message = ""
+
+    with tempfile.TemporaryDirectory(prefix=f"{case.problem_id}_direct_") as tmp:
+        runtime_root = Path(tmp)
+        generated_root = runtime_root / "generated"
+        run_routing = create_run_routing()
+        configure_observability(
+            run_name=run_name,
+            run_id=run_routing.run_id,
+            default_tags=["benchmark", "direct_single_module"],
+        )
+        before = _tracker_totals()
+        sample_execution_policy = dict(execution_policy)
+        sample_execution_policy["run_name"] = run_name
+        metadata: dict[str, Any] = {
+            "problem_id": case.problem_id,
+            "sample_index": sample_index,
+            "target_module": target_module_name,
+            "run_name": run_name,
+            "run_id": run_routing.run_id,
+            "results_routing_key": run_routing.results_routing_key,
+            "execution_policy": sample_execution_policy,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "pipeline_timeout_s": pipeline_timeout_s,
+        }
+        _reset_dir(task_memory_root)
+
+        try:
+            design_context_path, dag_path = _build_direct_design_context(
+                generated_root=generated_root,
+                prompt_text=prompt_text,
+                target_module_name=target_module_name,
+                interface_signals=expected_interface,
+                execution_policy=sample_execution_policy,
+            )
+            bound_node, oracle_testbench_path, oracle_ref_path = _bind_benchmark_oracle_assets(
+                design_context_path=design_context_path,
+                target_module_name=target_module_name,
+                test_sv=case.test_sv,
+                ref_sv=case.ref_sv,
+                execution_policy=sample_execution_policy,
+            )
+            metadata["oracle_context"] = {
+                "bound_node": bound_node,
+                "testbench_path": oracle_testbench_path,
+                "ref_path": oracle_ref_path,
+            }
+
+            final_states = DemoOrchestrator(
+                connection_params,
+                design_context_path,
+                dag_path,
+                generated_root,
+                task_memory_root,
+                run_id=run_routing.run_id,
+                results_routing_key=run_routing.results_routing_key,
+                allow_repair_loop=True,
+                execution_policy=sample_execution_policy,
+            ).run(timeout_s=pipeline_timeout_s)
+            failed_nodes = sorted(node_id for node_id, state in final_states.items() if state != "DONE")
+            if failed_nodes:
+                raise RuntimeError(
+                    "Pipeline did not complete successfully for all nodes: "
+                    + ", ".join(f"{node_id}={final_states[node_id]}" for node_id in failed_nodes)
+                )
+
+            rtl_path = _resolve_generated_rtl_path(design_context_path, generated_root, target_module_name)
+            if expected_interface:
+                _assert_generated_interface_matches(
+                    rtl_path=rtl_path,
+                    module_name=target_module_name,
+                    expected_signals=expected_interface,
+                    equivalence_mode=str(sample_execution_policy.get("benchmark_interface_equivalence", "canonical_width")),
+                )
+            shutil.copy2(rtl_path, sample_sv)
+            pipeline_status = TaskStatus.SUCCESS
+            detail_message = (
+                f"pipeline_status = success\n"
+                f"run_id = {run_routing.run_id}\n"
+                f"rtl_source = {rtl_path}"
+            )
+            metadata["rtl_source"] = str(rtl_path)
+        except Exception as exc:  # noqa: BLE001
+            detail_message = (
+                f"pipeline_status = failure\n"
+                f"run_id = {run_routing.run_id}\n"
+                f"error = {exc}"
+            )
+            metadata["error"] = str(exc)
+            raise RuntimeError(
+                f"Direct benchmark generation failed for {case.problem_id} sample {sample_index:02d}: {exc}"
+            ) from exc
+        finally:
+            after = _tracker_totals()
+            delta = _totals_delta(before, after)
+            _write_generate_log(
+                path=generate_log_path,
+                status=pipeline_status,
+                prompt_tokens=delta["prompt_tokens"],
+                resp_tokens=delta["completion_tokens"],
+                cost_usd=delta["estimated_cost_usd"],
+                details=detail_message,
+            )
+            metadata.update(
+                {
+                    "status": pipeline_status.value,
+                    "prompt_tokens": int(delta["prompt_tokens"]),
+                    "resp_tokens": int(delta["completion_tokens"]),
+                    "total_tokens": int(delta["total_tokens"]),
+                    "estimated_cost_usd": round(delta["estimated_cost_usd"], 6),
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            _snapshot_pipeline_trace(
+                sample_dir=sample_dir,
+                sample_index=sample_index,
+                generated_root=generated_root,
+                task_memory_root=task_memory_root,
+                metadata=metadata,
+            )
+            get_tracker().finalize()
+
+
 def _generate_one_sample_orchestrated(
     *,
     connection_params: pika.ConnectionParameters,
@@ -1199,7 +1589,7 @@ def _generate_one_sample_orchestrated(
 
     prompt_text = case.prompt_path.read_text(encoding="utf-8", errors="ignore")
     target_module_name = _resolve_target_module_name(case, prompt_text)
-    expected_interface = _resolve_target_interface(case)
+    expected_interface = _resolve_effective_interface(case, prompt_text)
 
     pipeline_status = TaskStatus.FAILURE
     detail_message = ""
@@ -1250,11 +1640,18 @@ def _generate_one_sample_orchestrated(
             dag_path = generated_root / "dag.json"
             if not design_context_path.exists() or not dag_path.exists():
                 raise RuntimeError("Planner did not produce design_context.json and dag.json")
+            _apply_benchmark_prompt_policy(
+                design_context_path=design_context_path,
+                prompt_text=prompt_text,
+                target_module_name=target_module_name,
+            )
+            _write_benchmark_prompt_artifact(generated_root, prompt_text)
             bound_node, oracle_testbench_path, oracle_ref_path = _bind_benchmark_oracle_assets(
                 design_context_path=design_context_path,
                 target_module_name=target_module_name,
                 test_sv=case.test_sv,
                 ref_sv=case.ref_sv,
+                execution_policy=sample_execution_policy,
             )
             metadata["oracle_context"] = {
                 "bound_node": bound_node,
@@ -1286,6 +1683,7 @@ def _generate_one_sample_orchestrated(
                     rtl_path=rtl_path,
                     module_name=target_module_name,
                     expected_signals=expected_interface,
+                    equivalence_mode=str(sample_execution_policy.get("benchmark_interface_equivalence", "canonical_width")),
                 )
             shutil.copy2(rtl_path, sample_sv)
             pipeline_status = TaskStatus.SUCCESS
@@ -1447,6 +1845,7 @@ def _run_mode(
         mode_run_name = _slug_token(f"{run_name_prefix}_{run_label}", default=f"benchmark_{run_label}")
     else:
         mode_run_name = f"benchmark_{run_label}_{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    effective_flow_mode = _effective_benchmark_flow_mode(legacy_lightweight=legacy_lightweight)
 
     task_memory_root = Path("artifacts/task_memory").resolve()
     workers: list[threading.Thread] = []
@@ -1456,7 +1855,20 @@ def _run_mode(
     skipped_samples = 0
 
     try:
-        if legacy_lightweight:
+        execution_policy = _benchmark_execution_policy(
+            run_name=mode_run_name,
+            allow_repair_loop=True,
+            flow_mode=effective_flow_mode,
+        )
+        if bool(execution_policy.get("disable_tb_generation")) and not bool(
+            execution_policy.get("benchmark_use_public_testbench")
+        ):
+            raise RuntimeError(
+                "Invalid benchmark execution policy: disable_tb_generation=true requires "
+                "benchmark.use_public_testbench=true so the pipeline has a testbench to run."
+            )
+
+        if effective_flow_mode == "legacy_lightweight":
             worker = ImplementationWorker(connection_params=None, stop_event=threading.Event())
             if not worker.gateway:
                 raise RuntimeError(
@@ -1474,18 +1886,6 @@ def _run_mode(
         n_samples = int(sample_cfg["n"])
         total_samples = len(cases) * n_samples
         sample_counter = 0
-        execution_policy = {
-            "preset": "benchmark",
-            "spec_profile": "benchmark",
-            "verification_profile": "oracle_compare",
-            "allow_repair_loop": True,
-            "benchmark_mode": True,
-            "benchmark_use_public_testbench": True,
-            "disable_tb_generation": True,
-            "debug_rtl_only": True,
-            "debug_max_retries": int(get_runtime_config().debug.max_retries),
-            "run_name": mode_run_name,
-        }
 
         with _isolated_task_memory(task_memory_root):
             for case in cases:
@@ -1504,13 +1904,24 @@ def _run_mode(
                     generation_error: Exception | None = None
                     if not (resume and sample_sv.exists()):
                         try:
-                            if legacy_lightweight:
+                            if effective_flow_mode == "legacy_lightweight":
                                 _generate_one_sample_legacy(
                                     worker=worker,
                                     case=case,
                                     sample_index=sample_index,
                                     sample_dir=sample_dir,
                                     run_name=mode_run_name,
+                                )
+                            elif effective_flow_mode == "direct_single_module":
+                                _generate_one_sample_direct(
+                                    connection_params=connection_params,
+                                    case=case,
+                                    sample_index=sample_index,
+                                    sample_dir=sample_dir,
+                                    pipeline_timeout_s=pipeline_timeout_s,
+                                    run_name=mode_run_name,
+                                    execution_policy=execution_policy,
+                                    task_memory_root=task_memory_root,
                                 )
                             else:
                                 _generate_one_sample_orchestrated(
@@ -1584,13 +1995,14 @@ def _run_mode(
             "summary_txt": str(summary_txt),
             "summary_csv": str(summary_csv),
             "aggregate_json": str(out_dir / "aggregate.json"),
+            "flow_mode": effective_flow_mode,
             "generation_failures": generation_failures,
             "sample_test_failures": sample_test_failures,
             "skipped_samples": skipped_samples,
             "total_samples": total_samples,
         }
         print(
-            f"[mode:{run_label}] samples={total_samples}, skipped={skipped_samples}, "
+            f"[mode:{run_label}] flow={effective_flow_mode}, samples={total_samples}, skipped={skipped_samples}, "
             f"generation_failures={generation_failures}, sample_test_failures={sample_test_failures}"
         )
         return result
@@ -1709,6 +2121,7 @@ def run_from_args(args: argparse.Namespace) -> None:
     overwrite = bool(getattr(args, "overwrite", False))
     purge_queues = bool(getattr(args, "purge_queues", False))
     dry_run = bool(getattr(args, "dry_run", False))
+    effective_flow_mode = _effective_benchmark_flow_mode(legacy_lightweight=legacy_lightweight)
     if resume and overwrite:
         raise RuntimeError("Choose either --resume or --overwrite, not both.")
 
@@ -1722,9 +2135,15 @@ def run_from_args(args: argparse.Namespace) -> None:
     iverilog_bin = _resolve_tool(runtime_cfg.tools.iverilog_path, "iverilog")
     vvp_bin = _resolve_tool(runtime_cfg.tools.vvp_path, "vvp")
 
-    if not dry_run and not legacy_lightweight and not verilator_bin:
+    if benchmark_cfg.disable_tb_generation and not benchmark_cfg.use_public_testbench:
         raise RuntimeError(
-            "Orchestrated benchmark mode requires verilator on PATH "
+            "Invalid benchmark config: benchmark.disable_tb_generation=true requires "
+            "benchmark.use_public_testbench=true."
+        )
+
+    if not dry_run and effective_flow_mode != "legacy_lightweight" and not verilator_bin:
+        raise RuntimeError(
+            "Benchmark direct/orchestrated modes require verilator on PATH "
             "(or configured in tools.verilator_path)."
         )
     if not dry_run and (not iverilog_bin or not vvp_bin):
@@ -1732,7 +2151,7 @@ def run_from_args(args: argparse.Namespace) -> None:
             "Benchmark runs require both iverilog and vvp on PATH (or configured in tools.iverilog_path/tools.vvp_path)."
         )
 
-    if not dry_run and not legacy_lightweight:
+    if not dry_run and effective_flow_mode != "legacy_lightweight":
         _ensure_broker_connection(connection_params_from_config())
 
     run_root = _resolve_run_root(
@@ -1770,11 +2189,13 @@ def run_from_args(args: argparse.Namespace) -> None:
         print(f"- campaign: {run_root.parent.name}")
         print(f"- run_id: {run_root.name}")
         print(f"- problems: {len(cases)}")
+        print(f"- flow_mode: {effective_flow_mode}")
+        print(f"- prompt_mode: {benchmark_cfg.prompt_mode}")
         print(f"- sampled_profile: {sampled}")
         print(f"- canonical_samples_per_problem: {canonical_cfg['n']}")
         if sampled:
             print(f"- sampled_samples_per_problem: {sampled_cfg['n']}")
-        print(f"- legacy_lightweight: {legacy_lightweight}")
+        print(f"- legacy_lightweight_cli_flag: {legacy_lightweight}")
         print(f"- resume: {resume}")
         print(f"- overwrite: {overwrite}")
         print(f"- purge_queues: {purge_queues}")
@@ -1803,6 +2224,13 @@ def run_from_args(args: argparse.Namespace) -> None:
             "benchmark": {
                 "prompts_dir": str(prompts_dir),
                 "verilog_eval_root": str(root),
+                "flow_mode": str(benchmark_cfg.flow_mode),
+                "prompt_mode": str(benchmark_cfg.prompt_mode),
+                "disable_tb_generation": bool(benchmark_cfg.disable_tb_generation),
+                "debug_rtl_only": bool(benchmark_cfg.debug_rtl_only),
+                "use_public_testbench": bool(benchmark_cfg.use_public_testbench),
+                "interface_equivalence": str(benchmark_cfg.interface_equivalence),
+                "rtl_language": str(benchmark_cfg.rtl_language),
                 "canonical": canonical_cfg,
                 "sampled": sampled_cfg,
             },
@@ -1810,6 +2238,7 @@ def run_from_args(args: argparse.Namespace) -> None:
         "flags": {
             "sampled": sampled,
             "legacy_lightweight": legacy_lightweight,
+            "effective_flow_mode": effective_flow_mode,
             "pipeline_timeout": float(getattr(args, "pipeline_timeout", 180.0)),
             "resume": resume,
             "overwrite": overwrite,

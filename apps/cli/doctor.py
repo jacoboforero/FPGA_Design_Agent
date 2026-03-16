@@ -12,12 +12,14 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
+from urllib.parse import urlparse
 
 import pika
 
 from core.runtime.config import DEFAULT_CONFIG_PATH, RuntimeConfig, get_runtime_config
 
 PROBLEM_RE = re.compile(r"^(Prob\d+)", re.IGNORECASE)
+_LOCAL_BROKER_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 @dataclass(frozen=True)
@@ -50,10 +52,25 @@ def _has_langchain_schema() -> bool:
         return False
 
 
+def _resolve_broker_url(configured_url: str) -> str:
+    """
+    Keep doctor aligned with the main CLI: if runtime YAML points to localhost
+    but the environment points to a container/service host, prefer the env URL.
+    """
+    env_url = os.getenv("RABBITMQ_URL", "").strip()
+    if not env_url:
+        return configured_url
+    cfg_host = (urlparse(configured_url).hostname or "").strip().lower()
+    env_host = (urlparse(env_url).hostname or "").strip().lower()
+    if cfg_host in _LOCAL_BROKER_HOSTS and env_host and env_host not in _LOCAL_BROKER_HOSTS:
+        return env_url
+    return configured_url
+
+
 def _benchmark_broker_ready(config: RuntimeConfig) -> tuple[bool, str]:
     broker_cfg = config.broker
     try:
-        params = pika.URLParameters(broker_cfg.url)
+        params = pika.URLParameters(_resolve_broker_url(broker_cfg.url))
         params.heartbeat = int(broker_cfg.heartbeat)
         params.blocked_connection_timeout = float(broker_cfg.blocked_connection_timeout)
         params.connection_attempts = int(broker_cfg.connection_attempts)

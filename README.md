@@ -49,19 +49,31 @@ make deps
 make cli
 ```
 
+For custom benchmark commands, open the app container and use Poetry's environment:
+
+```bash
+make shell
+export RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
+echo "$RABBITMQ_URL"
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --preset benchmark
+```
+
+Inside the container shell, set `RABBITMQ_URL` to `amqp://user:password@rabbitmq:5672/` before broker-backed CLI commands.
+
 Generated outputs go to `artifacts/generated/`, stage logs to `artifacts/task_memory/`, and run telemetry to `artifacts/observability/`.
 
 ## Host Fallback
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py --timeout 120 --config config/runtime.yaml --preset engineer_fast
+poetry install -E openai --with dev
+PYTHONPATH=. poetry run python3 apps/cli/cli.py --timeout 120 --config config/runtime.yaml --preset engineer_fast
 ```
 
 ## Common Commands
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py --preset engineer_fast
-PYTHONPATH=. python3 apps/cli/cli.py doctor --preset engineer_fast
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke
-PYTHONPATH=. python3 apps/cli/cli.py benchmark compare --left-dir <run_a>/canonical --right-dir <run_b>/canonical
+PYTHONPATH=. poetry run python3 apps/cli/cli.py --preset engineer_fast
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset engineer_fast
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark compare --left-dir <run_a>/canonical --right-dir <run_b>/canonical
 ```
 
 ## Repo Map

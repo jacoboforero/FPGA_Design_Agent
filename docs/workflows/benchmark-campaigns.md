@@ -1,6 +1,6 @@
 # Benchmark Campaign Authoring
 
-Last verified against runtime behavior: March 8, 2026.
+Last verified against runtime behavior: March 15, 2026.
 
 This page explains how to define and run multi-entry benchmark campaigns with `scripts/run_benchmark_campaign.py`.
 
@@ -20,7 +20,7 @@ Campaign files give you:
 ## Campaign Runner Command
 
 ```bash
-python3 scripts/run_benchmark_campaign.py --campaign-file benchmarks/verilog_eval/campaign.example.yaml
+PYTHONPATH=. poetry run python3 scripts/run_benchmark_campaign.py --campaign-file benchmarks/verilog_eval/campaign.example.yaml
 ```
 
 Useful runner flags:
@@ -50,6 +50,10 @@ Each `runs[]` entry supports:
 - `run_dir` (string): explicit run directory override.
 - `output_root` (string): per-entry output root override.
 - `extra_args` (list): additional CLI args appended verbatim.
+
+Flow selection note:
+- Benchmark flow is primarily chosen in the referenced runtime YAML (`benchmark.flow_mode`, `benchmark.prompt_mode`, `benchmark.rtl_language`).
+- `legacy_lightweight: true` is the one campaign-level shortcut that overrides YAML flow selection for a run entry.
 
 ## Defaults and Resolution Rules
 - `campaign` defaults to campaign file stem if omitted.
@@ -151,7 +155,7 @@ Recommended order:
 2. Execute campaign.
 3. Inspect per-run `run_manifest.json` and mode `aggregate.json` files.
 4. Run `benchmark compare` for key pairwise comparisons.
-5. Rebuild index with `python3 scripts/index_runs.py --build-links`.
+5. Rebuild index with `PYTHONPATH=. poetry run python3 scripts/index_runs.py --build-links`.
 
 ## Related Code
 - `scripts/run_benchmark_campaign.py`

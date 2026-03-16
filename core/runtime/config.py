@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError
@@ -140,6 +140,13 @@ class BenchmarkConfig(BaseModel):
     prompts_dir: str = "third_party/verilog-eval/dataset_spec-to-rtl"
     output_root: str = "artifacts/benchmarks/verilog_eval"
     oracle_manifest: Optional[str] = None
+    flow_mode: Literal["orchestrated", "legacy_lightweight", "direct_single_module"] = "direct_single_module"
+    prompt_mode: Literal["normalized", "raw_verilog_eval"] = "raw_verilog_eval"
+    disable_tb_generation: bool = True
+    debug_rtl_only: bool = True
+    use_public_testbench: bool = True
+    interface_equivalence: Literal["strict", "canonical_width"] = "canonical_width"
+    rtl_language: Literal["verilog2001", "systemverilog"] = "systemverilog"
     sim_run_timeout_s: float = 90.0
     near_miss_extra_retry_enabled: bool = True
     near_miss_max_mismatches: int = 20

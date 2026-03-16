@@ -50,6 +50,13 @@ def sandbox(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def restore_runtime_config():
+    original = get_runtime_config().model_copy(deep=True)
+    yield
+    set_runtime_config(original)
+
+
 def test_implementation_worker_missing_rtl_path():
     worker = ImplementationWorker(connection_params=None, stop_event=None)
     task = TaskMessage(
@@ -150,6 +157,41 @@ def test_implementation_worker_sanitize_preserves_identifier_names(tmp_path):
     assert "out_always @*" not in contents
     assert "always @* begin" in contents
     assert "always @(posedge clk)" in contents
+
+
+def test_implementation_worker_preserves_systemverilog_in_benchmark_mode(tmp_path):
+    worker = ImplementationWorker(connection_params=None, stop_event=None)
+    worker.gateway = FakeGateway(
+        FakeResponse(
+            content=(
+                "module demo(input logic clk, output logic out);\n"
+                "always_ff @(posedge clk) begin\n"
+                "  out <= 1'b0;\n"
+                "end\n"
+                "endmodule\n"
+            )
+        )
+    )
+    rtl_path = tmp_path / "demo.sv"
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.IMPLEMENTATION,
+        context={
+            "node_id": "demo",
+            "rtl_path": str(rtl_path),
+            "interface": {"signals": _iface_signals()},
+            "benchmark_prompt": "Please implement the benchmark module verbatim.",
+            "execution_policy": {
+                "benchmark_prompt_mode": "raw_verilog_eval",
+                "rtl_language": "systemverilog",
+            },
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    contents = rtl_path.read_text()
+    assert "always_ff" in contents
+    assert "logic" in contents
 
 
 def test_implementation_worker_rejects_integration_without_connections(tmp_path):
@@ -746,6 +788,7 @@ def test_sim_worker_missing_tools(tmp_path, monkeypatch):
 
 def test_sim_worker_build_failure(tmp_path, monkeypatch):
     worker = SimulationWorker(connection_params=None, stop_event=None)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("workers.sim.worker.shutil.which", lambda name: f"/bin/{name}")
 
     def fake_run(cmd, capture_output, text, timeout):
@@ -804,7 +847,7 @@ def test_sim_worker_failure_rerun_waveform(tmp_path, monkeypatch):
                 dump_arg = next(arg for arg in cmd if arg.startswith("+DUMP_FILE="))
                 dump_path = Path(dump_arg.split("=", 1)[1])
                 dump_path.parent.mkdir(parents=True, exist_ok=True)
-                dump_path.write_text("vcd")
+                dump_path.write_text("$date\n$end\n#0\n$enddefinitions $end\n#10\n")
                 return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
             return subprocess.CompletedProcess(cmd, 1, stdout="FAIL: cycle=12 time=120", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -825,6 +868,7 @@ def test_sim_worker_failure_rerun_waveform(tmp_path, monkeypatch):
 
 def test_sim_worker_success(tmp_path, monkeypatch):
     worker = SimulationWorker(connection_params=None, stop_event=None)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("workers.sim.worker.shutil.which", lambda name: f"/bin/{name}")
 
     def fake_run(cmd, capture_output, text, timeout):
@@ -1211,6 +1255,65 @@ def test_debug_worker_rtl_patch_preserves_identifier_names(sandbox, monkeypatch)
     assert "out_always @*" not in contents
     assert "always @* begin" in contents
     assert "always @(posedge clk)" in contents
+
+
+def test_debug_worker_preserves_systemverilog_when_configured(sandbox, monkeypatch):
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.debug.max_attempts = 1
+    set_runtime_config(cfg)
+    monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
+
+    def fake_run(cmd, timeout_s):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("agents.debug.worker._run_subprocess", fake_run)
+
+    worker = DebugWorker(connection_params=None, stop_event=None)
+    worker.gateway = FakeGateway(
+        FakeResponse(
+            content=json.dumps(
+                {
+                    "summary": "keep sv",
+                    "touched_files": ["rtl"],
+                    "rtl_lines": [
+                        "module demo(input logic clk, output logic out);",
+                        "always_ff @(posedge clk) begin",
+                        "  out <= 1'b0;",
+                        "end",
+                        "endmodule",
+                    ],
+                    "tb_lines": None,
+                    "risks": [],
+                    "next_steps": ["retry"],
+                }
+            )
+        )
+    )
+    rtl = Path("demo.sv")
+    tb = Path("demo_tb.sv")
+    rtl.write_text("module demo(input clk, output out); assign out = clk; endmodule\n")
+    tb.write_text("module tb_demo; initial $finish; endmodule\n")
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.DEBUG,
+        context={
+            "node_id": "demo",
+            "rtl_path": str(rtl),
+            "tb_path": str(tb),
+            "attempt": 1,
+            "debug_reason": "rtl_lint",
+            "benchmark_prompt": "Please implement the benchmark module verbatim.",
+            "execution_policy": {
+                "benchmark_prompt_mode": "raw_verilog_eval",
+                "rtl_language": "systemverilog",
+            },
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    contents = rtl.read_text()
+    assert "always_ff" in contents
+    assert "logic" in contents
 
 
 def test_debug_worker_rtl_only_mode_rejects_tb_only_patch(sandbox):

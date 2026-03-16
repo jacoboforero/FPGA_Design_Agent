@@ -43,6 +43,9 @@ class DemoContextBuilder:
         if connections is None:
             connections = self._context.get("connections", [])
         execution_policy = self._context.get("execution_policy", {})
+        benchmark_prompt = node.get("benchmark_prompt")
+        if benchmark_prompt is None:
+            benchmark_prompt = self._context.get("benchmark_prompt")
         return {
             "node_id": node_id,
             "interface": node["interface"],
@@ -59,6 +62,7 @@ class DemoContextBuilder:
             "acceptance": node.get("acceptance", {}),
             "verification_scope": node.get("verification_scope", "full"),
             "execution_policy": execution_policy,
+            "benchmark_prompt": benchmark_prompt,
             "top_module": self._context.get("top_module"),
             "children": children,
             "child_interfaces": child_interfaces,

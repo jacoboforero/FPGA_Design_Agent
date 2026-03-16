@@ -2,6 +2,12 @@
 
 This folder explains how the pipeline works today: what users run, what each runtime component does, and where to look when something fails.
 
+CLI examples in this docs set assume one of these environments:
+- inside the `app` container after `make build`, `make up`, `make deps`, `make shell`
+- on the host after `poetry install -E openai --with dev`
+
+When examples use `PYTHONPATH=. poetry run python3 ...`, use that exact form unless a page explicitly says otherwise.
+
 ## Start Here
 - [vision-and-ux.md](./vision-and-ux.md): goals, product intent, and intended user experience.
 - [overview.md](./overview.md): end-to-end lifecycle in plain language.

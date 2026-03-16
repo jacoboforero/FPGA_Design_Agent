@@ -12,27 +12,38 @@ This directory contains repository-owned benchmark integration assets. Upstream 
 
 ## Running Benchmarks
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py doctor --preset benchmark --benchmark
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke --sampled
+make build
+make up
+make deps
+make shell
+```
+
+Then inside the container shell:
+
+```bash
+export RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
+git submodule update --init --recursive
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset benchmark --benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke --sampled
 ```
 
 List available benchmark cases:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark list-problems --preset benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --preset benchmark
 ```
 
 Compare two benchmark mode directories:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py benchmark compare --left-dir <run_a>/canonical --right-dir <run_b>/canonical
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark compare --left-dir <run_a>/canonical --right-dir <run_b>/canonical
 ```
 
 Run multi-entry campaigns from YAML:
 
 ```bash
-python3 scripts/run_benchmark_campaign.py --campaign-file benchmarks/verilog_eval/campaign.example.yaml
+PYTHONPATH=. poetry run python3 scripts/run_benchmark_campaign.py --campaign-file benchmarks/verilog_eval/campaign.example.yaml
 ```
 
 ## Optional Prompt Overrides

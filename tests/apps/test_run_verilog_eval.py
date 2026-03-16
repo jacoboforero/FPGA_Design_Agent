@@ -386,6 +386,32 @@ def test_assert_generated_interface_matches_rejects_extra_ports(tmp_path: Path):
         )
 
 
+def test_assert_generated_interface_matches_accepts_equivalent_numeric_width_ranges(tmp_path: Path):
+    rtl_path = tmp_path / "TopModule.sv"
+    rtl_path.write_text(
+        "\n".join(
+            [
+                "module TopModule (",
+                "  input [2:0] state,",
+                "  output [2:0] next_state",
+                ");",
+                "  assign next_state = state;",
+                "endmodule",
+            ]
+        )
+        + "\n"
+    )
+    _assert_generated_interface_matches(
+        rtl_path=rtl_path,
+        module_name="TopModule",
+        expected_signals=[
+            {"name": "state", "direction": "INPUT", "width": 3},
+            {"name": "next_state", "direction": "OUTPUT", "width": 3},
+        ],
+        equivalence_mode="canonical_width",
+    )
+
+
 def test_bind_benchmark_oracle_assets_repoints_design_context(tmp_path: Path):
     test_sv = tmp_path / "Prob001_test.sv"
     ref_sv = tmp_path / "Prob001_ref.sv"
@@ -417,6 +443,11 @@ def test_bind_benchmark_oracle_assets_repoints_design_context(tmp_path: Path):
         target_module_name="TopModule",
         test_sv=test_sv,
         ref_sv=ref_sv,
+        execution_policy={
+            "disable_tb_generation": True,
+            "debug_rtl_only": True,
+            "benchmark_use_public_testbench": True,
+        },
     )
     assert bound_node == "TopModule"
     assert bound_tb == str(test_sv.resolve())
@@ -429,6 +460,50 @@ def test_bind_benchmark_oracle_assets_repoints_design_context(tmp_path: Path):
     assert payload["execution_policy"]["disable_tb_generation"] is True
     assert payload["execution_policy"]["debug_rtl_only"] is True
     assert payload["execution_policy"]["benchmark_use_public_testbench"] is True
+
+
+def test_bind_benchmark_oracle_assets_respects_generated_tb_mode(tmp_path: Path):
+    test_sv = tmp_path / "Prob001_test.sv"
+    ref_sv = tmp_path / "Prob001_ref.sv"
+    test_sv.write_text("module tb; endmodule\n")
+    ref_sv.write_text("module RefModule; endmodule\n")
+
+    design_context_path = tmp_path / "design_context.json"
+    design_context_path.write_text(
+        """
+{
+  "design_context_hash": "abc123",
+  "nodes": {
+    "TopModule": {
+      "rtl_file": "rtl/TopModule.sv",
+      "testbench_file": "rtl/TopModule_tb.sv"
+    }
+  },
+  "top_module": "TopModule",
+  "execution_policy": {
+    "preset": "benchmark"
+  }
+}
+""".strip()
+        + "\n"
+    )
+
+    _bind_benchmark_oracle_assets(
+        design_context_path=design_context_path,
+        target_module_name="TopModule",
+        test_sv=test_sv,
+        ref_sv=ref_sv,
+        execution_policy={
+            "disable_tb_generation": False,
+            "debug_rtl_only": False,
+            "benchmark_use_public_testbench": False,
+        },
+    )
+    payload = json.loads(design_context_path.read_text())
+    node = payload["nodes"]["TopModule"]
+    assert node["testbench_file"] == "rtl/TopModule_tb.sv"
+    assert "oracle_ref_file" not in node
+    assert payload["execution_policy"]["benchmark_use_public_testbench"] is False
 
 
 def test_build_parser_includes_orchestrated_flags():
@@ -459,7 +534,7 @@ def _benchmark_fixture_tree(tmp_path: Path) -> tuple[Path, Path]:
     return root, prompts_dir
 
 
-def test_run_from_args_defaults_to_orchestrated_mode(tmp_path: Path, monkeypatch):
+def test_run_from_args_defaults_to_configured_flow_mode(tmp_path: Path, monkeypatch):
     framework_root, prompts_dir = _benchmark_fixture_tree(tmp_path)
     cfg = load_runtime_config()
     cfg.benchmark.verilog_eval_root = str(framework_root)
@@ -625,7 +700,10 @@ def test_run_mode_continues_on_orchestrated_failure(tmp_path: Path, monkeypatch)
     test_sv.write_text("module tb; endmodule\n")
     ref_sv.write_text("module ref; endmodule\n")
     case = PromptCase(problem_id="Prob001", prompt_path=prompt_path, test_sv=test_sv, ref_sv=ref_sv)
+    cfg = load_runtime_config()
+    cfg.benchmark.flow_mode = "orchestrated"
 
+    monkeypatch.setattr("apps.cli.run_verilog_eval.get_runtime_config", lambda: cfg)
     monkeypatch.setattr("apps.cli.run_verilog_eval.connection_params_from_config", lambda: object())
     monkeypatch.setattr("apps.cli.run_verilog_eval._ensure_broker_connection", lambda params: None)
     monkeypatch.setattr("apps.cli.run_verilog_eval._purge_benchmark_queues", lambda params: None)
@@ -683,7 +761,10 @@ def test_run_mode_continues_when_orchestrator_reports_failed_node(tmp_path: Path
     test_sv.write_text("module tb; endmodule\n")
     ref_sv.write_text("module RefModule(output zero); endmodule\n")
     case = PromptCase(problem_id="Prob001", prompt_path=prompt_path, test_sv=test_sv, ref_sv=ref_sv)
+    cfg = load_runtime_config()
+    cfg.benchmark.flow_mode = "orchestrated"
 
+    monkeypatch.setattr("apps.cli.run_verilog_eval.get_runtime_config", lambda: cfg)
     monkeypatch.setattr("apps.cli.run_verilog_eval.connection_params_from_config", lambda: object())
     monkeypatch.setattr("apps.cli.run_verilog_eval._ensure_broker_connection", lambda params: None)
     monkeypatch.setattr("apps.cli.run_verilog_eval._purge_benchmark_queues", lambda params: None)
@@ -743,7 +824,10 @@ def test_run_mode_orchestrated_uses_public_tb_execution_policy(tmp_path: Path, m
     test_sv.write_text("module tb; endmodule\n")
     ref_sv.write_text("module ref; endmodule\n")
     case = PromptCase(problem_id="Prob001", prompt_path=prompt_path, test_sv=test_sv, ref_sv=ref_sv)
+    cfg = load_runtime_config()
+    cfg.benchmark.flow_mode = "orchestrated"
 
+    monkeypatch.setattr("apps.cli.run_verilog_eval.get_runtime_config", lambda: cfg)
     monkeypatch.setattr("apps.cli.run_verilog_eval.connection_params_from_config", lambda: object())
     monkeypatch.setattr("apps.cli.run_verilog_eval._ensure_broker_connection", lambda params: None)
     monkeypatch.setattr("apps.cli.run_verilog_eval._purge_benchmark_queues", lambda params: None)
@@ -792,6 +876,70 @@ def test_run_mode_orchestrated_uses_public_tb_execution_policy(tmp_path: Path, m
     assert policy["benchmark_use_public_testbench"] is True
     assert policy["disable_tb_generation"] is True
     assert policy["debug_rtl_only"] is True
+
+
+def test_run_mode_direct_single_module_uses_raw_prompt_policy(tmp_path: Path, monkeypatch):
+    prompt_path = tmp_path / "Prob001_prompt.txt"
+    test_sv = tmp_path / "Prob001_test.sv"
+    ref_sv = tmp_path / "Prob001_ref.sv"
+    prompt_path.write_text("Please implement a module named TopModule.\n- output zero\n")
+    test_sv.write_text("module tb; endmodule\n")
+    ref_sv.write_text("module RefModule(output zero); endmodule\n")
+    case = PromptCase(problem_id="Prob001", prompt_path=prompt_path, test_sv=test_sv, ref_sv=ref_sv)
+
+    cfg = load_runtime_config()
+    cfg.benchmark.flow_mode = "direct_single_module"
+    cfg.benchmark.prompt_mode = "raw_verilog_eval"
+    cfg.benchmark.rtl_language = "systemverilog"
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval.get_runtime_config", lambda: cfg)
+    monkeypatch.setattr("apps.cli.run_verilog_eval.connection_params_from_config", lambda: object())
+    monkeypatch.setattr("apps.cli.run_verilog_eval._ensure_broker_connection", lambda params: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._purge_benchmark_queues", lambda params: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval.start_workers", lambda params, stop_event: [])
+    monkeypatch.setattr("apps.cli.run_verilog_eval.stop_workers", lambda workers, stop_event: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._isolated_task_memory", lambda path: contextlib.nullcontext())
+
+    captured = {}
+
+    def fake_generate(**kwargs):  # noqa: ANN001
+        captured["execution_policy"] = kwargs["execution_policy"]
+        sample_dir = kwargs["sample_dir"]
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{kwargs['case'].problem_id}_sample{kwargs['sample_index']:02d}"
+        (sample_dir / f"{name}.sv").write_text("module TopModule(output zero); assign zero = 1'b0; endmodule\n")
+        (sample_dir / f"{name}-sv-generate.log").write_text("status = SUCCESS\n")
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval._generate_one_sample_direct", fake_generate)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_sample_test", lambda **kwargs: None)
+
+    def fake_analyze(root, out_dir):  # noqa: ANN001
+        summary_txt = out_dir / "summary.txt"
+        summary_csv = out_dir / "summary.csv"
+        summary_txt.write_text("pass_rate = 1.0\n")
+        summary_csv.write_text("Prob001,1,1,1.0,.\n")
+        return summary_txt, summary_csv
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_official_analyze", fake_analyze)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_optional_failure_reports", lambda root, build_dir, summary_csv: None)
+    monkeypatch.setattr("apps.cli.run_verilog_eval._write_internal_summary", lambda **kwargs: None)
+
+    _run_mode(
+        root=tmp_path,
+        out_dir=tmp_path / "out",
+        cases=[case],
+        sample_cfg={"n": 1, "temperature": 0.0, "top_p": 0.01},
+        run_label="canonical",
+        iverilog_bin="/bin/true",
+        vvp_bin="/bin/true",
+        legacy_lightweight=False,
+        pipeline_timeout_s=5.0,
+    )
+
+    policy = captured["execution_policy"]
+    assert policy["benchmark_flow_mode"] == "direct_single_module"
+    assert policy["benchmark_prompt_mode"] == "raw_verilog_eval"
+    assert policy["rtl_language"] == "systemverilog"
 
 
 def test_write_generate_log_uses_resp_tokens_key(tmp_path: Path):

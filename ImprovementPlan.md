@@ -43,6 +43,16 @@ The published ~95% planning results are not on the exact same benchmark setup we
 
 ## Priority 1: Remove Benchmark-Mode Tax
 
+Status: Complete on March 15, 2026.
+
+Implemented:
+
+- Added typed YAML-configurable benchmark flow controls for `direct_single_module`, `orchestrated`, and `legacy_lightweight`.
+- Made `direct_single_module` the default benchmark path, with raw prompt preservation and direct one-node design-context generation.
+- Moved benchmark execution-policy controls out of runner-local hardcoding and into runtime config (`prompt_mode`, `disable_tb_generation`, `debug_rtl_only`, `use_public_testbench`, `interface_equivalence`, `rtl_language`).
+- Preserved raw benchmark prompt text through implementation/debug worker context and allowed benchmark SystemVerilog output when configured.
+- Fixed interface canonicalization so equivalent numeric ranges match by width in benchmark validation.
+
 Our current benchmark path adds orchestration overhead without getting real planner benefit.
 
 - Preserve the raw benchmark prompt verbatim for implementation and debug.

@@ -20,7 +20,7 @@ Use this page when you need to turn a growing artifact tree into a navigable cam
 From repo root:
 
 ```bash
-python3 scripts/index_runs.py --build-links
+PYTHONPATH=. poetry run python3 scripts/index_runs.py --build-links
 ```
 
 Optional flags:

@@ -112,8 +112,8 @@ class ImplementationWorker(AgentWorkerBase):
                 log_output="LLM returned empty RTL source.",
             )
 
-        # Sanitize for Verilog-only toolchains.
-        rtl_source = _sanitize_rtl_for_verilog(rtl_source)
+        rtl_language = _rtl_language_for_context(ctx)
+        rtl_source = _sanitize_rtl_source(rtl_source, rtl_language=rtl_language)
         rtl_source = _extract_target_module_source(rtl_source, node_id)
 
         try:
@@ -220,19 +220,11 @@ class ImplementationWorker(AgentWorkerBase):
         return None
 
     async def _llm_generate_impl(self, ctx, node_id: str, iface) -> Tuple[str, str]:
+        rtl_language = _rtl_language_for_context(ctx)
         port_lines = []
         for sig in iface:
-            dir_kw = sig["direction"].lower()
-            name = sig["name"]
-            width_expr = self._width_expr(sig)
-            width_int = self._width_int(sig)
-            if width_int and width_int > 1:
-                port_lines.append(f"{dir_kw} logic [{width_int-1}:0] {name}")
-            elif width_expr not in ("1", ""):
-                port_lines.append(f"{dir_kw} logic [({width_expr})-1:0] {name}")
-            else:
-                port_lines.append(f"{dir_kw} logic {name}")
-        behavior = ctx.get("demo_behavior", "").strip()
+            port_lines.append(self._prompt_port_line(sig, rtl_language=rtl_language))
+        behavior, behavior_label = _behavior_prompt_for_context(ctx)
         clocking = ctx.get("clocking", {})
         verification = ctx.get("verification", {})
         acceptance = ctx.get("acceptance", {})
@@ -241,19 +233,32 @@ class ImplementationWorker(AgentWorkerBase):
         connections = ctx.get("connections") or []
         module_contract = ctx.get("module_contract") or {}
         contract_style = str(module_contract.get("style", "")).strip().lower()
-        system = (
-            "You are an RTL Implementation Agent. Generate synthesizable Verilog-2001.\n"
-            "Rules: no code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no always_ff/always_comb/logic/interfaces). "
-            "If no clock is provided, emit pure combinational logic with continuous assigns only. "
-            "If sequential logic is used, declare outputs as reg and drive them in always blocks; no delays inside sequential logic. "
-            "Implement the behavior described by the spec summary; do not invent features not stated. "
-            "Prefer lint-clean RTL under Verilator: avoid constant comparisons due to bit-width (e.g., don't compare a 3-bit signal to > 7), "
-            "avoid unused signals, and avoid self-assignments like `x <= x`."
-        )
+        if rtl_language == "systemverilog":
+            system = (
+                "You are an RTL Implementation Agent. Generate synthesizable RTL for a SystemVerilog-capable benchmark harness.\n"
+                "Rules: no code fences. SystemVerilog is allowed when it improves clarity "
+                "(including logic/always_ff/always_comb), but do not use interfaces, classes, packages, or multiple top modules. "
+                "If no clock is provided, emit pure combinational logic with continuous assigns and/or always_comb only. "
+                "Implement the behavior exactly as described by the prompt; do not invent features not stated. "
+                "Prefer lint-clean RTL under Verilator: avoid constant comparisons due to bit-width (e.g., don't compare a 3-bit signal to > 7), "
+                "avoid unused signals, and avoid self-assignments like `x <= x`."
+            )
+        else:
+            system = (
+                "You are an RTL Implementation Agent. Generate synthesizable Verilog-2001.\n"
+                "Rules: no code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no always_ff/always_comb/logic/interfaces). "
+                "If no clock is provided, emit pure combinational logic with continuous assigns only. "
+                "If sequential logic is used, declare outputs as reg and drive them in always blocks; no delays inside sequential logic. "
+                "Implement the behavior described by the spec summary; do not invent features not stated. "
+                "Prefer lint-clean RTL under Verilator: avoid constant comparisons due to bit-width (e.g., don't compare a 3-bit signal to > 7), "
+                "avoid unused signals, and avoid self-assignments like `x <= x`."
+            )
         if contract_style == "combinational":
             system += (
                 "\nCombinational contract: do not use edge-triggered always blocks (no posedge/negedge). "
-                "Implement with continuous assign and/or always @* only, with zero internal cycle-to-cycle state."
+                "Implement with continuous assign and/or "
+                + ("always_comb" if rtl_language == "systemverilog" else "always @*")
+                + " only, with zero internal cycle-to-cycle state."
             )
         if contract_style == "integration" and bool(module_contract.get("prefer_debug_passthrough")):
             system += (
@@ -273,7 +278,7 @@ class ImplementationWorker(AgentWorkerBase):
         user = (
             f"Module name: {node_id}\n"
             f"Ports:\n" + "\n".join(f"- {p}" for p in port_lines) + "\n"
-            f"Behavior summary:\n{behavior or 'None provided.'}\n"
+            f"{behavior_label}:\n{behavior or 'None provided.'}\n"
             f"Clocking:\n{json.dumps(clocking, indent=2)}\n"
             f"Verification hints:\n{json.dumps(verification, indent=2)}\n"
             f"Acceptance:\n{json.dumps(acceptance, indent=2)}\n"
@@ -310,12 +315,27 @@ class ImplementationWorker(AgentWorkerBase):
             pass
         return resp.content, f"LLM generation via {getattr(resp, 'provider', 'llm')}/{getattr(resp, 'model_name', 'unknown')}"
 
+    def _prompt_port_line(self, sig: dict, *, rtl_language: str) -> str:
+        dir_kw = str(sig["direction"]).lower()
+        name = str(sig["name"])
+        width_expr = self._width_expr(sig)
+        width_int = self._width_int(sig)
+        if width_int and width_int > 1:
+            width_text = f"[{width_int-1}:0] "
+        elif width_expr not in ("1", ""):
+            width_text = f"[({width_expr})-1:0] "
+        else:
+            width_text = ""
+        if rtl_language == "systemverilog":
+            return f"{dir_kw} logic {width_text}{name}".replace("  ", " ").strip()
+        return f"{dir_kw} {width_text}{name}".replace("  ", " ").strip()
+
 
 _MODULE_DECL_RE = re.compile(r"^\s*module\s+([A-Za-z_][A-Za-z0-9_]*)\b")
 _ENDMODULE_RE = re.compile(r"^\s*endmodule\b")
 
 
-def _sanitize_rtl_for_verilog(source: str) -> str:
+def _sanitize_rtl_source(source: str, *, rtl_language: str) -> str:
     lines = []
     for line in source.splitlines():
         stripped = line.strip()
@@ -323,12 +343,31 @@ def _sanitize_rtl_for_verilog(source: str) -> str:
             continue
         lines.append(line)
     text = "\n".join(lines)
+    if rtl_language == "systemverilog":
+        return text
     text = _ALWAYS_FF_RE.sub("always", text)
     text = _ALWAYS_COMB_RE.sub("always @*", text)
     if "always" in text:
         text = _OUTPUT_LOGIC_RE.sub("output reg", text)
     text = _LOGIC_RE.sub("wire", text)
     return text
+
+
+def _rtl_language_for_context(ctx: dict) -> str:
+    execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
+    language = str(execution_policy.get("rtl_language", "verilog2001")).strip().lower()
+    if language == "systemverilog":
+        return "systemverilog"
+    return "verilog2001"
+
+
+def _behavior_prompt_for_context(ctx: dict) -> tuple[str, str]:
+    execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
+    prompt_mode = str(execution_policy.get("benchmark_prompt_mode", "normalized")).strip().lower()
+    benchmark_prompt = str(ctx.get("benchmark_prompt", "") or "").strip()
+    if prompt_mode == "raw_verilog_eval" and benchmark_prompt:
+        return benchmark_prompt, "Benchmark prompt (verbatim)"
+    return str(ctx.get("demo_behavior", "") or "").strip(), "Behavior summary"
 
 
 def _extract_target_module_source(source: str, module_name: str) -> str:

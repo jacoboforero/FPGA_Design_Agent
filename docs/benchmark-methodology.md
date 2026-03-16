@@ -1,6 +1,6 @@
 # Benchmark Methodology
 
-Last verified against runtime behavior: March 8, 2026.
+Last verified against runtime behavior: March 15, 2026.
 
 This project uses VerilogEval-compatible scoring and keeps official analyzer outputs as the final scoring record.
 
@@ -12,8 +12,11 @@ Use this page to interpret benchmark outputs correctly and avoid invalid compari
 - It is not campaign YAML authoring guidance. For that, see [workflows/benchmark-campaigns.md](./workflows/benchmark-campaigns.md).
 
 ## Benchmark Execution Policy
-- Default benchmark mode uses the orchestrated pipeline (planning + orchestrator + workers).
+- Default benchmark mode uses `direct_single_module`, which creates a one-node design context directly from the benchmark prompt and then runs the orchestrator/worker pipeline on that direct context.
+- `orchestrated` remains available for planner/path ablations and multi-stage benchmark experiments.
+- `--legacy-lightweight` remains available as a compatibility baseline that bypasses the worker pipeline.
 - Benchmark mode binds benchmark-provided oracle testbench/reference assets.
+- Benchmark mode preserves the raw benchmark prompt by default.
 - Generation failures are recorded per sample and the run continues so official analysis can still complete.
 - Official analyzer output (`summary.txt`, `summary.csv`) determines benchmark pass-rate metrics.
 - Queue purging is optional (`--purge-queues`) to avoid disrupting shared environments.
@@ -41,7 +44,7 @@ Interpretation rule:
 Recommended practice:
 1. Compare matching mode directories (`canonical` vs `canonical`, `sampled` vs `sampled`).
 2. Keep problem set identical (`max-problems`/`only-problem` filters should match).
-3. Keep run policy comparable (queue-purge behavior, timeout policy, legacy/orchestrated mode).
+3. Keep run policy comparable (`flow_mode`, `prompt_mode`, `rtl_language`, queue-purge behavior, timeout policy, legacy/direct/orchestrated mode).
 4. Verify both runs have complete official outputs before interpreting deltas.
 
 ## Interpreting Pass-Rate Deltas Responsibly

@@ -21,6 +21,11 @@ def test_runtime_config_defaults_load():
     assert cfg.benchmark.sampled.temperature == 0.8
     assert cfg.benchmark.verilog_eval_root == "third_party/verilog-eval"
     assert cfg.benchmark.prompts_dir == "third_party/verilog-eval/dataset_spec-to-rtl"
+    assert cfg.benchmark.flow_mode == "direct_single_module"
+    assert cfg.benchmark.prompt_mode == "raw_verilog_eval"
+    assert cfg.benchmark.use_public_testbench is True
+    assert cfg.benchmark.interface_equivalence == "canonical_width"
+    assert cfg.benchmark.rtl_language == "systemverilog"
     assert cfg.presets["benchmark"].allow_repair_loop is True
 
 

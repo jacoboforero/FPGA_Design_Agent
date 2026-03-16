@@ -34,13 +34,14 @@ make cli
 Host fallback:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py --timeout 120 --config config/runtime.yaml --preset engineer_fast
+poetry install -E openai --with dev
+PYTHONPATH=. poetry run python3 apps/cli/cli.py --timeout 120 --config config/runtime.yaml --preset engineer_fast
 ```
 
 If you only want to validate environment readiness before running the full pipeline:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py doctor --preset engineer_fast
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset engineer_fast
 ```
 
 ## End-to-End Flow
@@ -115,7 +116,7 @@ Symptoms:
 - CLI fails early with RabbitMQ connection errors.
 
 Actions:
-1. Run `PYTHONPATH=. python3 apps/cli/cli.py doctor --preset engineer_fast`.
+1. Run `PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset engineer_fast`.
 2. Verify `broker.url` in `config/runtime.yaml`.
 3. If running in Docker, confirm services are up (`make up`) and retry.
 

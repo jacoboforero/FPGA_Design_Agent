@@ -8,6 +8,17 @@ This command surface has two user modes:
 - hardware-engineering mode (`cli.py` full flow) for design work,
 - research mode (`cli.py benchmark`) for scripted evaluation.
 
+## Command Environment
+Run CLI commands in one of these contexts:
+- inside the `app` container after `make build`, `make up`, `make deps`, `make shell`
+- on the host after `poetry install -E openai --with dev`
+
+Notes:
+- `make shell` rewrites `RABBITMQ_URL=...localhost...` to the container-safe broker URL `amqp://user:password@rabbitmq:5672/`.
+- If you already had a container shell open before running `make shell`, exit and reopen it so the broker URL is refreshed.
+- For benchmark and other broker-backed commands inside the container, it is always safe to run `export RABBITMQ_URL=amqp://user:password@rabbitmq:5672/` before invoking the CLI.
+- Prefer `PYTHONPATH=. poetry run python3 ...` for all repo CLI commands.
+
 ## What This Page Is For
 Use this page to choose the right CLI entrypoint quickly and avoid running the wrong workflow.
 
@@ -20,29 +31,29 @@ Use this table first when deciding what to run.
 
 | Goal | Primary Command | Notes |
 | --- | --- | --- |
-| Run full engineer flow interactively | `PYTHONPATH=. python3 apps/cli/cli.py --preset engineer_fast` | Includes spec collection, planning gate, orchestrated execution. |
-| Validate environment before engineer run | `PYTHONPATH=. python3 apps/cli/cli.py doctor --preset engineer_fast` | Verifies credentials/tools/broker readiness for selected preset behavior. |
-| Run benchmark generation/scoring | `PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign <name>` | Produces run-manifest + canonical mode outputs. |
-| List benchmark cases before running | `PYTHONPATH=. python3 apps/cli/cli.py benchmark list-problems --preset benchmark` | Validates prompt/discovery coverage quickly. |
-| Plan benchmark run without execution | `PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign <name> --dry-run` | Non-destructive plan preview. |
-| Rebuild local benchmark aggregate from existing official outputs | `PYTHONPATH=. python3 apps/cli/cli.py benchmark analyze --build-dir <mode_dir>` | Requires existing `summary.txt` and `summary.csv`. |
-| Compare two benchmark mode outputs | `PYTHONPATH=. python3 apps/cli/cli.py benchmark compare --left-dir <mode_a> --right-dir <mode_b>` | Structured delta report for pass-rate and metrics. |
-| Execute many benchmark runs from YAML | `python3 scripts/run_benchmark_campaign.py --campaign-file <path>` | Research campaign automation utility. |
+| Run full engineer flow interactively | `PYTHONPATH=. poetry run python3 apps/cli/cli.py --preset engineer_fast` | Includes spec collection, planning gate, orchestrated execution. |
+| Validate environment before engineer run | `PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset engineer_fast` | Verifies credentials/tools/broker readiness for selected preset behavior. |
+| Run benchmark generation/scoring | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign <name>` | Produces run-manifest + canonical mode outputs. |
+| List benchmark cases before running | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --preset benchmark` | Validates prompt/discovery coverage quickly. |
+| Plan benchmark run without execution | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign <name> --dry-run` | Non-destructive plan preview. |
+| Rebuild local benchmark aggregate from existing official outputs | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark analyze --build-dir <mode_dir>` | Requires existing `summary.txt` and `summary.csv`. |
+| Compare two benchmark mode outputs | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark compare --left-dir <mode_a> --right-dir <mode_b>` | Structured delta report for pass-rate and metrics. |
+| Execute many benchmark runs from YAML | `PYTHONPATH=. poetry run python3 scripts/run_benchmark_campaign.py --campaign-file <path>` | Research campaign automation utility. |
 
 ## Common Commands
 From repo root:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py --config config/runtime.yaml --preset engineer_fast
-PYTHONPATH=. python3 apps/cli/cli.py doctor --preset engineer_fast
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke
+PYTHONPATH=. poetry run python3 apps/cli/cli.py --config config/runtime.yaml --preset engineer_fast
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset engineer_fast
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke
 ```
 
 Optional aliases:
 
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py run --preset engineer_fast
-PYTHONPATH=. python3 apps/cli/cli.py full --preset engineer_fast
+PYTHONPATH=. poetry run python3 apps/cli/cli.py run --preset engineer_fast
+PYTHONPATH=. poetry run python3 apps/cli/cli.py full --preset engineer_fast
 ```
 
 ## Full Interactive Flow (Engineer Path)

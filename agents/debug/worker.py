@@ -66,6 +66,8 @@ class DebugWorker(AgentWorkerBase):
         debug_reason = str(ctx.get("debug_reason", "")).strip().lower() or "sim"
         execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
         rtl_only_debug = bool(execution_policy.get("debug_rtl_only", False))
+        rtl_language = _rtl_language_for_context(ctx)
+        benchmark_prompt, benchmark_prompt_label = _behavior_prompt_for_context(ctx)
         task_memory_root = Path("artifacts/task_memory") / node_id
 
         rtl_text = rtl_path.read_text() if rtl_path.exists() else ""
@@ -98,10 +100,21 @@ class DebugWorker(AgentWorkerBase):
             '  \"next_steps\": [string, ...]\n'
             "}\n"
             "Rules:\n"
-            "- If you touch RTL, rtl_lines MUST be a complete synthesizable Verilog-2001 module named exactly as the DUT.\n"
+        )
+        if rtl_language == "systemverilog":
+            system += (
+                "- If you touch RTL, rtl_lines MUST be a complete synthesizable module named exactly as the DUT.\n"
+                "- SystemVerilog is allowed for RTL patches when it improves clarity, including logic/always_ff/always_comb.\n"
+                "- Do not use interfaces, classes, packages, or multiple top modules.\n"
+            )
+        else:
+            system += (
+                "- If you touch RTL, rtl_lines MUST be a complete synthesizable Verilog-2001 module named exactly as the DUT.\n"
+                "- Avoid SystemVerilog-only keywords (no always_ff/always_comb/logic/interfaces).\n"
+            )
+        system += (
             "- If you touch the testbench, tb_lines MUST be a complete Verilog-2001 testbench module named tb_<DUT>.\n"
             "- Preserve the DUT port interface exactly (no new ports, no renames).\n"
-            "- Avoid SystemVerilog-only keywords (no always_ff/always_comb/logic/interfaces).\n"
             "- For testbenches: strict Verilog-2001 compatibility (no declarations inside procedural blocks; no reg/integer declaration-time init with function calls).\n"
             "- Do NOT include newline characters inside JSON strings; each entry in *_lines is a single line.\n"
             "- If debug_reason indicates a lint failure, prioritize making the relevant artifact lint-clean (Verilator/Icarus).\n"
@@ -124,6 +137,7 @@ class DebugWorker(AgentWorkerBase):
             f"Attempt: {sim_attempt if sim_attempt is not None else 'unknown'}\n"
             f"Debug reason: {debug_reason}\n"
             f"Context:\n{json.dumps(ctx, indent=2)}\n\n"
+            f"{benchmark_prompt_label}:\n{benchmark_prompt or 'None provided.'}\n\n"
             "Current RTL (verbatim):\n"
             f"{rtl_prompt}\n\n"
             "Current testbench (verbatim):\n"
@@ -212,6 +226,7 @@ class DebugWorker(AgentWorkerBase):
                         rtl_path=rtl_path,
                         tb_path=tb_path,
                         allow_tb_edits=not rtl_only_debug,
+                        rtl_language=rtl_language,
                         payload=parsed,
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -364,7 +379,7 @@ def _read_optional_text(path: Path) -> str:
     return ""
 
 
-def _sanitize_verilog(source: str, *, kind: str) -> str:
+def _sanitize_verilog(source: str, *, kind: str, rtl_language: str) -> str:
     lines = []
     for line in source.splitlines():
         stripped = line.strip()
@@ -373,6 +388,8 @@ def _sanitize_verilog(source: str, *, kind: str) -> str:
         lines.append(line)
     text = "\n".join(lines)
     if kind == "rtl":
+        if rtl_language == "systemverilog":
+            return text
         text = _ALWAYS_FF_RE.sub("always", text)
         text = _ALWAYS_COMB_RE.sub("always @*", text)
         return text
@@ -389,6 +406,23 @@ def _sanitize_verilog(source: str, *, kind: str) -> str:
     return source
 
 
+def _rtl_language_for_context(ctx: dict) -> str:
+    execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
+    language = str(execution_policy.get("rtl_language", "verilog2001")).strip().lower()
+    if language == "systemverilog":
+        return "systemverilog"
+    return "verilog2001"
+
+
+def _behavior_prompt_for_context(ctx: dict) -> tuple[str, str]:
+    execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
+    prompt_mode = str(execution_policy.get("benchmark_prompt_mode", "normalized")).strip().lower()
+    benchmark_prompt = str(ctx.get("benchmark_prompt", "") or "").strip()
+    if prompt_mode == "raw_verilog_eval" and benchmark_prompt:
+        return benchmark_prompt, "Benchmark prompt (verbatim)"
+    return str(ctx.get("demo_behavior", "") or "").strip(), "Behavior summary"
+
+
 def _apply_debug_patch(
     *,
     node_id: str,
@@ -396,6 +430,7 @@ def _apply_debug_patch(
     rtl_path: Path,
     tb_path: Path,
     allow_tb_edits: bool,
+    rtl_language: str,
     payload: dict,
 ) -> dict:
     touched = payload.get("touched_files") or []
@@ -422,7 +457,7 @@ def _apply_debug_patch(
         if not isinstance(rtl_lines, list) or not rtl_lines:
             raise ValueError("touched_files includes 'rtl' but rtl_lines is missing/empty")
         rtl_source = "\n".join(str(line) for line in rtl_lines)
-        rtl_source = _sanitize_verilog(rtl_source, kind="rtl")
+        rtl_source = _sanitize_verilog(rtl_source, kind="rtl", rtl_language=rtl_language)
         existing_rtl = rtl_path.read_text() if rtl_path.exists() else ""
         if rtl_source != existing_rtl:
             rtl_path.parent.mkdir(parents=True, exist_ok=True)
@@ -435,7 +470,7 @@ def _apply_debug_patch(
         if not isinstance(tb_lines, list) or not tb_lines:
             raise ValueError("touched_files includes 'tb' but tb_lines is missing/empty")
         tb_source = "\n".join(str(line) for line in tb_lines)
-        tb_source = _sanitize_verilog(tb_source, kind="tb")
+        tb_source = _sanitize_verilog(tb_source, kind="tb", rtl_language=rtl_language)
         existing_tb = tb_path.read_text() if tb_path.exists() else ""
         if tb_source != existing_tb:
             tb_path.parent.mkdir(parents=True, exist_ok=True)

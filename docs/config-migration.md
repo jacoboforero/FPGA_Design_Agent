@@ -8,8 +8,8 @@ Runtime behavior is YAML-driven, while secrets stay environment-driven.
 
 ## Typical Invocation
 ```bash
-PYTHONPATH=. python3 apps/cli/cli.py --config config/runtime.yaml --preset engineer_fast
-PYTHONPATH=. python3 apps/cli/cli.py benchmark run --config config/runtime.yaml --preset benchmark --campaign smoke
+PYTHONPATH=. poetry run python3 apps/cli/cli.py --config config/runtime.yaml --preset engineer_fast
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.yaml --preset benchmark --campaign smoke
 ```
 
 ## Practical Guidance
