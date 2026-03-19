@@ -1,3 +1,0 @@
-[submodule "third_party/verilog-eval"]
-	path = third_party/verilog-eval
-	url = https://github.com/NVlabs/verilog-eval.git
