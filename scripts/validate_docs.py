@@ -83,11 +83,11 @@ def _command_checks() -> list[tuple[str, str]]:
         ),
         (
             "Benchmark list-problems smoke",
-            "PYTHONPATH=. python3 apps/cli/cli.py benchmark list-problems --preset benchmark --max-problems 1",
+            "PYTHONPATH=. python3 apps/cli/cli.py benchmark list-problems --config config/runtime.benchmark.yaml --max-problems 1",
         ),
         (
             "Benchmark run dry-run smoke",
-            "PYTHONPATH=. python3 apps/cli/cli.py benchmark run --preset benchmark --campaign docs_validate --run-id dryrun --max-problems 1 --dry-run",
+            "PYTHONPATH=. python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign docs_validate --run-id dryrun --max-problems 1 --dry-run",
         ),
         (
             "Campaign runner help",

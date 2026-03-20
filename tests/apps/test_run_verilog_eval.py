@@ -537,6 +537,9 @@ def _benchmark_fixture_tree(tmp_path: Path) -> tuple[Path, Path]:
 def test_run_from_args_defaults_to_configured_flow_mode(tmp_path: Path, monkeypatch):
     framework_root, prompts_dir = _benchmark_fixture_tree(tmp_path)
     cfg = load_runtime_config()
+    cfg.run.spec_profile.interaction = "non_interactive"
+    cfg.run.spec_profile.rigor_level = "L0"
+    cfg.run.verification_profile = "verilog-eval"
     cfg.benchmark.verilog_eval_root = str(framework_root)
     cfg.benchmark.prompts_dir = str(prompts_dir)
     cfg.benchmark.output_root = str(tmp_path / "out")
@@ -563,8 +566,7 @@ def test_run_from_args_defaults_to_configured_flow_mode(tmp_path: Path, monkeypa
     monkeypatch.setattr("apps.cli.run_verilog_eval._run_mode", fake_run_mode)
 
     args = argparse.Namespace(
-        config="config/runtime.yaml",
-        preset="benchmark",
+        config="config/runtime.benchmark.yaml",
         sampled=False,
         legacy_lightweight=False,
         pipeline_timeout=180.0,
@@ -579,6 +581,9 @@ def test_run_from_args_defaults_to_configured_flow_mode(tmp_path: Path, monkeypa
 def test_run_from_args_legacy_flag_uses_legacy_mode(tmp_path: Path, monkeypatch):
     framework_root, prompts_dir = _benchmark_fixture_tree(tmp_path)
     cfg = load_runtime_config()
+    cfg.run.spec_profile.interaction = "non_interactive"
+    cfg.run.spec_profile.rigor_level = "L0"
+    cfg.run.verification_profile = "verilog-eval"
     cfg.benchmark.verilog_eval_root = str(framework_root)
     cfg.benchmark.prompts_dir = str(prompts_dir)
     cfg.benchmark.output_root = str(tmp_path / "out")
@@ -597,8 +602,7 @@ def test_run_from_args_legacy_flag_uses_legacy_mode(tmp_path: Path, monkeypatch)
     monkeypatch.setattr("apps.cli.run_verilog_eval._run_mode", fake_run_mode)
 
     args = argparse.Namespace(
-        config="config/runtime.yaml",
-        preset="benchmark",
+        config="config/runtime.benchmark.yaml",
         sampled=False,
         legacy_lightweight=True,
         pipeline_timeout=180.0,
@@ -613,6 +617,9 @@ def test_run_from_args_legacy_flag_uses_legacy_mode(tmp_path: Path, monkeypatch)
 def test_run_from_args_dry_run_skips_tool_and_execution_checks(tmp_path: Path, monkeypatch):
     framework_root, prompts_dir = _benchmark_fixture_tree(tmp_path)
     cfg = load_runtime_config()
+    cfg.run.spec_profile.interaction = "non_interactive"
+    cfg.run.spec_profile.rigor_level = "L0"
+    cfg.run.verification_profile = "verilog-eval"
     cfg.benchmark.verilog_eval_root = str(framework_root)
     cfg.benchmark.prompts_dir = str(prompts_dir)
     cfg.benchmark.output_root = str(tmp_path / "out")
@@ -626,8 +633,7 @@ def test_run_from_args_dry_run_skips_tool_and_execution_checks(tmp_path: Path, m
 
     args = argparse.Namespace(
         command="run",
-        config="config/runtime.yaml",
-        preset="benchmark",
+        config="config/runtime.benchmark.yaml",
         output_root=None,
         campaign="dryrun_demo",
         run_id="run001",
@@ -653,6 +659,9 @@ def test_run_from_args_dry_run_skips_tool_and_execution_checks(tmp_path: Path, m
 def test_run_from_args_dry_run_overwrite_is_non_destructive(tmp_path: Path, monkeypatch):
     framework_root, prompts_dir = _benchmark_fixture_tree(tmp_path)
     cfg = load_runtime_config()
+    cfg.run.spec_profile.interaction = "non_interactive"
+    cfg.run.spec_profile.rigor_level = "L0"
+    cfg.run.verification_profile = "verilog-eval"
     cfg.benchmark.verilog_eval_root = str(framework_root)
     cfg.benchmark.prompts_dir = str(prompts_dir)
     cfg.benchmark.output_root = str(tmp_path / "out")
@@ -667,8 +676,7 @@ def test_run_from_args_dry_run_overwrite_is_non_destructive(tmp_path: Path, monk
 
     args = argparse.Namespace(
         command="run",
-        config="config/runtime.yaml",
-        preset="benchmark",
+        config="config/runtime.benchmark.yaml",
         output_root=None,
         campaign="dryrun_demo",
         run_id="run001",
@@ -701,6 +709,8 @@ def test_run_mode_continues_on_orchestrated_failure(tmp_path: Path, monkeypatch)
     ref_sv.write_text("module ref; endmodule\n")
     case = PromptCase(problem_id="Prob001", prompt_path=prompt_path, test_sv=test_sv, ref_sv=ref_sv)
     cfg = load_runtime_config()
+    cfg.run.spec_profile.interaction = "non_interactive"
+    cfg.run.verification_profile = "verilog-eval"
     cfg.benchmark.flow_mode = "orchestrated"
 
     monkeypatch.setattr("apps.cli.run_verilog_eval.get_runtime_config", lambda: cfg)
@@ -762,6 +772,8 @@ def test_run_mode_continues_when_orchestrator_reports_failed_node(tmp_path: Path
     ref_sv.write_text("module RefModule(output zero); endmodule\n")
     case = PromptCase(problem_id="Prob001", prompt_path=prompt_path, test_sv=test_sv, ref_sv=ref_sv)
     cfg = load_runtime_config()
+    cfg.run.spec_profile.interaction = "non_interactive"
+    cfg.run.verification_profile = "verilog-eval"
     cfg.benchmark.flow_mode = "orchestrated"
 
     monkeypatch.setattr("apps.cli.run_verilog_eval.get_runtime_config", lambda: cfg)
@@ -825,6 +837,8 @@ def test_run_mode_orchestrated_uses_public_tb_execution_policy(tmp_path: Path, m
     ref_sv.write_text("module ref; endmodule\n")
     case = PromptCase(problem_id="Prob001", prompt_path=prompt_path, test_sv=test_sv, ref_sv=ref_sv)
     cfg = load_runtime_config()
+    cfg.run.spec_profile.interaction = "non_interactive"
+    cfg.run.verification_profile = "verilog-eval"
     cfg.benchmark.flow_mode = "orchestrated"
 
     monkeypatch.setattr("apps.cli.run_verilog_eval.get_runtime_config", lambda: cfg)
@@ -872,7 +886,8 @@ def test_run_mode_orchestrated_uses_public_tb_execution_policy(tmp_path: Path, m
     )
 
     policy = captured["execution_policy"]
-    assert policy["benchmark_mode"] is True
+    assert policy["run_kind"] == "benchmark"
+    assert policy["verification_profile"] == "verilog-eval"
     assert policy["benchmark_use_public_testbench"] is True
     assert policy["disable_tb_generation"] is True
     assert policy["debug_rtl_only"] is True
@@ -888,6 +903,8 @@ def test_run_mode_direct_single_module_uses_raw_prompt_policy(tmp_path: Path, mo
     case = PromptCase(problem_id="Prob001", prompt_path=prompt_path, test_sv=test_sv, ref_sv=ref_sv)
 
     cfg = load_runtime_config()
+    cfg.run.spec_profile.interaction = "non_interactive"
+    cfg.run.verification_profile = "verilog-eval"
     cfg.benchmark.flow_mode = "direct_single_module"
     cfg.benchmark.prompt_mode = "raw_verilog_eval"
     cfg.benchmark.rtl_language = "systemverilog"

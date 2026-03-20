@@ -98,7 +98,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Benchmark command to execute (default: run).",
     )
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to runtime YAML config.")
-    parser.add_argument("--preset", default="benchmark", help="Preset to use (default: benchmark).")
     parser.add_argument(
         "--output-root",
         default=None,
@@ -229,17 +228,14 @@ def _effective_benchmark_flow_mode(*, legacy_lightweight: bool) -> str:
 def _benchmark_execution_policy(
     *,
     run_name: str,
-    allow_repair_loop: bool,
     flow_mode: str,
 ) -> dict[str, Any]:
     runtime_cfg = get_runtime_config()
     benchmark_cfg = runtime_cfg.benchmark
     return {
-        "preset": "benchmark",
-        "spec_profile": "benchmark",
-        "verification_profile": "oracle_compare",
-        "allow_repair_loop": allow_repair_loop,
-        "benchmark_mode": True,
+        "spec_profile": runtime_cfg.run.spec_profile.model_dump(mode="python"),
+        "verification_profile": runtime_cfg.run.verification_profile,
+        "run_kind": "benchmark",
         "benchmark_flow_mode": flow_mode,
         "benchmark_prompt_mode": str(benchmark_cfg.prompt_mode),
         "benchmark_interface_equivalence": str(benchmark_cfg.interface_equivalence),
@@ -864,7 +860,7 @@ def _build_direct_design_context(
             "exclusions": [],
             "synthesis_target": "fpga_generic",
         },
-        "verification_scope": str(execution_policy.get("verification_profile", "oracle_compare")),
+        "verification_scope": str(execution_policy.get("verification_profile", "verilog-eval")),
         "children": [],
         "connections": [],
         "module_contract": {
@@ -1347,7 +1343,6 @@ def _generate_one_sample_legacy(
     )
     execution_policy = _benchmark_execution_policy(
         run_name=run_name,
-        allow_repair_loop=False,
         flow_mode="legacy_lightweight",
     )
 
@@ -1364,7 +1359,6 @@ def _generate_one_sample_legacy(
                 module_name=target_module_name,
                 spec_text=prompt_text,
                 interactive=False,
-                spec_profile="benchmark",
             )
             planner.generate_from_specs(
                 spec_dir=spec_dir,
@@ -1504,7 +1498,6 @@ def _generate_one_sample_direct(
                 task_memory_root,
                 run_id=run_routing.run_id,
                 results_routing_key=run_routing.results_routing_key,
-                allow_repair_loop=True,
                 execution_policy=sample_execution_policy,
             ).run(timeout_s=pipeline_timeout_s)
             failed_nodes = sorted(node_id for node_id, state in final_states.items() if state != "DONE")
@@ -1628,7 +1621,6 @@ def _generate_one_sample_orchestrated(
                 module_name=target_module_name,
                 spec_text=prompt_text,
                 interactive=False,
-                spec_profile="benchmark",
             )
             planner.generate_from_specs(
                 spec_dir=spec_dir,
@@ -1667,7 +1659,6 @@ def _generate_one_sample_orchestrated(
                 task_memory_root,
                 run_id=run_routing.run_id,
                 results_routing_key=run_routing.results_routing_key,
-                allow_repair_loop=True,
                 execution_policy=sample_execution_policy,
             ).run(timeout_s=pipeline_timeout_s)
             failed_nodes = sorted(node_id for node_id, state in final_states.items() if state != "DONE")
@@ -1857,7 +1848,6 @@ def _run_mode(
     try:
         execution_policy = _benchmark_execution_policy(
             run_name=mode_run_name,
-            allow_repair_loop=True,
             flow_mode=effective_flow_mode,
         )
         if bool(execution_policy.get("disable_tb_generation")) and not bool(
@@ -2054,6 +2044,14 @@ def _print_problem_list(cases: list[PromptCase], *, output_format: str) -> None:
 def run_from_args(args: argparse.Namespace) -> None:
     runtime_cfg = get_runtime_config()
     benchmark_cfg = runtime_cfg.benchmark
+    if runtime_cfg.run.spec_profile.interaction != "non_interactive":
+        raise RuntimeError(
+            "Benchmark runs require run.spec_profile.interaction=non_interactive."
+        )
+    if runtime_cfg.run.verification_profile != "verilog-eval":
+        raise RuntimeError(
+            "Benchmark runs require run.verification_profile=verilog-eval."
+        )
 
     command = str(getattr(args, "command", "run") or "run").strip().lower()
     build_dir_arg = getattr(args, "build_dir", None)
@@ -2144,11 +2142,12 @@ def run_from_args(args: argparse.Namespace) -> None:
     if not dry_run and effective_flow_mode != "legacy_lightweight" and not verilator_bin:
         raise RuntimeError(
             "Benchmark direct/orchestrated modes require verilator on PATH "
-            "(or configured in tools.verilator_path)."
+            "(or configured in infrastructure.tool_paths.verilator)."
         )
     if not dry_run and (not iverilog_bin or not vvp_bin):
         raise RuntimeError(
-            "Benchmark runs require both iverilog and vvp on PATH (or configured in tools.iverilog_path/tools.vvp_path)."
+            "Benchmark runs require both iverilog and vvp on PATH "
+            "(or configured in infrastructure.tool_paths.iverilog/infrastructure.tool_paths.vvp)."
         )
 
     if not dry_run and effective_flow_mode != "legacy_lightweight":
@@ -2211,12 +2210,15 @@ def run_from_args(args: argparse.Namespace) -> None:
         "finished_at": "",
         "command_line": " ".join(sys.argv),
         "config_path": str(Path(getattr(args, "config", DEFAULT_CONFIG_PATH)).resolve()),
-        "preset": str(getattr(args, "preset", runtime_cfg.active_preset)),
         "campaign": run_root.parent.name if run_root.parent != output_root else "",
         "run_id": run_root.name,
         "run_root": str(run_root),
         "git_sha": _resolve_git_sha(REPO_ROOT),
         "runtime": {
+            "run": {
+                "spec_profile": runtime_cfg.run.spec_profile.model_dump(mode="python"),
+                "verification_profile": runtime_cfg.run.verification_profile,
+            },
             "llm": {
                 "provider": runtime_cfg.llm.provider,
                 "default_model": runtime_cfg.llm.default_model,

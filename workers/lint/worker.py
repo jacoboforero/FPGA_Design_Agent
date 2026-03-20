@@ -167,8 +167,10 @@ class LintWorker(threading.Thread):
         self._registry = registry if registry is not None else _safe_get_registry()
         registry_verilator = _registry_tool(self._registry, "verilator")
         runtime_cfg = get_runtime_config()
-        self.verilator = runtime_cfg.tools.verilator_path or (
-            registry_verilator.resolved_path if registry_verilator is not None else shutil.which("verilator")
+        self.verilator = (
+            runtime_cfg.tools.verilator_path
+            or (registry_verilator.resolved_path if registry_verilator is not None and registry_verilator.resolved_path else None)
+            or shutil.which("verilator")
         )
         self.worker_instance_id = f"worker_lint:{id(self):x}"
 

@@ -1,0 +1,7 @@
+includes:
+  - run/benchmark.yaml
+  - domains/agents.yaml
+  - domains/cli.yaml
+  - domains/infrastructure.yaml
+  - domains/verification.yaml
+  - domains/benchmark.yaml

@@ -82,14 +82,10 @@ def main() -> None:
     _load_env_file(REPO_ROOT / ".env")
     initialize_runtime_config(DEFAULT_CONFIG_PATH)
     runtime_cfg = get_runtime_config()
-    preset = runtime_cfg.resolved_preset
     execution_policy = {
-        "preset": runtime_cfg.active_preset,
-        "spec_profile": preset.spec_profile,
-        "verification_profile": preset.verification_profile,
-        "allow_repair_loop": preset.allow_repair_loop,
-        "benchmark_mode": preset.benchmark_mode,
-        "debug_max_retries": runtime_cfg.debug.max_retries,
+        "spec_profile": runtime_cfg.run.spec_profile.model_dump(mode="python"),
+        "verification_profile": runtime_cfg.run.verification_profile,
+        "run_kind": "engineer",
     }
 
     rabbit_url = runtime_cfg.broker.url
@@ -143,7 +139,6 @@ def main() -> None:
             task_memory_root,
             run_id=run_routing.run_id,
             results_routing_key=run_routing.results_routing_key,
-            allow_repair_loop=preset.allow_repair_loop,
             execution_policy=execution_policy,
         ).run()
     finally:

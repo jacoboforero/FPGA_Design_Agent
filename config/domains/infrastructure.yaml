@@ -1,0 +1,18 @@
+infrastructure:
+  broker:
+    url: amqp://user:password@localhost:5672/
+    heartbeat: 600
+    blocked_connection_timeout: 300.0
+    connection_attempts: 5
+    retry_delay: 2.0
+    socket_timeout: 10.0
+    reconnect_delay_s: 1.0
+    task_max_retries: 1
+    purge_queues_on_start: true
+    planner_timeout_s: 60.0
+    results_consume_mode: consume
+
+  tool_paths:
+    verilator: null
+    iverilog: null
+    vvp: null

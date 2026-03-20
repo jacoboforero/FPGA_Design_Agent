@@ -55,7 +55,7 @@ For custom benchmark commands, open the app container and use Poetry's environme
 make shell
 export RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
 echo "$RABBITMQ_URL"
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --preset benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --config config/runtime.benchmark.yaml
 ```
 
 Inside the container shell, set `RABBITMQ_URL` to `amqp://user:password@rabbitmq:5672/` before broker-backed CLI commands.
@@ -65,14 +65,30 @@ Generated outputs go to `artifacts/generated/`, stage logs to `artifacts/task_me
 ## Host Fallback
 ```bash
 poetry install -E openai --with dev
-PYTHONPATH=. poetry run python3 apps/cli/cli.py --timeout 120 --config config/runtime.yaml --preset engineer_fast
+PYTHONPATH=. poetry run python3 apps/cli/cli.py --timeout 120 --config config/runtime.yaml
 ```
+
+## Homebrew Demo Install
+The repo includes a locked Homebrew demo configuration for the installed CLI
+path under [packaging/homebrew](packaging/homebrew/README.md).
+
+To smoke-test a real Homebrew-style install from the current working tree:
+
+```bash
+bash scripts/test_homebrew_install.sh
+```
+
+Notes:
+- the installed command is `mhd`
+- the locked installed runtime uses the interactive spec helper
+- RabbitMQ is a runtime prerequisite, not a formula dependency
+- source-based Homebrew installs on macOS require current Command Line Tools
 
 ## Common Commands
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py --preset engineer_fast
-PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset engineer_fast
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke
+PYTHONPATH=. poetry run python3 apps/cli/cli.py --config config/runtime.yaml
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --config config/runtime.yaml
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign smoke
 PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark compare --left-dir <run_a>/canonical --right-dir <run_b>/canonical
 ```
 
@@ -88,9 +104,10 @@ PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark compare --left-dir <ru
 - `docs/` detailed architecture and runbooks
 
 ## Configuration
-- Runtime behavior: `config/runtime.yaml`
+- Engineer default manifest: `config/runtime.yaml`
+- Benchmark default manifest: `config/runtime.benchmark.yaml`
 - Secrets and credentials: environment variables
-- Use `--config` and `--preset` to select run profile behavior.
+- Use `--config` to select the runtime manifest.
 
 ## Testing
 ```bash

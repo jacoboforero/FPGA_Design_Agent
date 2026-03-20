@@ -2,12 +2,10 @@ campaign: gpt41_smoke
 output_root: artifacts/benchmarks/verilog_eval
 runs:
   - label: gpt41_canonical
-    config: config/runtime.yaml
-    preset: benchmark
+    config: config/runtime.benchmark.yaml
     sampled: false
     max_problems: 10
   - label: gpt41_sampled
-    config: config/runtime.yaml
-    preset: benchmark
+    config: config/runtime.benchmark.yaml
     sampled: true
     max_problems: 10

@@ -8,13 +8,11 @@ campaign: model_sweep_march
 output_root: artifacts/benchmarks/verilog_eval
 runs:
   - label: gpt41_canonical
-    config: config/runtime.yaml
-    preset: benchmark
+    config: config/runtime.benchmark.yaml
     sampled: false
     max_problems: 20
   - label: gpt41_sampled
-    config: config/runtime.yaml
-    preset: benchmark
+    config: config/runtime.benchmark.yaml
     sampled: true
     max_problems: 20
 """
@@ -32,7 +30,7 @@ from typing import Any
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = "config/runtime.yaml"
+DEFAULT_CONFIG = "config/runtime.benchmark.yaml"
 
 
 def _utc_now_iso() -> str:
@@ -71,7 +69,6 @@ def _build_run_command(
 ) -> tuple[list[str], Path]:
     label = _slug(str(run_item.get("label", "")), default="run")
     config = str(run_item.get("config") or DEFAULT_CONFIG)
-    preset = str(run_item.get("preset") or "benchmark")
     run_id = _slug(str(run_item.get("run_id") or label), default=label)
     output_root = str(run_item.get("output_root") or campaign_output_root or "").strip()
     run_dir = str(run_item.get("run_dir") or "").strip()
@@ -83,8 +80,6 @@ def _build_run_command(
         "run",
         "--config",
         config,
-        "--preset",
-        preset,
         "--campaign",
         campaign_name,
         "--run-id",

@@ -510,7 +510,7 @@ def test_planner_allows_symbolic_width_in_non_strict_and_persists_warnings(tmp_p
     design_context = json.loads((out_dir / "design_context.json").read_text())
     preplan = design_context.get("preplan_validation", {})
     warnings = preplan.get("warnings", [])
-    assert preplan.get("profile") == "hybrid_scoreboard"
+    assert preplan.get("profile") == "L2"
     assert isinstance(warnings, list) and warnings
     assert any(issue.get("code") == "PLV306" for issue in warnings)
 
@@ -527,5 +527,5 @@ def test_planner_fails_on_symbolic_width_in_strict_profile(tmp_path: Path):
         planner.generate_from_specs(
             spec_dir=spec_dir,
             out_dir=out_dir,
-            execution_policy={"verification_profile": "strict_tb_acceptance"},
+            execution_policy={"spec_profile": {"rigor_level": "L4"}},
         )

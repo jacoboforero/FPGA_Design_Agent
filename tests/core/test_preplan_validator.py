@@ -208,9 +208,8 @@ def test_preplan_validator_fails_on_numeric_width_mismatch():
 @pytest.mark.parametrize(
     ("profile", "expect_error"),
     [
-        ("oracle_compare", False),
-        ("hybrid_scoreboard", False),
-        ("strict_tb_acceptance", True),
+        ("L2", False),
+        ("L4", True),
     ],
 )
 def test_preplan_validator_symbolic_unresolved_is_profile_aware(profile: str, expect_error: bool):
@@ -223,7 +222,7 @@ def test_preplan_validator_symbolic_unresolved_is_profile_aware(profile: str, ex
         top_specs,
         child_specs,
         l4,
-        execution_policy={"verification_profile": profile},
+        execution_policy={"spec_profile": {"rigor_level": profile}},
     )
     if expect_error:
         assert any(issue.code == "PLV306" for issue in result.errors)

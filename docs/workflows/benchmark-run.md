@@ -1,6 +1,6 @@
 # Benchmark Run Workflow
 
-Last verified against runtime behavior: March 15, 2026.
+Last verified against runtime behavior: March 19, 2026.
 
 This runbook covers how to run VerilogEval-compatible benchmarks in this repo and how to interpret outputs.
 
@@ -30,8 +30,6 @@ A successful benchmark workflow means:
 
 Default behavior remains `run` if no command is provided.
 
-Legacy compatibility: `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark --preset benchmark` still maps to `benchmark run`.
-
 ## Fastest Path (15-Minute Research First Success)
 From repo root:
 
@@ -48,10 +46,10 @@ Then inside the container shell:
 export RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
 echo "$RABBITMQ_URL"
 git submodule update --init --recursive
-PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset benchmark --benchmark
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --preset benchmark --max-problems 3
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke --run-id smoke001 --max-problems 3 --dry-run
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke --run-id smoke001 --max-problems 3
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --config config/runtime.benchmark.yaml --benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --config config/runtime.benchmark.yaml --max-problems 3
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign smoke --run-id smoke001 --max-problems 3 --dry-run
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign smoke --run-id smoke001 --max-problems 3
 ```
 
 The `echo` line should print `amqp://user:password@rabbitmq:5672/`.
@@ -71,7 +69,7 @@ Host fallback:
 ```bash
 poetry install -E openai --with dev
 git submodule update --init --recursive
-PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset benchmark --benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --config config/runtime.benchmark.yaml --benchmark
 ```
 
 ## End-to-End Run Flow
@@ -111,32 +109,32 @@ You need:
 Quick preflight command:
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset benchmark --benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --config config/runtime.benchmark.yaml --benchmark
 ```
 
 ## Main Commands
 List discovered benchmark cases:
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --preset benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --config config/runtime.benchmark.yaml
 ```
 
 Canonical run (safe run directory layout):
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign wavefix_smoke
 ```
 
 Canonical + sampled:
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --sampled
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign wavefix_smoke --sampled
 ```
 
 Legacy lightweight fallback:
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --legacy-lightweight
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign wavefix_smoke --legacy-lightweight
 ```
 
 Config-controlled orchestrated fallback:
@@ -151,20 +149,20 @@ benchmark:
 Run it with:
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.your_benchmark.yaml --preset benchmark --campaign wavefix_smoke
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.your_benchmark.yaml --campaign wavefix_smoke
 ```
 
 Targeted runs:
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --max-problems 25
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --only-problem Prob079
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign wavefix_smoke --max-problems 25
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign wavefix_smoke --only-problem Prob079
 ```
 
 Dry-run plan only:
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign wavefix_smoke --max-problems 10 --dry-run
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign wavefix_smoke --max-problems 10 --dry-run
 ```
 
 Analyze existing run outputs:
@@ -214,7 +212,7 @@ What you should observe:
 ### Checkpoint 2: Run Directory and Manifest
 What you should observe:
 - Run directory exists at `<output_root>/<campaign>/<run_id>/`.
-- `run_manifest.json` is present with run metadata (`preset`, provider/model, flags, filters).
+- `run_manifest.json` is present with run metadata (`runtime.run`, provider/model, flags, filters).
 
 Sanity checks:
 
@@ -279,7 +277,7 @@ Symptoms:
 - Broker unreachable, or missing `verilator`/`iverilog`/`vvp`.
 
 Actions:
-1. Run `PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset benchmark --benchmark`.
+1. Run `PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --config config/runtime.benchmark.yaml --benchmark`.
 2. Fix broker reachability and tool path resolution (`tools.*` in runtime config).
 3. Retry with `run --dry-run` first to confirm setup.
 

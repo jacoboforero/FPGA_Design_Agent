@@ -1,0 +1,5 @@
+run:
+  spec_profile:
+    interaction: interactive
+    rigor_level: L2
+  verification_profile: testbench-agent

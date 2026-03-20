@@ -1,0 +1,5 @@
+run:
+  spec_profile:
+    interaction: non_interactive
+    rigor_level: L0
+  verification_profile: verilog-eval

@@ -1,6 +1,6 @@
 # Glossary
 
-Last verified against runtime behavior: March 8, 2026.
+Last verified against runtime behavior: March 19, 2026.
 
 This glossary defines key terms used across engineer and researcher documentation.
 
@@ -9,7 +9,8 @@ This glossary defines key terms used across engineer and researcher documentatio
 - **Researcher**: primary user focused on systematic benchmarking, reproducibility, and model/system comparison.
 
 ## Run Concepts
-- **Preset**: named runtime behavior profile in `config/runtime.yaml` (for example `engineer_fast`, `benchmark`).
+- **Runtime Manifest**: a YAML entrypoint passed with `--config`, such as `config/runtime.yaml` or `config/runtime.benchmark.yaml`.
+- **Scenario Manifest**: a thin overlay manifest under `config/scenarios/` for a specific campaign or test workflow.
 - **Run Name**: logical run label used for observability tracking.
 - **Run ID**: unique ID associated with a specific execution instance.
 - **Campaign**: grouping label for related benchmark runs.

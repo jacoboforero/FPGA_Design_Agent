@@ -78,4 +78,4 @@ Checklist before making model-quality claims:
 - `scripts/run_benchmark_campaign.py`
 - `tests/apps/test_run_verilog_eval.py`
 - `tests/apps/test_run_benchmark_campaign.py`
-- `config/runtime.yaml`
+- `config/runtime.benchmark.yaml`

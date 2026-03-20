@@ -21,8 +21,7 @@ def test_build_run_command_includes_core_flags():
         campaign_output_root="artifacts/benchmarks/verilog_eval",
         run_item={
             "label": "gpt41",
-            "config": "config/runtime.yaml",
-            "preset": "benchmark",
+            "config": "config/runtime.benchmark.yaml",
             "sampled": True,
             "max_problems": 10,
             "only_problem": ["Prob079"],

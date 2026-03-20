@@ -1,6 +1,6 @@
 # Interactive Run Workflow
 
-Last verified against runtime behavior: March 8, 2026.
+Last verified against runtime behavior: March 19, 2026.
 
 This is the fastest way to run the full planning and execution loop locally.
 
@@ -35,19 +35,19 @@ Host fallback:
 
 ```bash
 poetry install -E openai --with dev
-PYTHONPATH=. poetry run python3 apps/cli/cli.py --timeout 120 --config config/runtime.yaml --preset engineer_fast
+PYTHONPATH=. poetry run python3 apps/cli/cli.py --timeout 120 --config config/runtime.yaml
 ```
 
 If you only want to validate environment readiness before running the full pipeline:
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset engineer_fast
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --config config/runtime.yaml
 ```
 
 ## End-to-End Flow
-1. Start CLI with your desired preset (`engineer_fast` for iteration speed, `engineer_signoff` for stricter verification policy).
+1. Start CLI with the engineer manifest (`config/runtime.yaml` by default).
 2. Provide spec intent in the interactive helper flow.
-3. Complete/fix required L1-L5 fields if prompted.
+3. Complete/fix required spec fields for the configured rigor level if prompted.
 4. Planner emits design context and DAG artifacts.
 5. CLI presents execution handoff prompt.
 6. Orchestrator runs implementation and verification stages.
@@ -68,13 +68,9 @@ ls -1 artifacts/task_memory/specs
 ```
 
 You should see files like:
-- `L1_functional*.json`
-- `L2_interface*.json`
-- `L3_verification*.json`
-- `L4_architecture*.json`
-- `L5_acceptance*.json`
-- `frozen_spec*.json`
-- `lock.json`
+- `planning_spec.json`
+- `original_spec.txt`
+- `spec_input_*.txt`
 
 ### Checkpoint 2: Planner Completed
 What you should observe:
@@ -116,7 +112,7 @@ Symptoms:
 - CLI fails early with RabbitMQ connection errors.
 
 Actions:
-1. Run `PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset engineer_fast`.
+1. Run `PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --config config/runtime.yaml`.
 2. Verify `broker.url` in `config/runtime.yaml`.
 3. If running in Docker, confirm services are up (`make up`) and retry.
 
@@ -125,7 +121,7 @@ Symptoms:
 - Missing API key or provider authentication failures.
 
 Actions:
-1. Confirm provider in runtime config (`llm.provider`).
+1. Confirm provider in runtime config (`agents.llm.provider` in the YAML files).
 2. Export matching credential (`OPENAI_API_KEY` or `GROQ_API_KEY`).
 3. Re-run `doctor` and verify credential check passes.
 
@@ -154,7 +150,7 @@ Symptoms:
 Actions:
 1. Inspect failing node logs and generated candidate diffs.
 2. Tighten spec acceptance criteria or clarify corner cases.
-3. Re-run with adjusted preset or debug retry policy if appropriate.
+3. Re-run with adjusted config, rigor level, or debug retry policy if appropriate.
 
 ## Engineer Next Steps
 After your first successful run:

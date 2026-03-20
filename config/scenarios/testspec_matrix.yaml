@@ -1,0 +1,34 @@
+includes:
+  - ../runtime.yaml
+
+run:
+  spec_profile:
+    interaction: non_interactive
+    rigor_level: L2
+  verification_profile: testbench-agent
+
+agents:
+  pools:
+    implementation: 1
+    testbench: 1
+    reflection: 1
+    debug: 1
+    spec_helper: 1
+    planner: 1
+    lint: 1
+    tb_lint: 1
+    acceptance: 1
+    distill: 1
+    simulation: 1
+
+  llm:
+    defaults:
+      model: gpt-4.1-mini
+      temperature: 0.2
+    roles:
+      testbench:
+        model: gpt-4.1
+      debug:
+        model: gpt-4.1
+      reflection:
+        model: gpt-4.1

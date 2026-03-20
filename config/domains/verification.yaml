@@ -1,0 +1,22 @@
+verification:
+  lint:
+    verilator_strict_warnings: false
+    rtl_fail_moddup: true
+    rtl_semantic_enabled: true
+    rtl_semantic_strict: true
+    tb_semantic_enabled: true
+    tb_semantic_strict: true
+
+  sim:
+    fail_window_before: 20
+    fail_window_after: 5
+    vcd_max_signals: 40
+    vcd_max_changes_per_signal: 200
+    vcd_time_window_before: 2000
+    vcd_time_window_after: 2000
+
+  debug:
+    max_retries: 2
+    max_attempts: 3
+    local_lint_timeout_s: 12.0
+    local_lint_max_lines: 20

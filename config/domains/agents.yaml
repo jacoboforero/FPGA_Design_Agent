@@ -1,0 +1,78 @@
+agents:
+  pools:
+    implementation: 2
+    testbench: 2
+    reflection: 2
+    debug: 2
+    spec_helper: 1
+    planner: 1
+    lint: 1
+    tb_lint: 1
+    acceptance: 1
+    distill: 1
+    simulation: 2
+
+  llm:
+    enabled: true
+    provider: openai
+
+    defaults:
+      model: gpt-4.1-mini
+      request_timeout_s: 120.0
+      json_mode: true
+      max_tokens: 10000
+      temperature: 0.2
+      top_p: null
+
+    rate_control:
+      adaptive_enabled: true
+      max_in_flight_min: 1
+      max_in_flight_default: 6
+      max_in_flight_max: 8
+      backoff_on_429: true
+
+    roles:
+      spec_helper:
+        model: null
+        phases:
+          extract:
+            max_tokens: 4000
+            temperature: 0.2
+          question:
+            max_tokens: 1500
+            temperature: 0.3
+          draft:
+            max_tokens: 2500
+            temperature: 0.4
+
+      planner:
+        model: null
+        max_tokens: 6000
+        temperature: 0.2
+
+      implementation:
+        model: null
+        max_tokens: 7000
+        temperature: 0.2
+
+      testbench:
+        model: null
+        max_tokens: 7000
+        temperature: 0.2
+
+      reflection:
+        model: null
+        max_tokens: 6000
+        temperature: 0.2
+
+      debug:
+        model: null
+        max_tokens: 7000
+        temperature: 0.2
+
+      narrator:
+        model: null
+        fallback_model: gpt-4.1
+        max_tokens: 220
+        temperature: 0.5
+        timeout_s: 10.0

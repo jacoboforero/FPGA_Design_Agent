@@ -1,13 +1,5 @@
 """
-Planner that consumes frozen spec artifacts (L1–L5) and emits design_context.json and dag.json.
-
-Expected inputs (under artifacts/task_memory/specs/):
-- L1_functional.json
-- L2_interface.json
-- L3_verification.json
-- L4_architecture.json (optional)
-- L5_acceptance.json
-- lock.json (indicates specs are frozen)
+Planner that consumes planning_spec.json and emits design_context.json and dag.json.
 """
 from __future__ import annotations
 
@@ -16,12 +8,32 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from core.schemas.planning_spec import PlanningSpec
 from core.schemas.specifications import (
+    AcceptanceMetric,
+    ArtifactRequirement,
+    AssertionPlan,
+    BlockDiagramNode,
+    ClockDomain,
+    ClockPolarity,
+    ClockingInfo,
+    ConfigurationParameter,
+    Connection,
+    ConnectionEndpoint,
+    CoverageTarget,
+    DependencyEdge,
+    HandshakeProtocol,
     L1Specification,
     L2Specification,
     L3Specification,
     L4Specification,
     L5Specification,
+    ResetConstraint,
+    ResetPolarity,
+    SignalDefinition,
+    SignalDirection,
+    SpecificationState,
+    VerificationScenario,
 )
 from orchestrator.preplan_validator import ValidationIssue, validate_preplan_inputs
 
@@ -33,11 +45,20 @@ def _hash_dict(obj: Dict[str, Any]) -> str:
     data = json.dumps(obj, sort_keys=True).encode()
     return hashlib.sha256(data).hexdigest()[:16]
 
-
 def _load_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Missing spec artifact: {path}")
     return json.loads(path.read_text())
+
+def _planning_spec_path(spec_dir: Path) -> Path:
+    return spec_dir / "planning_spec.json"
+
+
+def _load_planning_spec(spec_dir: Path) -> PlanningSpec:
+    path = _planning_spec_path(spec_dir)
+    if not path.exists():
+        raise RuntimeError("Missing planning_spec.json. Run the spec helper before planning.")
+    return PlanningSpec.model_validate_json(path.read_text())
 
 
 def _module_spec_paths(spec_dir: Path, module_name: str) -> Dict[str, Path]:
@@ -68,6 +89,291 @@ def _format_validation_issue(issue: ValidationIssue) -> str:
 def _raise_preplan_validation_errors(errors: List[ValidationIssue]) -> None:
     issue_lines = [f"- {_format_validation_issue(issue)}" for issue in errors]
     raise RuntimeError("Pre-plan validation failed:\n" + "\n".join(issue_lines))
+
+
+def _spec_identity(planning_spec: PlanningSpec) -> dict[str, Any]:
+    return {
+        "spec_id": planning_spec.metadata.spec_id,
+        "state": SpecificationState.FROZEN,
+        "created_by": "spec_helper",
+        "approved_by": "spec_helper",
+    }
+
+
+def _default_block_diagram(top_module: str) -> list[BlockDiagramNode]:
+    return [
+        BlockDiagramNode(
+            node_id=top_module,
+            description=f"Top module for {top_module}.",
+            node_type="module",
+            interface_refs=[],
+            uses_standard_component=False,
+            notes=None,
+        )
+    ]
+
+
+def _clock_polarity(value: Any) -> ClockPolarity:
+    text = str(value or "").strip().upper()
+    return ClockPolarity.NEGEDGE if text in {"NEGEDGE", "NEG", "FALLING", "NEGATIVE"} else ClockPolarity.POSEDGE
+
+
+def _reset_polarity(value: Any) -> ResetPolarity | None:
+    text = str(value or "").strip().upper()
+    if not text:
+        return None
+    if text in {"ACTIVE_LOW", "LOW", "0", "FALSE"}:
+        return ResetPolarity.ACTIVE_LOW
+    return ResetPolarity.ACTIVE_HIGH
+
+
+def _signal_direction(value: Any) -> SignalDirection:
+    text = str(value or "").strip().upper()
+    if text in {"INPUT", "IN", "I"}:
+        return SignalDirection.INPUT
+    if text in {"OUTPUT", "OUT", "O"}:
+        return SignalDirection.OUTPUT
+    return SignalDirection.INOUT
+
+
+def _artifact_list(raw_items: list[dict[str, Any]]) -> list[ArtifactRequirement]:
+    items = [
+        ArtifactRequirement(
+            name=str(item.get("name") or "rtl"),
+            description=str(item.get("description") or "Generated artifact"),
+            mandatory=bool(item.get("mandatory", True)),
+        )
+        for item in raw_items
+        if isinstance(item, dict)
+    ]
+    if items:
+        return items
+    return [
+        ArtifactRequirement(name="rtl", description="Generated RTL source", mandatory=True),
+        ArtifactRequirement(name="sim_log", description="Simulation log", mandatory=True),
+    ]
+
+
+def _acceptance_metric_list(raw_items: list[dict[str, Any]]) -> list[AcceptanceMetric]:
+    items = [
+        AcceptanceMetric(
+            metric_id=str(item.get("metric_id") or "implementation_complete"),
+            description=str(item.get("description") or "Implementation completes."),
+            operator=str(item.get("operator") or "=="),
+            target_value=str(item.get("target_value") or "1"),
+            metric_source=(str(item.get("metric_source")).strip() or None) if item.get("metric_source") is not None else None,
+        )
+        for item in raw_items
+        if isinstance(item, dict)
+    ]
+    if items:
+        return items
+    return [
+        AcceptanceMetric(
+            metric_id="implementation_complete",
+            description="Implementation completes and produces RTL.",
+            operator="==",
+            target_value="1",
+            metric_source="rtl",
+        )
+    ]
+
+
+def _l1_from_module(planning_spec: PlanningSpec, module_name: str) -> L1Specification:
+    module = planning_spec.modules[module_name]
+    section = module.functional_intent
+    return L1Specification(
+        **_spec_identity(planning_spec),
+        role_summary=section.role_summary or f"Implements module {module_name}.",
+        key_rules=section.key_rules or ["Implement behavior exactly as described by the spec."],
+        performance_intent=section.performance_intent or "Prompt-defined performance intent.",
+        reset_semantics=section.reset_semantics or "Spec-defined safe reset behavior.",
+        corner_cases=section.corner_cases or ["No additional corner cases documented."],
+        open_questions=[],
+    )
+
+
+def _l2_from_module(planning_spec: PlanningSpec, module_name: str) -> L2Specification:
+    module = planning_spec.modules[module_name]
+    section = module.interface_contract
+    clocking = [
+        ClockingInfo(
+            clock_name=str(item.get("clock_name") or "clk"),
+            clock_polarity=_clock_polarity(item.get("clock_polarity")),
+            reset_name=(str(item.get("reset_name")).strip() or None) if item.get("reset_name") is not None else None,
+            reset_polarity=_reset_polarity(item.get("reset_polarity")),
+            reset_is_async=item.get("reset_is_async"),
+            description=(str(item.get("description")).strip() or None) if item.get("description") is not None else None,
+        )
+        for item in section.clocking
+        if isinstance(item, dict)
+    ]
+    signals = [
+        SignalDefinition(
+            name=str(item.get("name") or ""),
+            direction=_signal_direction(item.get("direction")),
+            width_expr=str(item.get("width_expr") or "1"),
+            semantics=(str(item.get("semantics")).strip() or None) if item.get("semantics") is not None else None,
+        )
+        for item in section.signals
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    if not signals:
+        signals = [
+            SignalDefinition(name="in", direction=SignalDirection.INPUT, width_expr="1", semantics=None),
+            SignalDefinition(name="out", direction=SignalDirection.OUTPUT, width_expr="1", semantics=None),
+        ]
+    handshake = [
+        HandshakeProtocol(
+            name=str(item.get("name") or "protocol"),
+            rules=str(item.get("rules") or ""),
+        )
+        for item in section.handshake_semantics
+        if isinstance(item, dict)
+    ]
+    params = [
+        ConfigurationParameter(
+            name=str(item.get("name") or ""),
+            default_value=(str(item.get("default_value")).strip() or None) if item.get("default_value") is not None else None,
+            description=(str(item.get("description")).strip() or None) if item.get("description") is not None else None,
+        )
+        for item in section.configuration_parameters
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    return L2Specification(
+        **_spec_identity(planning_spec),
+        clocking=clocking,
+        signals=signals,
+        handshake_semantics=handshake,
+        transaction_unit=section.transaction_unit or "Spec-defined transaction/update unit.",
+        configuration_parameters=params,
+    )
+
+
+def _l3_from_module(planning_spec: PlanningSpec, module_name: str) -> L3Specification:
+    module = planning_spec.modules[module_name]
+    section = module.verification_plan
+    coverage_targets = [
+        CoverageTarget(
+            coverage_id=str(item.get("coverage_id") or f"{module_name}_coverage"),
+            description=str(item.get("description") or "Coverage target"),
+            metric_type=str(item.get("metric_type") or "event"),
+            goal=float(item.get("goal")) if item.get("goal") not in (None, "") else None,
+            notes=(str(item.get("notes")).strip() or None) if item.get("notes") is not None else None,
+        )
+        for item in section.coverage_targets
+        if isinstance(item, dict)
+    ]
+    reset_constraints_raw = section.reset_constraints or {"min_cycles_after_reset": 0}
+    scenarios = [
+        VerificationScenario(
+            scenario_id=str(item.get("scenario_id") or f"{module_name}_scenario"),
+            description=str(item.get("description") or "Verification scenario"),
+            stimulus=str(item.get("stimulus") or ""),
+            oracle=str(item.get("oracle") or ""),
+            pass_fail_criteria=str(item.get("pass_fail_criteria") or ""),
+            illegal=bool(item.get("illegal", False)),
+        )
+        for item in section.scenarios
+        if isinstance(item, dict)
+    ]
+    return L3Specification(
+        **_spec_identity(planning_spec),
+        test_goals=section.test_goals or [f"Implement and validate module {module_name}."],
+        oracle_strategy=section.oracle_strategy or "Use the module specification as the oracle.",
+        stimulus_strategy=section.stimulus_strategy or "Directed scenarios.",
+        pass_fail_criteria=section.pass_fail_criteria or ["Module behavior matches the spec."],
+        coverage_targets=coverage_targets,
+        reset_constraints=ResetConstraint(
+            min_cycles_after_reset=int(reset_constraints_raw.get("min_cycles_after_reset", 0)),
+            ordering_notes=(str(reset_constraints_raw.get("ordering_notes")).strip() or None) if reset_constraints_raw.get("ordering_notes") is not None else None,
+        ),
+        scenarios=scenarios,
+    )
+
+
+def _l4_from_planning_spec(planning_spec: PlanningSpec) -> L4Specification:
+    section = planning_spec.architecture_plan
+    block_diagram = [
+        BlockDiagramNode(
+            node_id=str(item.get("node_id") or planning_spec.metadata.top_module),
+            description=str(item.get("description") or f"Module {planning_spec.metadata.top_module}"),
+            node_type=str(item.get("node_type") or "module"),
+            interface_refs=list(item.get("interface_refs") or []),
+            uses_standard_component=bool(item.get("uses_standard_component", False)),
+            notes=(str(item.get("notes")).strip() or None) if item.get("notes") is not None else None,
+        )
+        for item in section.block_diagram
+        if isinstance(item, dict)
+    ] or _default_block_diagram(planning_spec.metadata.top_module)
+    dependencies = [
+        DependencyEdge(
+            parent_id=str(item.get("parent_id") or ""),
+            child_id=str(item.get("child_id") or ""),
+            dependency_type=str(item.get("dependency_type") or "structural"),
+        )
+        for item in section.dependencies
+        if isinstance(item, dict) and str(item.get("parent_id") or "").strip() and str(item.get("child_id") or "").strip()
+    ]
+    connections = []
+    for item in section.connections:
+        if not isinstance(item, dict):
+            continue
+        src = item.get("src") if isinstance(item.get("src"), dict) else {}
+        dst = item.get("dst") if isinstance(item.get("dst"), dict) else {}
+        if not src or not dst:
+            continue
+        connections.append(
+            Connection(
+                src=ConnectionEndpoint(
+                    node_id=str(src.get("node_id") or ""),
+                    port=str(src.get("port") or ""),
+                    slice=(str(src.get("slice")).strip() or None) if src.get("slice") is not None else None,
+                ),
+                dst=ConnectionEndpoint(
+                    node_id=str(dst.get("node_id") or ""),
+                    port=str(dst.get("port") or ""),
+                    slice=(str(dst.get("slice")).strip() or None) if dst.get("slice") is not None else None,
+                ),
+                width=(str(item.get("width")).strip() or None) if item.get("width") is not None else None,
+                note=(str(item.get("note")).strip() or None) if item.get("note") is not None else None,
+            )
+        )
+    clock_domains = [
+        ClockDomain(
+            name=str(item.get("name") or ""),
+            frequency_hz=float(item.get("frequency_hz")) if item.get("frequency_hz") not in (None, "") else None,
+            notes=(str(item.get("notes")).strip() or None) if item.get("notes") is not None else None,
+        )
+        for item in section.clock_domains
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    assertion_plan_raw = section.assertion_plan or {}
+    return L4Specification(
+        **_spec_identity(planning_spec),
+        block_diagram=block_diagram,
+        dependencies=dependencies,
+        connections=connections,
+        clock_domains=clock_domains,
+        resource_strategy=section.resource_strategy or "Spec-defined implementation resources.",
+        latency_budget=section.latency_budget or "Spec-defined latency budget.",
+        assertion_plan=AssertionPlan(
+            sva=[str(item) for item in assertion_plan_raw.get("sva", [])],
+            scoreboard_assertions=[str(item) for item in assertion_plan_raw.get("scoreboard_assertions", [])],
+        ),
+    )
+
+
+def _l5_from_module(planning_spec: PlanningSpec, module_name: str) -> L5Specification:
+    module = planning_spec.modules[module_name]
+    section = module.acceptance_contract
+    return L5Specification(
+        **_spec_identity(planning_spec),
+        required_artifacts=_artifact_list(section.required_artifacts),
+        acceptance_metrics=_acceptance_metric_list(section.acceptance_metrics),
+        exclusions=section.exclusions,
+        synthesis_target=section.synthesis_target,
+    )
 
 
 def _extract_module_nodes(l4: L4Specification, default_module: str) -> List[str]:
@@ -268,23 +574,82 @@ def generate_from_specs(
 ) -> None:
     spec_dir = spec_dir.resolve()
     out_dir = out_dir.resolve()
-    lock_path = spec_dir / "lock.json"
-    if not lock_path.exists():
-        raise RuntimeError("Specs are not locked. Run the spec helper to lock L1–L5 before planning.")
+    if _planning_spec_path(spec_dir).exists():
+        planning_spec = _load_planning_spec(spec_dir)
+        if not planning_spec.handoff.planner_ready or planning_spec.handoff.blocking_gaps:
+            issues = planning_spec.handoff.blocking_gaps or []
+            lines = [f"- {issue.field_path}: {issue.message}" for issue in issues] or ["- planner handoff blocked"]
+            raise RuntimeError("Planning blocked by spec-helper rigor gaps:\n" + "\n".join(lines))
 
-    lock = _load_json(lock_path)
-    module_name = lock.get("module_name") or "demo_module"
-    top_module = lock.get("top_module") or module_name
-    lock_modules = lock.get("modules")
+        lock = {
+            "module_name": planning_spec.metadata.top_module,
+            "top_module": planning_spec.metadata.top_module,
+            "modules": planning_spec.metadata.module_inventory,
+            "spec_id": str(planning_spec.metadata.spec_id),
+        }
+        top_module = planning_spec.metadata.top_module
+        lock_modules = planning_spec.metadata.module_inventory
 
-    l1 = L1Specification.model_validate_json((spec_dir / "L1_functional.json").read_text())
-    l2 = L2Specification.model_validate_json((spec_dir / "L2_interface.json").read_text())
-    l3 = L3Specification.model_validate_json((spec_dir / "L3_verification.json").read_text())
-    l4 = L4Specification.model_validate_json((spec_dir / "L4_architecture.json").read_text())
-    l5 = L5Specification.model_validate_json((spec_dir / "L5_acceptance.json").read_text())
+        l4 = _l4_from_planning_spec(planning_spec)
+        l1_by_module: Dict[str, L1Specification] = {
+            module_name: _l1_from_module(planning_spec, module_name)
+            for module_name in planning_spec.metadata.module_inventory
+        }
+        l2_by_module: Dict[str, L2Specification] = {
+            module_name: _l2_from_module(planning_spec, module_name)
+            for module_name in planning_spec.metadata.module_inventory
+        }
+        l3_by_module: Dict[str, L3Specification] = {
+            module_name: _l3_from_module(planning_spec, module_name)
+            for module_name in planning_spec.metadata.module_inventory
+        }
+        l5_by_module: Dict[str, L5Specification] = {
+            module_name: _l5_from_module(planning_spec, module_name)
+            for module_name in planning_spec.metadata.module_inventory
+        }
+        l1 = l1_by_module[top_module]
+        l2 = l2_by_module[top_module]
+        l3 = l3_by_module[top_module]
+        l5 = l5_by_module[top_module]
+    else:
+        lock_path = spec_dir / "lock.json"
+        if not lock_path.exists():
+            raise RuntimeError("Missing planning_spec.json. Run the spec helper before planning.")
+
+        lock = _load_json(lock_path)
+        top_module = str(lock.get("top_module") or lock.get("module_name") or "demo_module")
+        lock_modules = lock.get("modules")
+
+        l1 = L1Specification.model_validate_json((spec_dir / "L1_functional.json").read_text())
+        l2 = L2Specification.model_validate_json((spec_dir / "L2_interface.json").read_text())
+        l3 = L3Specification.model_validate_json((spec_dir / "L3_verification.json").read_text())
+        l4 = L4Specification.model_validate_json((spec_dir / "L4_architecture.json").read_text())
+        l5 = L5Specification.model_validate_json((spec_dir / "L5_acceptance.json").read_text())
+
+        l1_by_module = {}
+        l2_by_module = {}
+        l3_by_module = {}
+        l5_by_module = {}
+
+        module_nodes = _extract_module_nodes(l4, top_module)
+        for module in module_nodes:
+            if module == top_module:
+                l1_by_module[module] = l1
+                l2_by_module[module] = l2
+                l3_by_module[module] = l3
+                l5_by_module[module] = l5
+                continue
+            paths = _module_spec_paths(spec_dir, module)
+            for key, path in paths.items():
+                if not path.exists():
+                    raise RuntimeError(f"Missing {key} spec for module '{module}': {path}")
+            l1_by_module[module] = L1Specification.model_validate_json(paths["L1"].read_text())
+            l2_by_module[module] = L2Specification.model_validate_json(paths["L2"].read_text())
+            l3_by_module[module] = L3Specification.model_validate_json(paths["L3"].read_text())
+            l5_by_module[module] = L5Specification.model_validate_json(paths["L5"].read_text())
 
     execution_policy = execution_policy or {}
-    verification_profile = str(execution_policy.get("verification_profile", "hybrid_scoreboard"))
+    verification_profile = str(execution_policy.get("verification_profile", "testbench-agent"))
     module_nodes = _extract_module_nodes(l4, top_module)
     node_meta_map = _node_metadata_map(l4)
     if lock_modules:
@@ -298,27 +663,6 @@ def generate_from_specs(
         raise RuntimeError(f"Duplicate module ids in block diagram: {module_nodes}")
 
     deps_map = _build_deps_map(module_nodes, l4)
-
-    l2_by_module: Dict[str, L2Specification] = {}
-    l1_by_module: Dict[str, L1Specification] = {}
-    l3_by_module: Dict[str, L3Specification] = {}
-    l5_by_module: Dict[str, L5Specification] = {}
-
-    for module in module_nodes:
-        if module == top_module:
-            l1_by_module[module] = l1
-            l2_by_module[module] = l2
-            l3_by_module[module] = l3
-            l5_by_module[module] = l5
-            continue
-        paths = _module_spec_paths(spec_dir, module)
-        for key, path in paths.items():
-            if not path.exists():
-                raise RuntimeError(f"Missing {key} spec for module '{module}': {path}")
-        l1_by_module[module] = L1Specification.model_validate_json(paths["L1"].read_text())
-        l2_by_module[module] = L2Specification.model_validate_json(paths["L2"].read_text())
-        l3_by_module[module] = L3Specification.model_validate_json(paths["L3"].read_text())
-        l5_by_module[module] = L5Specification.model_validate_json(paths["L5"].read_text())
 
     top_specs = {"L1": l1, "L2": l2, "L3": l3, "L5": l5}
     child_specs = {

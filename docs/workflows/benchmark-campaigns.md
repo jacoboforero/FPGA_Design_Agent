@@ -69,13 +69,11 @@ campaign: gpt41_smoke
 output_root: artifacts/benchmarks/verilog_eval
 runs:
   - label: gpt41_canonical
-    config: config/runtime.yaml
-    preset: benchmark
+    config: config/runtime.benchmark.yaml
     sampled: false
     max_problems: 10
   - label: gpt41_sampled
-    config: config/runtime.yaml
-    preset: benchmark
+    config: config/runtime.benchmark.yaml
     sampled: true
     max_problems: 10
 ```
@@ -87,8 +85,7 @@ campaign: bug_repro
 output_root: artifacts/benchmarks/verilog_eval
 runs:
   - label: repro_prob079
-    config: config/runtime.yaml
-    preset: benchmark
+    config: config/runtime.benchmark.yaml
     only_problem: Prob079
     pipeline_timeout: 240
     resume: true
@@ -103,14 +100,12 @@ output_root: artifacts/benchmarks/verilog_eval
 runs:
   - label: model_a_round1
     run_id: model_a_round1
-    config: config/runtime.yaml
-    preset: benchmark
+    config: config/runtime.benchmark.yaml
     sampled: false
     purge_queues: false
   - label: model_b_round1
     run_id: model_b_round1
-    config: config/runtime.yaml
-    preset: benchmark
+    config: config/runtime.benchmark.yaml
     sampled: false
     purge_queues: false
 ```

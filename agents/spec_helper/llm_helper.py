@@ -95,6 +95,20 @@ def _field_shape_hint(field: FieldInfo, *, user_facing: bool) -> str:
     return "Provide the missing details." if user_facing else "Value must match the field type."
 
 
+def _user_facing_field_path(path: str) -> str:
+    mapping = {
+        "L1.": "functional intent.",
+        "L2.": "interface details.",
+        "L3.": "verification plan.",
+        "L4.": "architecture plan.",
+        "L5.": "acceptance criteria.",
+    }
+    for prefix, replacement in mapping.items():
+        if path.startswith(prefix):
+            return path.replace(prefix, replacement, 1)
+    return path
+
+
 def _default_cfg(max_tokens: int, temperature: float) -> GenerationConfig:
     top_p = get_runtime_config().llm.top_p
     return GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
@@ -149,18 +163,23 @@ def update_checklist_from_spec(
         "Map those headings directly to the corresponding fields. "
         "Other common headings map as follows: "
         "'L1 Functional intent' -> role_summary + key_rules, "
+        "'Functional intent' or 'Behavior' -> role_summary + key_rules, "
         "'Reset rules' -> reset_semantics, "
         "'Edge cases' -> corner_cases, "
         "'L2 Interface' -> signals, "
+        "'Interface details' -> signals + clocking + transaction_unit, "
         "'Handshake semantics' -> handshake_semantics, "
         "'Params/defaults' -> configuration_parameters, "
         "'L3 Verification' -> test_goals, "
+        "'Verification plan' -> test_goals + oracle_strategy + stimulus_strategy + pass_fail_criteria, "
         "'Oracle plan' -> oracle_strategy, "
         "'Stimulus strategy' -> stimulus_strategy, "
         "'Pass/fail criteria' -> pass_fail_criteria, "
         "'Coverage goals' -> coverage_targets, "
         "'L4 Architecture' -> block_diagram/dependencies/connections/resource_strategy/latency_budget, "
+        "'Architecture plan' -> block_diagram/dependencies/connections/resource_strategy/latency_budget, "
         "'L5 Acceptance' -> required_artifacts/acceptance_metrics/exclusions. "
+        "'Acceptance criteria' -> required_artifacts/acceptance_metrics/exclusions. "
         "Treat headings ending with ':' as field labels. "
         "For list sections, collect subsequent bullet lines ('- ') until the next heading. "
         "For single-line fields like 'Role summary: ...' copy the value text directly. "
@@ -209,21 +228,32 @@ def generate_followup_question(
     field: FieldInfo,
     checklist: Dict[str, Any],
     spec_text: str,
+    *,
+    area_label: str | None = None,
+    display_label: str | None = None,
+    planning_goal: str | None = None,
 ) -> str:
     system = (
         "You are Spec Helper, a concise hardware spec assistant. "
         "Ask one clear question to fill the missing field. "
+        "Ask only for the minimum concrete detail needed right now so planning can continue. "
+        "Keep the question short and natural. "
         "If the field expects structured data, ask for the required keys by name. "
         "If the spec already mentions the answer, ask the user to paste or restate the exact content. "
         "Avoid mentioning JSON or data types. "
-        "Do not mention L1-L5. Address a hardware engineer or student without assuming expertise."
+        "Do not mention any internal level labels, rigor levels, checklist sections, internal field paths, or schema names. "
+        "Address a hardware engineer or student without assuming expertise."
     )
     field_context = {
-        "path": field.path,
+        "detail": display_label or _user_facing_field_path(field.path),
         "description": field.description,
     }
+    if area_label:
+        field_context["area"] = area_label
+    if planning_goal:
+        field_context["goal"] = planning_goal
     user = (
-        "Missing field info:\n"
+        "Missing detail to clarify:\n"
         f"{json.dumps(field_context, indent=2)}\n\n"
         f"Field shape hint: {_field_shape_hint(field, user_facing=True)}\n\n"
         "Spec text (source of truth):\n"
@@ -238,7 +268,8 @@ def generate_followup_question(
     parsed = _safe_json(content)
     if parsed and isinstance(parsed.get("question"), str):
         return parsed["question"].strip()
-    return field.description or f"Provide {field.path.replace('.', ' ')}."
+    fallback_label = display_label or _user_facing_field_path(field.path)
+    return field.description or f"Please clarify {fallback_label}."
 
 
 def generate_field_draft(

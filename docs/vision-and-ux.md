@@ -36,7 +36,7 @@ In parallel, the same platform should let you run scripted benchmark campaigns t
 
 ## Two User Paths
 - **Engineer path** (`cli.py` full flow): refine spec with a spec helper chatbot, approve plan, run agentic execution, inspect outputs, iterate.
-- **Research path** (`cli.py benchmark`): run controlled benchmark campaigns, compare presets/models, and analyze official benchmark summaries.
+- **Research path** (`cli.py benchmark`): run controlled benchmark campaigns, compare manifests/models, and analyze official benchmark summaries.
 
 These paths share core infrastructure, but they are intentionally optimized for different users.
 

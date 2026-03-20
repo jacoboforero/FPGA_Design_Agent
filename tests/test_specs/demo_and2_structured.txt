@@ -1,0 +1,121 @@
+Module: and2_demo
+Title: 1-bit combinational AND gate demo
+
+Functional intent
+Role summary: 1-bit combinational AND gate that drives y high only when both inputs are high.
+Key rules:
+- y = a & b for all input combinations.
+- No internal state or sequential behavior.
+Performance intent: Same-cycle combinational response.
+Reset semantics: No reset; output depends only on current inputs.
+Corner cases:
+- a=0,b=0
+- a=0,b=1
+- a=1,b=0
+- a=1,b=1
+Open questions:
+- none
+
+Interface details
+Clocking: []
+Signals:
+- name: a
+  direction: INPUT
+  width_expr: 1
+  semantics: first AND input
+- name: b
+  direction: INPUT
+  width_expr: 1
+  semantics: second AND input
+- name: y
+  direction: OUTPUT
+  width_expr: 1
+  semantics: AND output
+Handshake semantics:
+- name: none
+  rules: none
+Transaction unit: one combinational evaluation of y from a and b.
+Configuration parameters:
+- name: none
+  default_value: none
+  description: none
+
+Verification plan
+Test goals:
+- Exhaustively verify the 4-entry truth table.
+Oracle strategy: Direct truth-table reference y_expected = a & b.
+Stimulus strategy: Drive all four input combinations.
+Pass/fail criteria:
+- y matches a & b for all input combinations.
+Coverage targets:
+- coverage_id: branch
+  description: branch coverage for the exhaustive truth-table testbench flow
+  metric_type: branch
+  goal: 0.5
+  notes: none
+- coverage_id: toggle
+  description: toggle coverage for a, b, and y
+  metric_type: toggle
+  goal: 0.5
+  notes: none
+Reset constraints:
+  min_cycles_after_reset: 0
+  ordering_notes: no reset applies for this combinational design.
+Scenarios:
+- scenario_id: truth_table
+  description: exercise all four input combinations
+  stimulus: drive a,b = 00,01,10,11
+  oracle: y equals a & b
+  pass_fail_criteria: no mismatches across the full truth table
+  illegal: false
+
+Architecture plan
+Block diagram:
+- node_id: and2_demo
+  description: combinational AND gate
+  node_type: combinational_gate
+  interface_refs: [and2_demo_if]
+  uses_standard_component: false
+  notes: single 2-input AND operator
+Dependencies: []
+Connections: []
+Clock domains: []
+Resource strategy: one 2-input AND operator.
+Latency budget: same-cycle combinational propagation.
+Assertion plan:
+  sva:
+  - y == (a & b)
+  scoreboard_assertions:
+  - truth-table reference matches DUT output
+
+Acceptance criteria
+Required artifacts:
+- name: rtl
+  description: synthesizable RTL for and2_demo
+  mandatory: true
+- name: testbench
+  description: self-checking truth-table testbench
+  mandatory: true
+- name: lint_report
+  description: verilator lint log
+  mandatory: true
+- name: sim_log
+  description: simulation transcript
+  mandatory: true
+- name: coverage_report
+  description: coverage summary
+  mandatory: true
+Acceptance metrics:
+- metric_id: branch
+  description: branch coverage >= 0.5
+  operator: ">="
+  target_value: "0.5"
+  metric_source: coverage_report
+- metric_id: toggle
+  description: toggle coverage >= 0.5
+  operator: ">="
+  target_value: "0.5"
+  metric_source: coverage_report
+Exclusions:
+- none
+Synthesis target: fpga_generic

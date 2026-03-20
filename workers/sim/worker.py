@@ -125,11 +125,15 @@ class SimulationWorker(threading.Thread):
         runtime_cfg = get_runtime_config()
         iverilog_tool = _registry_tool(self._registry, "iverilog")
         vvp_tool = _registry_tool(self._registry, "vvp")
-        iverilog = runtime_cfg.tools.iverilog_path or (
-            iverilog_tool.resolved_path if iverilog_tool is not None else shutil.which("iverilog")
+        iverilog = (
+            runtime_cfg.tools.iverilog_path
+            or (iverilog_tool.resolved_path if iverilog_tool is not None and iverilog_tool.resolved_path else None)
+            or shutil.which("iverilog")
         )
-        vvp = runtime_cfg.tools.vvp_path or (
-            vvp_tool.resolved_path if vvp_tool is not None else shutil.which("vvp")
+        vvp = (
+            runtime_cfg.tools.vvp_path
+            or (vvp_tool.resolved_path if vvp_tool is not None and vvp_tool.resolved_path else None)
+            or shutil.which("vvp")
         )
         rtl_path = task.context.get("rtl_path")
         tb_path = task.context.get("tb_path")
@@ -170,7 +174,11 @@ class SimulationWorker(threading.Thread):
             ctx = task.context if isinstance(task.context, dict) else {}
             execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
             verification_scope = str(ctx.get("verification_scope", "")).strip()
-            benchmark_mode = bool(execution_policy.get("benchmark_mode")) or verification_scope == "oracle_compare"
+            verification_profile = str(execution_policy.get("verification_profile") or verification_scope or "").strip()
+            benchmark_mode = (
+                verification_profile == "verilog-eval"
+                or str(execution_policy.get("run_kind", "")).strip() == "benchmark"
+            )
             benchmark_timeout_floor_s = (
                 float(runtime_cfg.benchmark.sim_run_timeout_s) if benchmark_mode else 0.0
             )

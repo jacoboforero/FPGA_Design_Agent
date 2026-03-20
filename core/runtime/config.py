@@ -1,8 +1,18 @@
 """
 Runtime configuration loader and typed settings.
 
-Behavior is configured via YAML presets. Environment variables are reserved for
-secrets/credentials and compatibility fallbacks.
+Runtime behavior is configured through YAML manifests with explicit domain
+ownership. The public YAML shape is:
+
+- run
+- agents
+- cli
+- infrastructure
+- verification
+- benchmark
+
+Internally, the loaded RuntimeConfig still exposes broker/workers/llm/tools/
+lint/sim/debug sections to minimize churn in the rest of the codebase.
 """
 from __future__ import annotations
 
@@ -13,8 +23,24 @@ from typing import Any, Dict, Literal, Optional
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 
+from core.runtime.paths import default_config_path
 
-DEFAULT_CONFIG_PATH = Path("config/runtime.yaml")
+
+DEFAULT_CONFIG_PATH = default_config_path()
+
+SpecInteraction = Literal["interactive", "non_interactive"]
+RigorLevel = Literal["L0", "L1", "L2", "L3", "L4", "L5"]
+VerificationProfile = Literal["testbench-agent", "verilog-eval"]
+
+
+class SpecProfileConfig(BaseModel):
+    interaction: SpecInteraction = "interactive"
+    rigor_level: RigorLevel = "L2"
+
+
+class RunConfig(BaseModel):
+    spec_profile: SpecProfileConfig = Field(default_factory=SpecProfileConfig)
+    verification_profile: VerificationProfile = "testbench-agent"
 
 
 class BrokerConfig(BaseModel):
@@ -45,6 +71,7 @@ class WorkerPoolSizesConfig(BaseModel):
     reflection: int = 1
     debug: int = 1
     spec_helper: int = 1
+    planner: int = 1
     lint: int = 1
     tb_lint: int = 1
     acceptance: int = 1
@@ -159,17 +186,8 @@ class BenchmarkConfig(BaseModel):
     )
 
 
-class PresetConfig(BaseModel):
-    spec_profile: str
-    verification_profile: str
-    allow_repair_loop: bool = True
-    interactive_spec_helper: bool = True
-    benchmark_mode: bool = False
-
-
 class RuntimeConfig(BaseModel):
-    active_preset: str = "engineer_fast"
-    presets: Dict[str, PresetConfig] = Field(default_factory=dict)
+    run: RunConfig = Field(default_factory=RunConfig)
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
     cli: CliConfig = Field(default_factory=CliConfig)
     workers: WorkersConfig = Field(default_factory=WorkersConfig)
@@ -180,43 +198,10 @@ class RuntimeConfig(BaseModel):
     debug: DebugConfig = Field(default_factory=DebugConfig)
     benchmark: BenchmarkConfig = Field(default_factory=BenchmarkConfig)
 
-    def get_preset(self, name: Optional[str] = None) -> PresetConfig:
-        key = name or self.active_preset
-        if key not in self.presets:
-            raise KeyError(f"Unknown preset '{key}'. Available: {sorted(self.presets)}")
-        return self.presets[key]
-
-    @property
-    def resolved_preset(self) -> PresetConfig:
-        return self.get_preset(self.active_preset)
-
 
 def _default_runtime_dict() -> Dict[str, Any]:
     return {
-        "active_preset": "engineer_fast",
-        "presets": {
-            "engineer_fast": {
-                "spec_profile": "engineer_fast",
-                "verification_profile": "hybrid_scoreboard",
-                "allow_repair_loop": True,
-                "interactive_spec_helper": True,
-                "benchmark_mode": False,
-            },
-            "engineer_signoff": {
-                "spec_profile": "engineer_signoff",
-                "verification_profile": "strict_tb_acceptance",
-                "allow_repair_loop": True,
-                "interactive_spec_helper": True,
-                "benchmark_mode": False,
-            },
-            "benchmark": {
-                "spec_profile": "benchmark",
-                "verification_profile": "oracle_compare",
-                "allow_repair_loop": True,
-                "interactive_spec_helper": False,
-                "benchmark_mode": True,
-            },
-        },
+        "run": {},
         "broker": {},
         "cli": {},
         "workers": {},
@@ -239,16 +224,142 @@ def _merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
-def load_runtime_config(path: Optional[Path] = None, *, preset_override: Optional[str] = None) -> RuntimeConfig:
+def _load_yaml_mapping(path: Path, *, seen: set[Path] | None = None) -> Dict[str, Any]:
+    resolved = path.resolve()
+    seen = seen or set()
+    if resolved in seen:
+        raise ValueError(f"Config include cycle detected at '{resolved}'.")
+    if not resolved.exists():
+        raise FileNotFoundError(f"Config file not found: {resolved}")
+    raw = yaml.safe_load(resolved.read_text()) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"Config file '{resolved}' must contain a YAML mapping.")
+
+    includes_raw = raw.pop("includes", [])
+    if includes_raw is None:
+        includes_raw = []
+    if not isinstance(includes_raw, list):
+        raise ValueError(f"Config file '{resolved}' has non-list 'includes'.")
+
+    merged: Dict[str, Any] = {}
+    next_seen = set(seen)
+    next_seen.add(resolved)
+    for item in includes_raw:
+        include_name = str(item).strip()
+        if not include_name:
+            continue
+        include_path = (resolved.parent / include_name).resolve()
+        merged = _merge_dict(merged, _load_yaml_mapping(include_path, seen=next_seen))
+    return _merge_dict(merged, raw)
+
+
+def _flatten_agent_llm(agent_llm: Dict[str, Any]) -> Dict[str, Any]:
+    defaults = agent_llm.get("defaults") if isinstance(agent_llm.get("defaults"), dict) else {}
+    rate_control = agent_llm.get("rate_control") if isinstance(agent_llm.get("rate_control"), dict) else {}
+    roles = agent_llm.get("roles") if isinstance(agent_llm.get("roles"), dict) else {}
+
+    llm: Dict[str, Any] = {
+        "enabled": agent_llm.get("enabled", True),
+        "provider": agent_llm.get("provider", defaults.get("provider", "openai")),
+        "default_model": defaults.get("model", "gpt-4.1-mini"),
+        "request_timeout_s": defaults.get("request_timeout_s", 120.0),
+        "json_mode": defaults.get("json_mode", True),
+        "max_tokens": defaults.get("max_tokens", 10000),
+        "temperature": defaults.get("temperature", 0.2),
+        "top_p": defaults.get("top_p"),
+        "rate_control": rate_control,
+        "agent_overrides": {},
+    }
+
+    for role_name, raw_role in roles.items():
+        if not isinstance(raw_role, dict):
+            continue
+        provider = raw_role.get("provider")
+        model = raw_role.get("model")
+        if provider or model:
+            llm["agent_overrides"][str(role_name)] = {"provider": provider, "model": model}
+
+    spec_helper = roles.get("spec_helper") if isinstance(roles.get("spec_helper"), dict) else {}
+    phases = spec_helper.get("phases") if isinstance(spec_helper.get("phases"), dict) else {}
+    extract = phases.get("extract") if isinstance(phases.get("extract"), dict) else {}
+    question = phases.get("question") if isinstance(phases.get("question"), dict) else {}
+    draft = phases.get("draft") if isinstance(phases.get("draft"), dict) else {}
+    if spec_helper.get("model") is not None:
+        llm["spec_helper_model"] = spec_helper.get("model")
+    llm["max_tokens_spec"] = extract.get("max_tokens", llm["max_tokens"])
+    llm["temperature_spec"] = extract.get("temperature", llm["temperature"])
+    llm["max_tokens_spec_question"] = question.get("max_tokens", llm["max_tokens_spec_question"] if "max_tokens_spec_question" in llm else 1500)
+    llm["temperature_spec_question"] = question.get("temperature", 0.3)
+    llm["max_tokens_spec_draft"] = draft.get("max_tokens", llm["max_tokens_spec_draft"] if "max_tokens_spec_draft" in llm else 2500)
+    llm["temperature_spec_draft"] = draft.get("temperature", 0.4)
+
+    reflection = roles.get("reflection") if isinstance(roles.get("reflection"), dict) else {}
+    llm["max_tokens_reflect"] = reflection.get("max_tokens", 6000)
+    llm["temperature_reflect"] = reflection.get("temperature", 0.2)
+
+    debug = roles.get("debug") if isinstance(roles.get("debug"), dict) else {}
+    llm["max_tokens_debug"] = debug.get("max_tokens", 7000)
+    llm["temperature_debug"] = debug.get("temperature", 0.2)
+
+    narrator = roles.get("narrator") if isinstance(roles.get("narrator"), dict) else {}
+    llm["narrative_model"] = narrator.get("model")
+    llm["narrative_fallback_model"] = narrator.get("fallback_model", "gpt-4.1-mini")
+    llm["narrative_max_tokens"] = narrator.get("max_tokens", 220)
+    llm["narrative_temperature"] = narrator.get("temperature", 0.5)
+    llm["narrative_timeout_s"] = narrator.get("timeout_s", 10.0)
+
+    return llm
+
+
+def _normalize_runtime_shape(raw: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = copy.deepcopy(raw)
+
+    agents = normalized.pop("agents", None)
+    if isinstance(agents, dict):
+        pools = agents.get("pools")
+        if isinstance(pools, dict):
+            normalized["workers"] = _merge_dict(normalized.get("workers", {}), {"pool_sizes": pools})
+        agent_llm = agents.get("llm")
+        if isinstance(agent_llm, dict):
+            normalized["llm"] = _merge_dict(normalized.get("llm", {}), _flatten_agent_llm(agent_llm))
+
+    infrastructure = normalized.pop("infrastructure", None)
+    if isinstance(infrastructure, dict):
+        broker = infrastructure.get("broker")
+        if isinstance(broker, dict):
+            normalized["broker"] = _merge_dict(normalized.get("broker", {}), broker)
+        tool_paths = infrastructure.get("tool_paths")
+        if isinstance(tool_paths, dict):
+            normalized["tools"] = _merge_dict(
+                normalized.get("tools", {}),
+                {
+                    "verilator_path": tool_paths.get("verilator"),
+                    "iverilog_path": tool_paths.get("iverilog"),
+                    "vvp_path": tool_paths.get("vvp"),
+                },
+            )
+
+    verification = normalized.pop("verification", None)
+    if isinstance(verification, dict):
+        lint = verification.get("lint")
+        if isinstance(lint, dict):
+            normalized["lint"] = _merge_dict(normalized.get("lint", {}), lint)
+        sim = verification.get("sim")
+        if isinstance(sim, dict):
+            normalized["sim"] = _merge_dict(normalized.get("sim", {}), sim)
+        debug = verification.get("debug")
+        if isinstance(debug, dict):
+            normalized["debug"] = _merge_dict(normalized.get("debug", {}), debug)
+
+    return normalized
+
+
+def load_runtime_config(path: Optional[Path] = None) -> RuntimeConfig:
     cfg_path = path or DEFAULT_CONFIG_PATH
     merged = _default_runtime_dict()
     if cfg_path.exists():
-        raw = yaml.safe_load(cfg_path.read_text()) or {}
-        if not isinstance(raw, dict):
-            raise ValueError(f"Config file '{cfg_path}' must contain a YAML mapping.")
-        merged = _merge_dict(merged, raw)
-    if preset_override:
-        merged["active_preset"] = preset_override
+        raw = _load_yaml_mapping(cfg_path)
+        merged = _merge_dict(merged, _normalize_runtime_shape(raw))
     try:
         return RuntimeConfig.model_validate(merged)
     except ValidationError as exc:
@@ -270,14 +381,16 @@ def get_runtime_config() -> RuntimeConfig:
     return _RUNTIME_CONFIG
 
 
-def initialize_runtime_config(path: Optional[Path] = None, *, preset_override: Optional[str] = None) -> RuntimeConfig:
-    config = load_runtime_config(path, preset_override=preset_override)
+def initialize_runtime_config(path: Optional[Path] = None) -> RuntimeConfig:
+    config = load_runtime_config(path)
     set_runtime_config(config)
     return config
 
 
 __all__ = [
     "DEFAULT_CONFIG_PATH",
+    "SpecProfileConfig",
+    "RunConfig",
     "BrokerConfig",
     "CliConfig",
     "WorkersConfig",
@@ -291,7 +404,6 @@ __all__ = [
     "DebugConfig",
     "BenchmarkConfig",
     "BenchmarkSampleConfig",
-    "PresetConfig",
     "RuntimeConfig",
     "load_runtime_config",
     "set_runtime_config",

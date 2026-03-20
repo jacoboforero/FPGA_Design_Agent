@@ -14,7 +14,6 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List
-from urllib.parse import urlparse
 
 import pika
 
@@ -51,10 +50,7 @@ from core.runtime.broker import (
     resolve_task_routing,
 )
 from core.runtime.config import DEFAULT_CONFIG_PATH, get_runtime_config, initialize_runtime_config
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-_LOCAL_BROKER_HOSTS = {"localhost", "127.0.0.1", "::1"}
+from core.runtime.paths import default_env_file, generated_root, task_memory_root
 
 
 def _load_env_file(path: Path) -> None:
@@ -94,16 +90,14 @@ def connection_params_from_config() -> pika.ConnectionParameters:
 
 def _resolve_broker_url(configured_url: str) -> str:
     """
-    YAML config is the source of truth, but keep a compatibility fallback:
-    when config points to localhost and env points to a non-local host (e.g. docker service),
-    prefer env so `make cli` works inside containers.
+    YAML config provides the default broker URL.
+
+    If RABBITMQ_URL is set explicitly in the environment, prefer it. This keeps
+    installed CLI workflows simple: a user can override broker credentials or
+    host selection without editing the shipped runtime YAML.
     """
     env_url = os.getenv("RABBITMQ_URL", "").strip()
-    if not env_url:
-        return configured_url
-    cfg_host = (urlparse(configured_url).hostname or "").strip().lower()
-    env_host = (urlparse(env_url).hostname or "").strip().lower()
-    if cfg_host in _LOCAL_BROKER_HOSTS and env_host and env_host not in _LOCAL_BROKER_HOSTS:
+    if env_url:
         return env_url
     return configured_url
 
@@ -190,8 +184,8 @@ def _run_planner_task(
     if timeout <= 0:
         timeout = float("inf")
     task_ctx = {
-        "spec_dir": str(REPO_ROOT / "artifacts" / "task_memory" / "specs"),
-        "out_dir": str(REPO_ROOT / "artifacts" / "generated"),
+        "spec_dir": str(task_memory_root() / "specs"),
+        "out_dir": str(generated_root()),
     }
     if execution_policy:
         task_ctx["execution_policy"] = execution_policy
@@ -273,35 +267,43 @@ def _purge_task_memory(root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
 
 
-def run_full(args: argparse.Namespace) -> None:
-    cfg = get_runtime_config()
-    preset = cfg.resolved_preset
-    if preset.benchmark_mode:
+def _require_engineer_run_policy() -> None:
+    run_cfg = get_runtime_config().run
+    if run_cfg.spec_profile.interaction != "interactive":
         raise RuntimeError(
-            "Benchmark preset uses official VerilogEval harness scoring. "
-            "Run `python apps/cli/cli.py benchmark --preset benchmark` instead of full interactive mode."
+            "Engineer CLI runs require run.spec_profile.interaction=interactive. "
+            "Use config/runtime.benchmark.yaml only with the benchmark command."
         )
-    execution_policy = {
-        "preset": cfg.active_preset,
-        "spec_profile": preset.spec_profile,
-        "verification_profile": preset.verification_profile,
-        "allow_repair_loop": preset.allow_repair_loop,
-        "benchmark_mode": preset.benchmark_mode,
-        "debug_max_retries": cfg.debug.max_retries,
+    if run_cfg.verification_profile != "testbench-agent":
+        raise RuntimeError(
+            "Engineer CLI runs require run.verification_profile=testbench-agent."
+        )
+
+
+def _execution_policy_for_run(*, run_name: str, run_kind: str) -> dict[str, object]:
+    cfg = get_runtime_config()
+    return {
+        "spec_profile": cfg.run.spec_profile.model_dump(mode="python"),
+        "verification_profile": cfg.run.verification_profile,
+        "run_kind": run_kind,
+        "run_name": run_name,
     }
 
+
+def run_full(args: argparse.Namespace) -> None:
+    cfg = get_runtime_config()
+    _require_engineer_run_policy()
+
     run_name = args.run_name or _default_run_name("cli_full")
+    execution_policy = _execution_policy_for_run(run_name=run_name, run_kind="engineer")
     run_routing = create_run_routing()
-    execution_policy["run_name"] = run_name
-    _purge_task_memory(REPO_ROOT / "artifacts" / "task_memory")
+    _purge_task_memory(task_memory_root())
     configure_observability(
         run_name=run_name,
         run_id=run_routing.run_id,
-        default_tags=["cli", "full", f"preset:{cfg.active_preset}"],
+        default_tags=["cli", "full", f"verification:{cfg.run.verification_profile}"],
     )
     # 1) Collect specs interactively
-    if args.direct_spec and not args.spec_file:
-        raise RuntimeError("--direct-spec requires --spec-file.")
     if args.spec_file:
         spec_file = Path(args.spec_file).expanduser().resolve()
         if not spec_file.exists() or not spec_file.is_file():
@@ -311,9 +313,7 @@ def run_full(args: argparse.Namespace) -> None:
         spec_flow.collect_specs_from_text(
             module_hint,
             spec_text,
-            interactive=False,
-            spec_profile=preset.spec_profile,
-            direct_parse=bool(args.direct_spec),
+            interactive=True,
         )
     else:
         spec_flow.collect_specs()
@@ -336,8 +336,8 @@ def run_full(args: argparse.Namespace) -> None:
     finally:
         planner_stop.set()
         planner_worker.join(timeout=1.0)
-    design_context = REPO_ROOT / "artifacts" / "generated" / "design_context.json"
-    dag_path = REPO_ROOT / "artifacts" / "generated" / "dag.json"
+    design_context = generated_root() / "design_context.json"
+    dag_path = generated_root() / "dag.json"
     dag = json.loads(dag_path.read_text())
     nodes = ", ".join(n["id"] for n in dag.get("nodes", []))
     print(f"Plan generated: {dag_path} (nodes: {nodes})")
@@ -348,13 +348,13 @@ def run_full(args: argparse.Namespace) -> None:
 
     # 3) Execute
     _print_section("Execution")
-    rtl_root = REPO_ROOT / "artifacts" / "generated"
-    task_memory_root = REPO_ROOT / "artifacts" / "task_memory"
+    rtl_root = generated_root()
+    task_memory_dir = task_memory_root()
     narrative_mode = args.narrative_mode or cfg.cli.default_narrative_mode
     narrator = None
     narrator_dispatcher = None
     if narrative_mode != "off":
-        narrator = ExecutionNarrator(task_memory_root=task_memory_root, mode=narrative_mode)
+        narrator = ExecutionNarrator(task_memory_root=task_memory_dir, mode=narrative_mode)
         narrator_dispatcher = NarratorDispatcher(
             narrator,
             async_enabled=bool(cfg.cli.execution_narrator_async),
@@ -370,12 +370,11 @@ def run_full(args: argparse.Namespace) -> None:
             design_context,
             dag_path,
             rtl_root,
-            task_memory_root,
+            task_memory_dir,
             event_callback=(narrator_dispatcher.emit if narrator_dispatcher else (narrator.handle_event if narrator else None)),
             raw_progress=narrative_mode == "off",
             run_id=run_routing.run_id,
             results_routing_key=run_routing.results_routing_key,
-            allow_repair_loop=preset.allow_repair_loop,
             execution_policy=execution_policy,
         ).run(timeout_s=args.timeout)
     finally:
@@ -390,7 +389,7 @@ def run_full(args: argparse.Namespace) -> None:
         rtl_rel = node.get("rtl_file")
         if not rtl_rel:
             continue
-        rtl_path = (REPO_ROOT / "artifacts" / "generated" / rtl_rel).resolve()
+        rtl_path = (generated_root() / rtl_rel).resolve()
         print(f"\n[{node_id}] RTL at: {rtl_path}")
         try:
             print(rtl_path.read_text())
@@ -401,15 +400,9 @@ def run_full(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Hardware agent system CLI")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to runtime YAML config.")
-    parser.add_argument("--preset", help="Override active preset from config.")
     parser.add_argument("--timeout", type=float, default=0.0, help="Pipeline timeout in seconds (0 disables)")
     parser.add_argument("--run-name", help="Optional run name for observability/AgentOps")
     parser.add_argument("--spec-file", help="Path to a spec text file to run non-interactively.")
-    parser.add_argument(
-        "--direct-spec",
-        action="store_true",
-        help="Parse L1-L5 structured spec text directly (skip Spec Helper LLM interaction). Requires --spec-file.",
-    )
     parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt after planning.")
     parser.add_argument(
         "--narrative-mode",
@@ -425,7 +418,7 @@ def _run_benchmark_command(argv: list[str]) -> None:
 
     parser = build_benchmark_parser()
     args = parser.parse_args(argv)
-    initialize_runtime_config(Path(args.config), preset_override=args.preset)
+    initialize_runtime_config(Path(args.config))
     run_from_args(args)
 
 
@@ -434,12 +427,12 @@ def _run_doctor_command(argv: list[str]) -> int:
 
     parser = build_doctor_parser()
     args = parser.parse_args(argv)
-    initialize_runtime_config(Path(args.config), preset_override=args.preset)
+    initialize_runtime_config(Path(args.config))
     return int(run_from_args(args))
 
 
 def main(argv: list[str] | None = None) -> None:
-    _load_env_file(REPO_ROOT / ".env")
+    _load_env_file(default_env_file())
     argv = argv if argv is not None else sys.argv[1:]
     if argv and argv[0] == "doctor":
         try:
@@ -470,7 +463,7 @@ def main(argv: list[str] | None = None) -> None:
         argv = argv[1:]
     parser = build_parser()
     args = parser.parse_args(argv)
-    initialize_runtime_config(Path(args.config), preset_override=args.preset)
+    initialize_runtime_config(Path(args.config))
     try:
         run_full(args)
     except KeyboardInterrupt:

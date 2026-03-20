@@ -4,8 +4,8 @@ Planning is a hard gate before execution. The goal is to freeze what should be b
 
 ## Planning Workflow
 1. Collect spec text (interactive editor or provided file).
-2. Complete missing L1-L5 fields.
-3. Persist frozen artifacts and `lock.json` under `artifacts/task_memory/specs/`.
+2. Complete missing spec fields required by the configured rigor level.
+3. Persist `planning_spec.json` and `original_spec.txt` under `artifacts/task_memory/specs/`.
 4. Run planner to emit `artifacts/generated/design_context.json` and `artifacts/generated/dag.json`.
 
 ## L1-L5 Layers
@@ -28,14 +28,10 @@ This continues until required fields are complete or explicitly handled.
 - Optional `Top: <module>` sets top module.
 - Planner validates child specs and connection coverage for declared dependencies.
 
-## Frozen Artifacts Written
-- `L1_functional*.json`
-- `L2_interface*.json`
-- `L3_verification*.json`
-- `L4_architecture*.json`
-- `L5_acceptance*.json`
-- `frozen_spec*.json`
-- `lock.json`
+## Saved Spec Artifacts
+- `planning_spec.json`
+- `original_spec.txt`
+- `spec_input_*.txt`
 
 ## Related Code
 - `apps/cli/spec_flow.py`

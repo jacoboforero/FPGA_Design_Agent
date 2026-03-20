@@ -7,8 +7,8 @@ from uuid import UUID
 
 from core.schemas.specifications import L2Specification, L4Specification, SpecificationDocument, SpecificationState
 
-_DEFAULT_PROFILE = "hybrid_scoreboard"
-_STRICT_SYMBOLIC_PROFILE = "strict_tb_acceptance"
+_DEFAULT_RIGOR_LEVEL = "L2"
+_STRICT_SYMBOLIC_LEVELS = {"L4", "L5"}
 _UINT_RE = re.compile(r"^\d(?:_?\d)*$")
 _SLICE_SINGLE_RE = re.compile(r"^\[(\d+)\]$")
 _SLICE_RANGE_RE = re.compile(r"^\[(\d+):(\d+)\]$")
@@ -26,7 +26,7 @@ class ValidationIssue:
 class ValidationResult:
     errors: List[ValidationIssue] = field(default_factory=list)
     warnings: List[ValidationIssue] = field(default_factory=list)
-    profile: str = _DEFAULT_PROFILE
+    profile: str = _DEFAULT_RIGOR_LEVEL
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,12 @@ def validate_preplan_inputs(
     l4: L4Specification,
     execution_policy: Dict[str, Any] | None,
 ) -> ValidationResult:
-    profile = str((execution_policy or {}).get("verification_profile", _DEFAULT_PROFILE))
+    spec_profile = (execution_policy or {}).get("spec_profile")
+    profile = (
+        str(spec_profile.get("rigor_level"))
+        if isinstance(spec_profile, dict) and spec_profile.get("rigor_level")
+        else _DEFAULT_RIGOR_LEVEL
+    )
     result = ValidationResult(profile=profile)
 
     loaded_docs = _collect_loaded_docs(top_specs=top_specs, child_specs=child_specs, l4=l4)
@@ -352,7 +357,7 @@ def _compare_widths(
     if not left.is_numeric and not right.is_numeric and left.symbolic == right.symbolic:
         return
 
-    severity = "ERROR" if result.profile == _STRICT_SYMBOLIC_PROFILE else "WARNING"
+    severity = "ERROR" if result.profile in _STRICT_SYMBOLIC_LEVELS else "WARNING"
     issue = ValidationIssue(
         code="PLV306",
         severity=severity,
@@ -408,4 +413,3 @@ def _append_issue(result: ValidationResult, issue: ValidationIssue) -> None:
         result.errors.append(issue)
     else:
         result.warnings.append(issue)
-

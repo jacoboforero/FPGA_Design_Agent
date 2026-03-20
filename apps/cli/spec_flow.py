@@ -24,14 +24,32 @@ from core.runtime.config import get_runtime_config
 from agents.spec_helper.checklist import (
     FieldInfo,
     build_empty_checklist,
-    list_missing_fields,
+    list_field_info,
     set_field,
 )
+from agents.spec_helper.rigor import list_rigor_gaps
 from agents.spec_helper.llm_helper import (
     generate_field_draft,
     generate_field_draft_options,
     generate_followup_question,
     update_checklist_from_spec,
+)
+from core.schemas.planning_spec import (
+    ArchitecturePlanSection,
+    AssumptionItem,
+    DeferredItem,
+    FunctionalIntentSection,
+    HandoffIssue,
+    HandoffSection,
+    InterfaceContractSection,
+    ModulePlanningSpec,
+    OpenQuestionItem,
+    PlanningSpec,
+    PlanningSpecMetadata,
+    PlanningSpecSourceRefs,
+    UncertaintySection,
+    VerificationPlanSection,
+    AcceptanceContractSection,
 )
 from core.schemas.specifications import (
     AcceptanceMetric,
@@ -62,6 +80,15 @@ from core.schemas.specifications import (
 )
 
 SPEC_DIR = Path("artifacts/task_memory/specs")
+_FIELD_INFO_BY_PATH = {field.path: field for field in list_field_info()}
+
+
+def _planning_spec_path() -> Path:
+    return SPEC_DIR / "planning_spec.json"
+
+
+def _original_spec_path() -> Path:
+    return SPEC_DIR / "original_spec.txt"
 
 HOME_LOGO = [
     "   ___   _   _  _____  _____        ____   _____  _      ",
@@ -498,7 +525,27 @@ def _module_spec_path(base_path: Path, module_name: str) -> Path:
     return base_path.with_name(f"{stem}_{_sanitize_name(module_name)}.txt")
 
 
-_L_SECTION_RE = re.compile(r"^\s*(L[1-5])\s*$")
+_SECTION_HEADER_MAP = {
+    "l1": "L1",
+    "functional intent": "L1",
+    "behavior": "L1",
+    "l2": "L2",
+    "interface": "L2",
+    "interface details": "L2",
+    "l3": "L3",
+    "verification": "L3",
+    "verification plan": "L3",
+    "l4": "L4",
+    "architecture": "L4",
+    "architecture plan": "L4",
+    "l5": "L5",
+    "acceptance": "L5",
+    "acceptance criteria": "L5",
+}
+_SECTION_HEADER_RE = re.compile(
+    r"^\s*(L[1-5]|Functional intent|Behavior|Interface(?: details)?|Verification(?: plan)?|Architecture(?: plan)?|Acceptance(?: criteria)?)\s*:?\s*$",
+    re.IGNORECASE,
+)
 
 
 def _section_key(data: Dict[str, Any], *names: str, default: Any = None) -> Any:
@@ -555,13 +602,20 @@ def _split_l_sections(module_text: str) -> Dict[str, str]:
     lines = module_text.splitlines()
     sections: List[Tuple[str, int]] = []
     for idx, line in enumerate(lines):
-        match = _L_SECTION_RE.match(line)
+        match = _SECTION_HEADER_RE.match(line)
         if not match:
             continue
-        sections.append((match.group(1), idx))
+        raw = match.group(1).strip().lower()
+        canonical = _SECTION_HEADER_MAP.get(raw)
+        if not canonical:
+            continue
+        sections.append((canonical, idx))
 
     if not sections:
-        raise RuntimeError("Direct spec parsing expected L1-L5 section headers, but none were found.")
+        raise RuntimeError(
+            "Direct spec parsing expected section headers such as Functional intent, Interface details, "
+            "Verification plan, Architecture plan, and Acceptance criteria, but none were found."
+        )
 
     out: Dict[str, str] = {}
     for i, (name, start_idx) in enumerate(sections):
@@ -705,22 +759,14 @@ def _collect_multi_specs_direct(spec_text: str, spec_path: Path) -> Dict[str, An
     if len(set(module_names)) != len(module_names):
         raise RuntimeError(f"Duplicate module names in spec: {module_names}")
 
-    spec_id = uuid4()
     last_checklist: Dict[str, Any] = {}
     top_checklist: Dict[str, Any] | None = None
+    module_checklists: Dict[str, Dict[str, Any]] = {}
     for module_name, module_text in modules:
         checklist = _parse_direct_checklist(module_text, module_name_override=module_name)
         module_spec_path = _module_spec_path(spec_path, module_name)
         module_spec_path.write_text(module_text.strip() + "\n")
-        suffix = "" if module_name == top_module else f"_{module_name}"
-        _write_artifacts(
-            module_text,
-            checklist,
-            module_spec_path,
-            module_name=module_name,
-            spec_id=spec_id,
-            filename_suffix=suffix,
-        )
+        module_checklists[module_name] = checklist
         if module_name == top_module:
             top_checklist = checklist
         last_checklist = checklist
@@ -733,7 +779,12 @@ def _collect_multi_specs_direct(spec_text: str, spec_path: Path) -> Dict[str, An
         top_module=top_module,
         top_checklist=top_checklist,
     )
-    _write_lock(canonical_modules, top_module, spec_id)
+    _build_planning_spec(
+        spec_id=uuid4(),
+        original_spec_text=spec_text,
+        top_module=top_module,
+        module_checklists={name: module_checklists[name] for name in canonical_modules},
+    )
     return last_checklist
 
 
@@ -1345,6 +1396,265 @@ def _write_lock(module_names: List[str], top_module: str, spec_id: UUID) -> None
     (SPEC_DIR / "lock.json").write_text(json.dumps(lock, indent=2))
 
 
+def _remove_legacy_spec_artifacts() -> None:
+    for pattern in (
+        "spec_checklist*.json",
+        "L1_functional*.json",
+        "L2_interface*.json",
+        "L3_verification*.json",
+        "L4_architecture*.json",
+        "L5_acceptance*.json",
+        "frozen_spec*.json",
+    ):
+        for path in SPEC_DIR.glob(pattern):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                continue
+    lock_path = SPEC_DIR / "lock.json"
+    if lock_path.exists():
+        lock_path.unlink()
+
+
+def _planning_design_kind(module_inventory: List[str]) -> str:
+    return "multi_module" if len(module_inventory) > 1 else "single_module"
+
+
+def _module_scope(module_name: str) -> str:
+    return f"module:{module_name}"
+
+
+def _checklist_to_module_planning_spec(checklist: Dict[str, Any]) -> ModulePlanningSpec:
+    l1 = checklist.get("L1", {}) if isinstance(checklist, dict) else {}
+    l2 = checklist.get("L2", {}) if isinstance(checklist, dict) else {}
+    l3 = checklist.get("L3", {}) if isinstance(checklist, dict) else {}
+    l5 = checklist.get("L5", {}) if isinstance(checklist, dict) else {}
+    return ModulePlanningSpec(
+        functional_intent=FunctionalIntentSection(
+            role_summary=str(l1.get("role_summary", "") or ""),
+            key_rules=_clean_list(l1.get("key_rules", [])),
+            performance_intent=str(l1.get("performance_intent", "") or ""),
+            reset_semantics=str(l1.get("reset_semantics", "") or ""),
+            corner_cases=_clean_list(l1.get("corner_cases", [])),
+        ),
+        interface_contract=InterfaceContractSection(
+            clocking=_clean_list_of_objects(l2.get("clocking", [])),
+            signals=_clean_list_of_objects(l2.get("signals", [])),
+            handshake_semantics=_clean_list_of_objects(l2.get("handshake_semantics", [])),
+            transaction_unit=str(l2.get("transaction_unit", "") or ""),
+            configuration_parameters=_clean_list_of_objects(l2.get("configuration_parameters", [])),
+        ),
+        verification_plan=VerificationPlanSection(
+            test_goals=_clean_list(l3.get("test_goals", [])),
+            oracle_strategy=str(l3.get("oracle_strategy", "") or ""),
+            stimulus_strategy=str(l3.get("stimulus_strategy", "") or ""),
+            pass_fail_criteria=_clean_list(l3.get("pass_fail_criteria", [])),
+            coverage_targets=_clean_list_of_objects(l3.get("coverage_targets", [])),
+            reset_constraints=_clean_object(l3.get("reset_constraints", {})) or None,
+            scenarios=_clean_list_of_objects(l3.get("scenarios", [])),
+        ),
+        acceptance_contract=AcceptanceContractSection(
+            required_artifacts=_clean_list_of_objects(l5.get("required_artifacts", [])),
+            acceptance_metrics=_clean_list_of_objects(l5.get("acceptance_metrics", [])),
+            exclusions=_clean_list(l5.get("exclusions", [])),
+            synthesis_target=_clean_text(l5.get("synthesis_target")) or None,
+        ),
+    )
+
+
+def _architecture_from_top_checklist(checklist: Dict[str, Any]) -> ArchitecturePlanSection:
+    l4 = checklist.get("L4", {}) if isinstance(checklist, dict) else {}
+    return ArchitecturePlanSection(
+        block_diagram=_clean_list_of_objects(l4.get("block_diagram", [])),
+        dependencies=_clean_list_of_objects(l4.get("dependencies", [])),
+        connections=_clean_list_of_objects(l4.get("connections", [])),
+        clock_domains=_clean_list_of_objects(l4.get("clock_domains", [])),
+        resource_strategy=str(l4.get("resource_strategy", "") or ""),
+        latency_budget=str(l4.get("latency_budget", "") or ""),
+        assertion_plan=_clean_object(l4.get("assertion_plan", {})) or {"sva": [], "scoreboard_assertions": []},
+    )
+
+
+def _semantic_area_from_checklist_path(path: str) -> str:
+    if path.startswith("L1."):
+        return "functional_intent"
+    if path.startswith("L2."):
+        return "interface_contract"
+    if path.startswith("L3."):
+        return "verification_plan"
+    if path.startswith("L4."):
+        return "architecture_plan"
+    if path.startswith("L5."):
+        return "acceptance_contract"
+    return path
+
+
+def _display_gap_path(gap_path: str) -> str:
+    if gap_path.startswith("L1."):
+        return gap_path.replace("L1.", "functional_intent.", 1)
+    if gap_path.startswith("L2."):
+        return gap_path.replace("L2.", "interface_contract.", 1)
+    if gap_path.startswith("L3."):
+        return gap_path.replace("L3.", "verification_plan.", 1)
+    if gap_path.startswith("L4."):
+        return gap_path.replace("L4.", "architecture_plan.", 1)
+    if gap_path.startswith("L5."):
+        return gap_path.replace("L5.", "acceptance_contract.", 1)
+    return gap_path
+
+
+def _human_area_label(area: str) -> str:
+    mapping = {
+        "functional_intent": "behavior",
+        "interface_contract": "interface",
+        "verification_plan": "verification",
+        "architecture_plan": "architecture",
+        "acceptance_contract": "acceptance",
+    }
+    return mapping.get(area, area.replace("_", " "))
+
+
+def _human_gap_label(gap_path: str) -> str:
+    display = _display_gap_path(gap_path)
+    field_name = display.split(".")[-1]
+    mapping = {
+        "module_name": "module name",
+        "role_summary": "behavior summary",
+        "key_rules": "key rules",
+        "performance_intent": "performance expectations",
+        "reset_semantics": "reset behavior",
+        "corner_cases": "corner cases",
+        "clocking": "clock and reset details",
+        "signals": "signal list",
+        "handshake_semantics": "handshake rules",
+        "transaction_unit": "transfer unit and ordering",
+        "configuration_parameters": "configuration parameters",
+        "test_goals": "test goals",
+        "oracle_strategy": "reference checking plan",
+        "stimulus_strategy": "stimulus plan",
+        "pass_fail_criteria": "pass/fail criteria",
+        "coverage_targets": "coverage targets",
+        "reset_constraints": "reset test constraints",
+        "scenarios": "verification scenarios",
+        "block_diagram": "block diagram",
+        "dependencies": "module dependencies",
+        "connections": "connections",
+        "clock_domains": "clock domains",
+        "resource_strategy": "resource strategy",
+        "latency_budget": "latency budget",
+        "assertion_plan": "assertion plan",
+        "required_artifacts": "required artifacts",
+        "acceptance_metrics": "acceptance metrics",
+        "exclusions": "explicit exclusions",
+        "synthesis_target": "synthesis target",
+    }
+    return mapping.get(field_name, field_name.replace("_", " "))
+
+
+def _followup_goal_for_gap(gap: Any, area: str) -> str:
+    if getattr(gap, "checklist_path", "") == "metadata.design_kind":
+        return "Ask for the missing child-module breakdown and how the modules relate, so planning can continue."
+    return (
+        f"Ask only for the minimum concrete detail needed now in the {_human_area_label(area)} area "
+        "so planning can continue. Do not ask for extra sign-off detail."
+    )
+
+
+def _build_planning_spec(
+    *,
+    spec_id: UUID,
+    original_spec_text: str,
+    top_module: str,
+    module_checklists: Dict[str, Dict[str, Any]],
+) -> PlanningSpec:
+    SPEC_DIR.mkdir(parents=True, exist_ok=True)
+    run_cfg = get_runtime_config().run
+    module_inventory = _ordered_unique_names(list(module_checklists.keys()))
+    design_kind = _planning_design_kind(module_inventory)
+    created_at = datetime.now(timezone.utc)
+
+    blockers: List[HandoffIssue] = []
+    warnings: List[HandoffIssue] = []
+    assumptions: List[AssumptionItem] = []
+    deferred_items: List[DeferredItem] = []
+    open_questions: List[OpenQuestionItem] = []
+    modules: Dict[str, ModulePlanningSpec] = {}
+
+    for module_name in module_inventory:
+        checklist = module_checklists[module_name]
+        modules[module_name] = _checklist_to_module_planning_spec(checklist)
+        is_top_module = module_name == top_module
+        module_blockers, module_assumptions, module_warnings, module_deferred = list_rigor_gaps(
+            checklist,
+            rigor_level=run_cfg.spec_profile.rigor_level,
+            design_kind=design_kind,
+            is_top_module=is_top_module,
+        )
+        blockers.extend(
+            HandoffIssue(field_path=gap.semantic_path, message=gap.message, policy=gap.policy)
+            for gap in module_blockers
+        )
+        warnings.extend(
+            HandoffIssue(field_path=gap.semantic_path, message=gap.message, policy=gap.policy)
+            for gap in module_warnings
+        )
+        for gap in module_assumptions:
+            assumptions.append(
+                AssumptionItem(
+                    scope=_module_scope(module_name),
+                    field_path=gap.semantic_path,
+                    statement=f"Assumed unspecified field at rigor {run_cfg.spec_profile.rigor_level}.",
+                )
+            )
+        for gap in module_deferred + module_warnings:
+            deferred_items.append(
+                DeferredItem(
+                    scope=_module_scope(module_name) if not gap.semantic_path.startswith("architecture_plan.") else "design",
+                    field_path=gap.semantic_path,
+                    reason=f"Deferred at rigor {run_cfg.spec_profile.rigor_level}.",
+                )
+            )
+        for question in _clean_list(checklist.get("L1", {}).get("open_questions", []) if isinstance(checklist.get("L1"), dict) else []):
+            open_questions.append(
+                OpenQuestionItem(
+                    scope=_module_scope(module_name),
+                    field_path=f"modules.{module_name}.functional_intent.open_questions",
+                    question=question,
+                )
+            )
+
+    planning_spec = PlanningSpec(
+        metadata=PlanningSpecMetadata(
+            spec_id=spec_id,
+            created_at=created_at,
+            updated_at=created_at,
+            design_kind=design_kind,  # type: ignore[arg-type]
+            top_module=top_module,
+            module_inventory=module_inventory,
+            source_refs=PlanningSpecSourceRefs(original_spec_path=str(_original_spec_path())),
+        ),
+        modules=modules,
+        architecture_plan=_architecture_from_top_checklist(module_checklists[top_module]),
+        uncertainty=UncertaintySection(
+            assumptions=assumptions,
+            open_questions=open_questions,
+            deferred_items=deferred_items,
+        ),
+        handoff=HandoffSection(
+            interaction=run_cfg.spec_profile.interaction,  # type: ignore[arg-type]
+            rigor_level=run_cfg.spec_profile.rigor_level,  # type: ignore[arg-type]
+            planner_ready=not blockers,
+            blocking_gaps=blockers,
+            warnings=warnings,
+        ),
+    )
+
+    _original_spec_path().write_text(original_spec_text.strip() + "\n")
+    _planning_spec_path().write_text(json.dumps(planning_spec.model_dump(mode="json"), indent=2))
+    _remove_legacy_spec_artifacts()
+    return planning_spec
+
+
 def _ordered_unique_names(values: List[str]) -> List[str]:
     seen: set[str] = set()
     ordered: List[str] = []
@@ -1829,7 +2139,10 @@ def _complete_checklist(
     interactive: bool,
     spec_path: Path | None = None,
     *,
-    spec_profile: str = "engineer_fast",
+    spec_profile: str | None = None,
+    rigor_level: str = "L2",
+    design_kind: str = "single_module",
+    is_top_module: bool = True,
     append_notes: bool = True,
 ) -> Tuple[Dict[str, Any], str]:
     def _load_spec_text(current: str) -> str:
@@ -1891,25 +2204,35 @@ def _complete_checklist(
             return [p for p in parts if p and not _is_none_token(p)]
         return [] if _is_none_token(text) else [text]
 
+    def _current_gaps() -> tuple[list[Any], list[Any], list[Any], list[Any]]:
+        return list_rigor_gaps(
+            checklist,
+            rigor_level=rigor_level,  # type: ignore[arg-type]
+            design_kind=design_kind,  # type: ignore[arg-type]
+            is_top_module=is_top_module,
+        )
+
     spec_text = _load_spec_text(spec_text)
     _sync_module_name_from_spec()
-    if not interactive and spec_profile == "benchmark":
+    benchmark_like = get_runtime_config().run.verification_profile == "verilog-eval"
+    if not interactive and benchmark_like:
         checklist = _apply_benchmark_defaults(checklist, spec_text)
-        missing = list_missing_fields(checklist)
-        if _benchmark_clocking_optional(checklist):
-            missing = [field for field in missing if field.path != "L2.clocking"]
-        if missing:
-            fields = ", ".join(field.path for field in missing[:8])
-            raise RuntimeError(f"Benchmark spec normalization left unresolved fields: {fields}")
+        blockers, _, _, _ = _current_gaps()
+        if blockers:
+            fields = ", ".join(_display_gap_path(gap.checklist_path) for gap in blockers[:8])
+            raise RuntimeError(f"Benchmark spec normalization left unresolved rigor blockers: {fields}")
         return checklist, spec_text
     _thinking()
     if gateway is None:
         raise RuntimeError("Spec helper LLM gateway unavailable for interactive/non-benchmark flow.")
     checklist = update_checklist_from_spec(gateway, spec_text, checklist)
-    missing = list_missing_fields(checklist)
+    missing, _, advisory_warnings, _ = _current_gaps()
 
     while missing:
-        field = missing[0]
+        gap = missing[0]
+        field = _FIELD_INFO_BY_PATH.get(gap.checklist_path)
+        if field is None:
+            raise RuntimeError(gap.message)
         if not interactive:
             spec_text = _load_spec_text(spec_text)
             _sync_module_name_from_spec()
@@ -1933,32 +2256,34 @@ def _complete_checklist(
             _append_note(f"Spec helper draft for {field.path}", note)
             _thinking()
             checklist = update_checklist_from_spec(gateway, spec_text, checklist)
-            missing = list_missing_fields(checklist)
+            missing, _, advisory_warnings, _ = _current_gaps()
             continue
 
         while True:
             spec_text = _load_spec_text(spec_text)
             _sync_module_name_from_spec()
-            question = generate_followup_question(gateway, field, checklist, spec_text)
-
-            phase = field.path.split(".", 1)[0] if "." in field.path else field.path
-            phase_missing = [f for f in missing if f.path == phase or f.path.startswith(f"{phase}.")]
-            phase_names: List[str] = []
-            for info in phase_missing[:6]:
-                if "." in info.path:
-                    phase_names.append(info.path.split(".", 1)[1])
-                else:
-                    phase_names.append(info.path)
+            phase = _semantic_area_from_checklist_path(field.path)
+            question = generate_followup_question(
+                gateway,
+                field,
+                checklist,
+                spec_text,
+                area_label=_human_area_label(phase),
+                display_label=_human_gap_label(field.path),
+                planning_goal=_followup_goal_for_gap(gap, phase),
+            )
+            phase_missing = [item for item in missing if _semantic_area_from_checklist_path(item.checklist_path) == phase]
+            phase_names: List[str] = [_human_gap_label(item.checklist_path) for item in phase_missing[:6]]
             suffix = " ..." if len(phase_missing) > 6 else ""
             print(
                 _style(
-                    f"\nStatus: {len(missing)} missing fields remaining. "
-                    f"Current section: {phase} ({len(phase_missing)}): {', '.join(phase_names)}{suffix}",
+                    f"\nStatus: {len(missing)} planning blockers remaining. "
+                    f"Current area: {_human_area_label(phase)} ({len(phase_missing)}): {', '.join(phase_names)}{suffix}",
                     _DIM,
                 )
             )
 
-            print(f"\n{_style('Missing', _BOLD, _RED)}: {_style(field.path, _BOLD)}")
+            print(f"\n{_style('Missing', _BOLD, _RED)}: {_style(_human_gap_label(field.path), _BOLD)}")
             if field.description:
                 print(f"{_style('Why it matters', _YELLOW)}: {field.description}")
             if question:
@@ -2075,9 +2400,9 @@ def _complete_checklist(
         _sync_module_name_from_spec()
         _thinking()
         checklist = update_checklist_from_spec(gateway, spec_text, checklist)
-        missing = list_missing_fields(checklist)
-        if any(item.path == field.path for item in missing):
-            print(_style(f"Still missing {field.path}. The last answer could not be applied.", _RED))
+        missing, _, advisory_warnings, _ = _current_gaps()
+        if any(item.checklist_path == field.path for item in missing):
+            print(_style(f"Still missing {_display_gap_path(field.path)}. The last answer could not be applied.", _RED))
 
     spec_text = _load_spec_text(spec_text)
     return checklist, spec_text
@@ -2090,7 +2415,9 @@ def _invoke_complete_checklist(
     *,
     interactive: bool,
     spec_path: Path | None,
-    spec_profile: str,
+    rigor_level: str,
+    design_kind: str,
+    is_top_module: bool,
     append_notes: bool,
 ) -> Tuple[Dict[str, Any], str]:
     kwargs: Dict[str, Any] = {
@@ -2098,8 +2425,12 @@ def _invoke_complete_checklist(
         "spec_path": spec_path,
     }
     params = inspect.signature(_complete_checklist).parameters
-    if "spec_profile" in params:
-        kwargs["spec_profile"] = spec_profile
+    if "rigor_level" in params:
+        kwargs["rigor_level"] = rigor_level
+    if "design_kind" in params:
+        kwargs["design_kind"] = design_kind
+    if "is_top_module" in params:
+        kwargs["is_top_module"] = is_top_module
     if "append_notes" in params:
         kwargs["append_notes"] = append_notes
     return _complete_checklist(
@@ -2116,7 +2447,7 @@ def _collect_multi_specs(
     spec_path: Path,
     interactive: bool,
     *,
-    spec_profile: str = "engineer_fast",
+    rigor_level: str = "L2",
     append_notes: bool = True,
 ) -> Dict[str, Any]:
     defaults_text, modules = _split_spec_modules(spec_text)
@@ -2129,10 +2460,11 @@ def _collect_multi_specs(
         raise RuntimeError(f"Top module '{top_module}' not found in spec modules: {module_names}")
     if len(set(module_names)) != len(module_names):
         raise RuntimeError(f"Duplicate module names in spec: {module_names}")
+    design_kind = "multi_module" if len(module_names) > 1 else "single_module"
 
-    spec_id = uuid4()
     last_checklist: Dict[str, Any] = {}
     top_checklist: Dict[str, Any] | None = None
+    module_checklists: Dict[str, Dict[str, Any]] = {}
     for module_name, module_text in modules:
         if interactive:
             print(f"\nProcessing module '{module_name}'...", flush=True)
@@ -2148,18 +2480,12 @@ def _collect_multi_specs(
             checklist,
             interactive=interactive,
             spec_path=module_spec_path,
-            spec_profile=spec_profile,
+            rigor_level=rigor_level,
+            design_kind=design_kind,
+            is_top_module=module_name == top_module,
             append_notes=append_notes,
         )
-        suffix = "" if module_name == top_module else f"_{module_name}"
-        _write_artifacts(
-            module_spec_text,
-            checklist,
-            module_spec_path,
-            module_name=module_name,
-            spec_id=spec_id,
-            filename_suffix=suffix,
-        )
+        module_checklists[module_name] = checklist
         if module_name == top_module:
             top_checklist = checklist
         last_checklist = checklist
@@ -2171,7 +2497,12 @@ def _collect_multi_specs(
         top_module=top_module,
         top_checklist=top_checklist,
     )
-    _write_lock(lock_modules, top_module, spec_id)
+    _build_planning_spec(
+        spec_id=uuid4(),
+        original_spec_text=spec_text,
+        top_module=top_module,
+        module_checklists={name: module_checklists[name] for name in lock_modules},
+    )
     return last_checklist
 
 
@@ -2181,15 +2512,15 @@ def _invoke_collect_multi_specs(
     spec_path: Path,
     interactive: bool,
     *,
-    spec_profile: str,
+    rigor_level: str,
     append_notes: bool,
 ) -> Dict[str, Any]:
     kwargs: Dict[str, Any] = {
         "interactive": interactive,
     }
     params = inspect.signature(_collect_multi_specs).parameters
-    if "spec_profile" in params:
-        kwargs["spec_profile"] = spec_profile
+    if "rigor_level" in params:
+        kwargs["rigor_level"] = rigor_level
     if "append_notes" in params:
         kwargs["append_notes"] = append_notes
     return _collect_multi_specs(
@@ -2219,16 +2550,20 @@ def collect_specs_from_text(
             return _collect_multi_specs_direct(spec_text, spec_path)
         checklist = _parse_direct_checklist(spec_text, module_name_override=module_name or None)
         _ensure_single_module_contract(checklist, checklist.get("module_name", module_name or "demo_module"))
-        spec_id = _write_artifacts(spec_text, checklist, spec_path, module_name=checklist.get("module_name"))
         module_value = checklist.get("module_name", "demo_module")
-        _write_lock([_sanitize_name(str(module_value))], _sanitize_name(str(module_value)), spec_id)
+        _build_planning_spec(
+            spec_id=uuid4(),
+            original_spec_text=spec_text,
+            top_module=_sanitize_name(str(module_value)),
+            module_checklists={_sanitize_name(str(module_value)): checklist},
+        )
         return checklist
 
-    profile = spec_profile or get_runtime_config().resolved_preset.spec_profile
-    benchmark_mode = profile == "benchmark"
-    gateway = None if benchmark_mode else _require_gateway()
-    interactive = interactive and not benchmark_mode
-    append_notes = not benchmark_mode
+    run_cfg = get_runtime_config().run
+    benchmark_like = run_cfg.verification_profile == "verilog-eval"
+    gateway = None if benchmark_like else _require_gateway()
+    interactive = interactive and run_cfg.spec_profile.interaction == "interactive"
+    append_notes = interactive
 
     if modules:
         return _invoke_collect_multi_specs(
@@ -2236,7 +2571,7 @@ def collect_specs_from_text(
             spec_text,
             spec_path,
             interactive,
-            spec_profile=profile,
+            rigor_level=run_cfg.spec_profile.rigor_level,
             append_notes=append_notes,
         )
 
@@ -2260,21 +2595,27 @@ def collect_specs_from_text(
         checklist,
         interactive=interactive,
         spec_path=spec_path,
-        spec_profile=profile,
+        rigor_level=run_cfg.spec_profile.rigor_level,
+        design_kind="single_module",
+        is_top_module=True,
         append_notes=append_notes,
     )
     _ensure_single_module_contract(checklist, checklist.get("module_name", module_name or "demo_module"))
-    spec_id = _write_artifacts(spec_text, checklist, spec_path, module_name=checklist.get("module_name"))
     module_value = checklist.get("module_name", "demo_module")
-    _write_lock([_sanitize_name(str(module_value))], _sanitize_name(str(module_value)), spec_id)
+    _build_planning_spec(
+        spec_id=uuid4(),
+        original_spec_text=spec_text,
+        top_module=_sanitize_name(str(module_value)),
+        module_checklists={_sanitize_name(str(module_value)): checklist},
+    )
     return checklist
 
 
 def collect_specs() -> None:
     _print_banner()
-    profile = get_runtime_config().resolved_preset.spec_profile
-    benchmark_mode = profile == "benchmark"
-    gateway = None if benchmark_mode else _require_gateway()
+    run_cfg = get_runtime_config().run
+    benchmark_like = run_cfg.verification_profile == "verilog-eval"
+    gateway = None if benchmark_like else _require_gateway()
     spec_text, spec_path = _open_editor_for_spec()
     if not spec_text:
         print("No spec text provided; aborting.")
@@ -2286,26 +2627,15 @@ def collect_specs() -> None:
                 gateway,
                 spec_text,
                 spec_path,
-                interactive=not benchmark_mode,
-                spec_profile=profile,
-                append_notes=not benchmark_mode,
+                interactive=run_cfg.spec_profile.interaction == "interactive",
+                rigor_level=run_cfg.spec_profile.rigor_level,
+                append_notes=run_cfg.spec_profile.interaction == "interactive",
             )
         except KeyboardInterrupt:
             print("\nAborted.")
             return
         top_module = _extract_top_module(spec_text) or modules[0][0]
         lock_modules = [name for name, _ in modules]
-        lock_path = SPEC_DIR / "lock.json"
-        if lock_path.exists():
-            try:
-                lock_payload = json.loads(lock_path.read_text())
-                values = lock_payload.get("modules")
-                if isinstance(values, list):
-                    parsed = _ordered_unique_names([str(v) for v in values])
-                    if parsed:
-                        lock_modules = parsed
-            except Exception:
-                pass
         print(
             f"\nSpecs locked for modules {', '.join(lock_modules)} "
             f"(top: {top_module}) under {SPEC_DIR}/"
@@ -2318,18 +2648,24 @@ def collect_specs() -> None:
             gateway,
             spec_text,
             checklist,
-            interactive=not benchmark_mode,
+            interactive=run_cfg.spec_profile.interaction == "interactive",
             spec_path=spec_path,
-            spec_profile=profile,
-            append_notes=not benchmark_mode,
+            rigor_level=run_cfg.spec_profile.rigor_level,
+            design_kind="single_module",
+            is_top_module=True,
+            append_notes=run_cfg.spec_profile.interaction == "interactive",
         )
     except KeyboardInterrupt:
         print("\nAborted.")
         return
     _ensure_single_module_contract(checklist, checklist.get("module_name", "demo_module"))
-    spec_id = _write_artifacts(spec_text, checklist, spec_path, module_name=checklist.get("module_name"))
     module_name = checklist.get("module_name", "demo_module")
-    _write_lock([_sanitize_name(str(module_name))], _sanitize_name(str(module_name)), spec_id)
+    _build_planning_spec(
+        spec_id=uuid4(),
+        original_spec_text=spec_text,
+        top_module=_sanitize_name(str(module_name)),
+        module_checklists={_sanitize_name(str(module_name)): checklist},
+    )
     print(f"\nSpecs locked for module '{module_name}' under {SPEC_DIR}/")
 
 

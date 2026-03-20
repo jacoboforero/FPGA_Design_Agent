@@ -180,14 +180,10 @@ def run_case(case: Dict[str, str], timeout: float) -> Dict[str, str]:
     params = connection_params_from_env()
     _purge_broker_queues(params)
     runtime_cfg = get_runtime_config()
-    preset = runtime_cfg.resolved_preset
     execution_policy = {
-        "preset": runtime_cfg.active_preset,
-        "spec_profile": preset.spec_profile,
-        "verification_profile": preset.verification_profile,
-        "allow_repair_loop": preset.allow_repair_loop,
-        "benchmark_mode": preset.benchmark_mode,
-        "debug_max_retries": runtime_cfg.debug.max_retries,
+        "spec_profile": runtime_cfg.run.spec_profile.model_dump(mode="python"),
+        "verification_profile": runtime_cfg.run.verification_profile,
+        "run_kind": "engineer",
         "run_name": run_name,
     }
     stop_event = threading.Event()
@@ -211,7 +207,6 @@ def run_case(case: Dict[str, str], timeout: float) -> Dict[str, str]:
             REPO_ROOT / "artifacts" / "task_memory",
             run_id=run_routing.run_id,
             results_routing_key=run_routing.results_routing_key,
-            allow_repair_loop=preset.allow_repair_loop,
             execution_policy=execution_policy,
         ).run(timeout_s=timeout)
         ctx = design_context.read_text()
@@ -240,9 +235,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run increasing-complexity pipeline smoke tests.")
     parser.add_argument("--timeout", type=float, default=120.0, help="Per-case timeout in seconds")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to runtime YAML config.")
-    parser.add_argument("--preset", help="Optional preset override.")
     args = parser.parse_args()
-    initialize_runtime_config(Path(args.config), preset_override=args.preset)
+    initialize_runtime_config(Path(args.config))
 
     results = []
     for case in SUITE:

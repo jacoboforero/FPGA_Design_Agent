@@ -1,9 +1,5 @@
-# Tool definitions for execution workers
-
 tools:
   iverilog:
-    env_override: IVERILOG_PATH        # checked first
-    system_name: iverilog              # fallback via shutil.which
     commands:
       build:
         template: "{tool} -g2012 -g2005-sv -o {output} {sources}"
@@ -12,8 +8,6 @@ tools:
       supports_dump: false
 
   vvp:
-    env_override: VVP_PATH
-    system_name: vvp
     commands:
       run:
         template: "{tool} {binary}"
@@ -29,8 +23,6 @@ tools:
       dump_end_plusarg: "+DUMP_END"
 
   verilator:
-    env_override: VERILATOR_PATH
-    system_name: verilator
     commands:
       lint:
         template: "{tool} --lint-only --quiet --sv {sources}"
@@ -38,13 +30,3 @@ tools:
     capabilities:
       error_marker: "%Error"
       fatal_marker: "%Fatal"
-
-simulation:
-  artifact_base: "artifacts/task_memory"
-  waveform_filename: "waveform.vcd"
-  fail_window:
-    before_cycles: 20                  # env: SIM_FAIL_WINDOW_BEFORE
-    after_cycles: 5                    # env: SIM_FAIL_WINDOW_AFTER
-
-lint:
-  strict_warnings: false               # env: VERILATOR_STRICT_WARNINGS=1 overrides   

@@ -1,0 +1,10 @@
+includes:
+  - ../runtime.benchmark.yaml
+
+agents:
+  llm:
+    defaults:
+      model: gpt-4.1
+
+benchmark:
+  output_root: artifacts/benchmarks/verilog_eval/wavefix_failed41_20260307

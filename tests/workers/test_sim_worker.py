@@ -186,7 +186,13 @@ def test_sim_worker_benchmark_mode_fails_nonzero_mismatch_with_zero_exit(tmp_pat
 
     monkeypatch.setattr("workers.sim.worker.subprocess.run", fake_run)
 
-    result = worker.handle_task(make_task(rtl, tb, verification_scope="oracle_compare"))
+    result = worker.handle_task(
+        make_task(
+            rtl,
+            tb,
+            execution_policy={"verification_profile": "verilog-eval", "run_kind": "benchmark"},
+        )
+    )
 
     assert result.status is TaskStatus.FAILURE
     assert "nonzero mismatches=3" in result.log_output
@@ -210,7 +216,13 @@ def test_sim_worker_benchmark_mode_fails_timeout_marker_with_zero_exit(tmp_path,
 
     monkeypatch.setattr("workers.sim.worker.subprocess.run", fake_run)
 
-    result = worker.handle_task(make_task(rtl, tb, verification_scope="oracle_compare"))
+    result = worker.handle_task(
+        make_task(
+            rtl,
+            tb,
+            execution_policy={"verification_profile": "verilog-eval", "run_kind": "benchmark"},
+        )
+    )
 
     assert result.status is TaskStatus.FAILURE
     assert "timeout reported by benchmark harness" in result.log_output
@@ -234,7 +246,13 @@ def test_sim_worker_benchmark_mode_passes_zero_mismatches(tmp_path, monkeypatch)
 
     monkeypatch.setattr("workers.sim.worker.subprocess.run", fake_run)
 
-    result = worker.handle_task(make_task(rtl, tb, verification_scope="oracle_compare"))
+    result = worker.handle_task(
+        make_task(
+            rtl,
+            tb,
+            execution_policy={"verification_profile": "verilog-eval", "run_kind": "benchmark"},
+        )
+    )
 
     assert result.status is TaskStatus.SUCCESS
 
@@ -288,7 +306,12 @@ def test_sim_worker_benchmark_mode_applies_timeout_floor(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, stdout="PASS", stderr="")
 
     monkeypatch.setattr("workers.sim.worker.subprocess.run", fake_run)
-    result = worker.handle_task(make_task(rtl, execution_policy={"benchmark_mode": True}))
+    result = worker.handle_task(
+        make_task(
+            rtl,
+            execution_policy={"verification_profile": "verilog-eval", "run_kind": "benchmark"},
+        )
+    )
 
     assert result.status is TaskStatus.SUCCESS
     assert calls[1][0][0] == "/registry/vvp"

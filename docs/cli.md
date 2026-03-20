@@ -1,6 +1,6 @@
 # CLI
 
-Last verified against runtime behavior: March 8, 2026.
+Last verified against runtime behavior: March 19, 2026.
 
 `apps/cli/cli.py` is the main entrypoint for full runs, doctor checks, and benchmark runs.
 
@@ -31,11 +31,11 @@ Use this table first when deciding what to run.
 
 | Goal | Primary Command | Notes |
 | --- | --- | --- |
-| Run full engineer flow interactively | `PYTHONPATH=. poetry run python3 apps/cli/cli.py --preset engineer_fast` | Includes spec collection, planning gate, orchestrated execution. |
-| Validate environment before engineer run | `PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset engineer_fast` | Verifies credentials/tools/broker readiness for selected preset behavior. |
-| Run benchmark generation/scoring | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign <name>` | Produces run-manifest + canonical mode outputs. |
-| List benchmark cases before running | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --preset benchmark` | Validates prompt/discovery coverage quickly. |
-| Plan benchmark run without execution | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign <name> --dry-run` | Non-destructive plan preview. |
+| Run full engineer flow interactively | `PYTHONPATH=. poetry run python3 apps/cli/cli.py --config config/runtime.yaml` | Includes spec collection, planning gate, orchestrated execution. |
+| Validate environment before engineer run | `PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --config config/runtime.yaml` | Verifies credentials, tools, and broker readiness for engineer runs. |
+| Run benchmark generation/scoring | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign <name>` | Produces run-manifest + canonical mode outputs. |
+| List benchmark cases before running | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --config config/runtime.benchmark.yaml` | Validates prompt/discovery coverage quickly. |
+| Plan benchmark run without execution | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign <name> --dry-run` | Non-destructive plan preview. |
 | Rebuild local benchmark aggregate from existing official outputs | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark analyze --build-dir <mode_dir>` | Requires existing `summary.txt` and `summary.csv`. |
 | Compare two benchmark mode outputs | `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark compare --left-dir <mode_a> --right-dir <mode_b>` | Structured delta report for pass-rate and metrics. |
 | Execute many benchmark runs from YAML | `PYTHONPATH=. poetry run python3 scripts/run_benchmark_campaign.py --campaign-file <path>` | Research campaign automation utility. |
@@ -44,17 +44,40 @@ Use this table first when deciding what to run.
 From repo root:
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py --config config/runtime.yaml --preset engineer_fast
-PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset engineer_fast
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke
+PYTHONPATH=. poetry run python3 apps/cli/cli.py --config config/runtime.yaml
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --config config/runtime.yaml
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign smoke
 ```
 
-Optional aliases:
+## Homebrew Demo Install
+For the demo-oriented installed CLI path, the command is `mhd`, not
+`python3 apps/cli/cli.py`.
+
+The locked installed runtime lives in `packaging/homebrew/runtime.yaml` and is
+configured for:
+- `run.spec_profile.interaction=interactive`
+- `run.spec_profile.rigor_level=L2`
+- `run.verification_profile=testbench-agent`
+
+The repo smoke helper builds a temporary local tap from the current working
+tree and exercises the installed command:
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py run --preset engineer_fast
-PYTHONPATH=. poetry run python3 apps/cli/cli.py full --preset engineer_fast
+bash scripts/test_homebrew_install.sh
 ```
+
+If you want the full installed CLI smoke too:
+
+```bash
+MHD_RUN_FULL_SMOKE=1 bash scripts/test_homebrew_install.sh
+```
+
+Runtime notes:
+- `mhd doctor` verifies the installed config, credentials, and tools.
+- RabbitMQ must already be installed and running.
+- `OPENAI_API_KEY` must be set for interactive spec-helper flows.
+- `RABBITMQ_URL` can override the locked broker URL if local credentials differ.
+- Source-based Homebrew installs require current macOS Command Line Tools.
 
 ## Full Interactive Flow (Engineer Path)
 1. Collect specs (interactive by default unless `--spec-file` is provided).
@@ -75,13 +98,14 @@ Behavior note:
 
 ## Useful Flags
 Engineer flow flags:
+- `--config`: choose runtime manifest (`config/runtime.yaml` for engineer runs).
 - `--timeout`: pipeline timeout in seconds (`0` disables timeout).
 - `--spec-file`: run non-interactively from a spec file.
-- `--direct-spec`: parse structured L1-L5 directly from spec file.
 - `--run-name`: label observability artifacts.
 - `--narrative-mode {llm,deterministic,off}`: control execution narration.
 
 Benchmark flow flags:
+- `--config`: choose runtime manifest (`config/runtime.benchmark.yaml` for benchmark runs).
 - `--campaign`, `--run-id`, `--run-dir`: control run identity and run directory layout.
 - `--sampled`, `--legacy-lightweight`, `--pipeline-timeout`: benchmark execution behavior.
 - `--resume`, `--overwrite`, `--dry-run`: run safety and controllability.
@@ -89,9 +113,12 @@ Benchmark flow flags:
 - `--purge-queues`: optional benchmark queue purge.
 
 ## Runtime Ownership Notes
-- Runtime behavior comes from YAML config (`config/runtime.yaml` and selected preset).
+- Runtime behavior comes from YAML manifests.
+- Normal engineer runs use `config/runtime.yaml`.
+- Normal benchmark runs use `config/runtime.benchmark.yaml`.
+- `run.spec_profile` and `run.verification_profile` are selected inside the YAML, not by CLI preset flags.
 - API keys and secrets remain environment-driven.
-- Prefer explicit presets and run labels for reproducibility.
+- Prefer explicit config files and run labels for reproducibility.
 
 ## Related Code
 - `apps/cli/cli.py`

@@ -1,0 +1,6 @@
+cli:
+  default_narrative_mode: llm
+  narrative_show_state: false
+  execution_narrator_async: true
+  execution_narrator_order_mode: strict
+  execution_narrator_queue_max_events: 256

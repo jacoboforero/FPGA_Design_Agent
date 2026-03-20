@@ -22,6 +22,14 @@ _SIM_TIMEOUT_RE = re.compile(r"\bTIMEOUT\b", re.IGNORECASE)
 _SIM_MISMATCH_RE = re.compile(r"\bMismatches:\s*(\d+)\b", re.IGNORECASE)
 
 
+def _strict_acceptance_enabled(execution_policy: dict, verification_scope: str) -> bool:
+    spec_profile = execution_policy.get("spec_profile") if isinstance(execution_policy.get("spec_profile"), dict) else {}
+    rigor = str(spec_profile.get("rigor_level", "")).strip().upper()
+    if rigor in {"L4", "L5"}:
+        return True
+    return verification_scope == "verilog-eval" and str(execution_policy.get("run_kind", "")).strip() == "benchmark"
+
+
 class AcceptanceWorker(threading.Thread):
     queue_name = resolve_task_queue("AcceptanceWorker") or "process_tasks"
 
@@ -122,9 +130,7 @@ class AcceptanceWorker(threading.Thread):
         acceptance = ctx.get("acceptance") if isinstance(ctx.get("acceptance"), dict) else {}
         execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
         verification_scope = str(ctx.get("verification_scope", "")).strip()
-        strict_acceptance = verification_scope == "strict_tb_acceptance" or bool(
-            execution_policy.get("strict_acceptance", False)
-        )
+        strict_acceptance = _strict_acceptance_enabled(execution_policy, verification_scope)
         required = acceptance.get("required_artifacts") or []
         metrics = acceptance.get("acceptance_metrics") or []
 

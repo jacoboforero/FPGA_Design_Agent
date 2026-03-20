@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from apps.cli import spec_flow
+from core.runtime.config import load_runtime_config
 
 
 def _clear_theme_env(monkeypatch) -> None:
@@ -74,8 +75,11 @@ def test_collect_specs_from_text_benchmark_skips_gateway(monkeypatch, tmp_path):
     monkeypatch.setattr(spec_flow, "SPEC_DIR", tmp_path / "specs")
     monkeypatch.setattr(spec_flow, "_require_gateway", lambda: (_ for _ in ()).throw(AssertionError("unexpected")))
     monkeypatch.setattr(spec_flow, "_ensure_single_module_contract", lambda *args, **kwargs: None)
-    monkeypatch.setattr(spec_flow, "_write_artifacts", lambda *args, **kwargs: "spec-id")
-    monkeypatch.setattr(spec_flow, "_write_lock", lambda *args, **kwargs: None)
+    cfg = load_runtime_config()
+    cfg.run.spec_profile.interaction = "non_interactive"
+    cfg.run.spec_profile.rigor_level = "L0"
+    cfg.run.verification_profile = "verilog-eval"
+    monkeypatch.setattr(spec_flow, "get_runtime_config", lambda: cfg)
 
     seen: dict[str, object] = {}
 
@@ -85,12 +89,12 @@ def test_collect_specs_from_text_benchmark_skips_gateway(monkeypatch, tmp_path):
         return checklist, spec_text
 
     monkeypatch.setattr(spec_flow, "_invoke_complete_checklist", _fake_invoke)
+    monkeypatch.setattr(spec_flow, "_build_planning_spec", lambda **kwargs: None)
 
     result = spec_flow.collect_specs_from_text(
         "demo",
         "Module: demo\nL1\nRole summary: demo\n",
         interactive=False,
-        spec_profile="benchmark",
     )
     assert seen["gateway"] is None
     assert result["module_name"] == "demo"
@@ -150,14 +154,20 @@ def test_apply_benchmark_defaults_preserves_full_role_summary_text():
 
 def test_complete_checklist_benchmark_allows_clockless_interface():
     checklist = spec_flow.build_empty_checklist()
+    cfg = load_runtime_config()
+    cfg.run.spec_profile.interaction = "non_interactive"
+    cfg.run.spec_profile.rigor_level = "L0"
+    cfg.run.verification_profile = "verilog-eval"
+    original = spec_flow.get_runtime_config
+    spec_flow.get_runtime_config = lambda: cfg
     updated, _ = spec_flow._complete_checklist(
         gateway=None,
         spec_text="Module: TopModule\n- output zero\nThe module should always output 0.\n",
         checklist=checklist,
         interactive=False,
-        spec_profile="benchmark",
         append_notes=False,
     )
+    spec_flow.get_runtime_config = original
     assert updated["L2"]["clocking"] == []
 
 
@@ -195,12 +205,6 @@ def test_canonical_modules_excludes_standard_components():
 
 def test_collect_multi_specs_raises_when_l4_declares_missing_module_sections(tmp_path, monkeypatch):
     monkeypatch.setattr(spec_flow, "SPEC_DIR", tmp_path / "specs")
-
-    captured_artifacts = []
-
-    def _fake_write_artifacts(spec_text, checklist, spec_path, module_name, spec_id=None, filename_suffix=""):  # noqa: ARG001
-        captured_artifacts.append(module_name)
-        return spec_id
 
     top_checklist = {
         "module_name": "top",
@@ -242,10 +246,9 @@ def test_collect_multi_specs_raises_when_l4_declares_missing_module_sections(tmp
         },
     }
 
-    def _fake_complete_checklist(gateway, spec_text, checklist, interactive, spec_path=None):
+    def _fake_complete_checklist(gateway, spec_text, checklist, interactive, spec_path=None, **kwargs):  # noqa: ARG001
         return top_checklist, spec_text
 
-    monkeypatch.setattr(spec_flow, "_write_artifacts", _fake_write_artifacts)
     monkeypatch.setattr(spec_flow, "_complete_checklist", _fake_complete_checklist)
 
     spec_text = "Module: top\nL1\nRole summary: top\n"
@@ -255,8 +258,40 @@ def test_collect_multi_specs_raises_when_l4_declares_missing_module_sections(tmp
     with pytest.raises(RuntimeError, match="missing Module section\\(s\\): child_a"):
         spec_flow._collect_multi_specs(object(), spec_text, spec_path, interactive=False)
 
-    # Only declared module artifacts should have been written before validation fails.
-    assert captured_artifacts == ["top"]
+
+def test_collect_multi_specs_single_module_module_section_uses_single_module_rigor(tmp_path, monkeypatch):
+    monkeypatch.setattr(spec_flow, "SPEC_DIR", tmp_path / "specs")
+    spec_path = Path(__file__).resolve().parents[1] / "test_specs" / "01_counter3_basic.txt"
+    payload = spec_path.read_text()
+    parsed = spec_flow._parse_direct_checklist(payload, module_name_override="counter3")
+    seen: dict[str, object] = {}
+
+    def _fake_complete_checklist(
+        gateway,
+        spec_text,
+        checklist,
+        interactive,
+        spec_path=None,
+        rigor_level="L2",
+        design_kind="single_module",
+        is_top_module=False,
+        append_notes=True,
+    ):  # noqa: ARG001
+        seen["design_kind"] = design_kind
+        seen["is_top_module"] = is_top_module
+        return parsed, spec_text
+
+    monkeypatch.setattr(spec_flow, "_complete_checklist", _fake_complete_checklist)
+
+    input_path = tmp_path / "spec_input.txt"
+    input_path.write_text(payload)
+    spec_flow._collect_multi_specs(object(), payload, input_path, interactive=False)
+    planning_spec = json.loads((tmp_path / "specs" / "planning_spec.json").read_text())
+
+    assert seen["design_kind"] == "single_module"
+    assert seen["is_top_module"] is True
+    assert planning_spec["metadata"]["design_kind"] == "single_module"
+    assert planning_spec["metadata"]["module_inventory"] == ["counter3"]
 
 
 def test_autogenerated_comparator_child_is_combinational():
@@ -309,13 +344,26 @@ def test_collect_specs_from_text_direct_parse_single_module(tmp_path, monkeypatc
     payload = spec_path.read_text()
 
     result = spec_flow.collect_specs_from_text("counter3", payload, interactive=False, direct_parse=True)
-    lock = json.loads((tmp_path / "specs" / "lock.json").read_text())
+    planning_spec = json.loads((tmp_path / "specs" / "planning_spec.json").read_text())
 
     assert result["module_name"] == "counter3"
-    assert lock["top_module"] == "counter3"
-    assert lock["modules"] == ["counter3"]
-    assert (tmp_path / "specs" / "L1_functional.json").exists()
-    assert (tmp_path / "specs" / "L5_acceptance.json").exists()
+    assert planning_spec["metadata"]["top_module"] == "counter3"
+    assert planning_spec["metadata"]["module_inventory"] == ["counter3"]
+    assert (tmp_path / "specs" / "original_spec.txt").exists()
+
+
+def test_collect_specs_from_text_direct_parse_accepts_human_section_headers(tmp_path, monkeypatch):
+    monkeypatch.setattr(spec_flow, "SPEC_DIR", tmp_path / "specs")
+    monkeypatch.setattr(spec_flow, "_require_gateway", lambda: (_ for _ in ()).throw(AssertionError("unexpected")))
+    spec_path = Path(__file__).resolve().parents[1] / "test_specs" / "demo_and2_structured.txt"
+    payload = spec_path.read_text()
+
+    result = spec_flow.collect_specs_from_text("and2_demo", payload, interactive=False, direct_parse=True)
+    planning_spec = json.loads((tmp_path / "specs" / "planning_spec.json").read_text())
+
+    assert result["module_name"] == "and2_demo"
+    assert planning_spec["metadata"]["top_module"] == "and2_demo"
+    assert planning_spec["metadata"]["module_inventory"] == ["and2_demo"]
 
 
 def test_collect_specs_from_text_direct_parse_multimodule_requires_explicit_module_sections(tmp_path, monkeypatch):
@@ -326,3 +374,105 @@ def test_collect_specs_from_text_direct_parse_multimodule_requires_explicit_modu
 
     with pytest.raises(RuntimeError, match="missing Module section\\(s\\): pwm_counter8, duty_reg8, pwm_compare8"):
         spec_flow.collect_specs_from_text("ignored", payload, interactive=False, direct_parse=True)
+
+
+def test_complete_checklist_raises_clean_error_for_non_field_rigor_blocker(monkeypatch):
+    payload = (Path(__file__).resolve().parents[1] / "test_specs" / "01_counter3_basic.txt").read_text()
+    checklist = spec_flow._parse_direct_checklist(payload, module_name_override="counter3")
+    monkeypatch.setattr(spec_flow, "update_checklist_from_spec", lambda gateway, spec_text, current: current)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Multi-module planning needs the child-module breakdown and relationships to be captured before handoff.",
+    ):
+        spec_flow._complete_checklist(
+            gateway=object(),
+            spec_text=payload,
+            checklist=checklist,
+            interactive=False,
+            rigor_level="L2",
+            design_kind="multi_module",
+            is_top_module=True,
+            append_notes=False,
+        )
+
+
+def test_complete_checklist_interactive_status_hides_internal_rigor_labels(monkeypatch, capsys):
+    checklist = {
+        "module_name": "and2_demo",
+        "L1": {
+            "role_summary": "",
+            "key_rules": ["y = a & b"],
+            "performance_intent": "same-cycle combinational response",
+            "reset_semantics": "No reset; output depends only on current inputs.",
+            "corner_cases": ["all four input combinations"],
+        },
+        "L2": {
+            "clocking": [],
+            "signals": [
+                {"name": "a", "direction": "INPUT", "width_expr": "1", "semantics": "input"},
+                {"name": "b", "direction": "INPUT", "width_expr": "1", "semantics": "input"},
+                {"name": "y", "direction": "OUTPUT", "width_expr": "1", "semantics": "output"},
+            ],
+            "handshake_semantics": [],
+            "transaction_unit": "one combinational evaluation",
+            "configuration_parameters": [],
+        },
+        "L3": {
+            "test_goals": ["truth table matches"],
+            "oracle_strategy": "direct truth table",
+            "stimulus_strategy": "drive all combinations",
+            "pass_fail_criteria": ["no mismatches"],
+            "coverage_targets": [],
+            "reset_constraints": {},
+            "scenarios": [],
+        },
+        "L4": {
+            "block_diagram": [],
+            "dependencies": [],
+            "connections": [],
+            "clock_domains": [],
+            "resource_strategy": "single AND operator",
+            "latency_budget": "same-cycle",
+            "assertion_plan": {"sva": [], "scoreboard_assertions": []},
+        },
+        "L5": {
+            "required_artifacts": [],
+            "acceptance_metrics": [],
+            "exclusions": [],
+            "synthesis_target": "fpga_generic",
+        },
+    }
+    responses = iter(["2", "1-bit combinational AND gate.", ""])
+    monkeypatch.setattr(spec_flow, "update_checklist_from_spec", lambda gateway, spec_text, current: current)
+    monkeypatch.setattr(
+        spec_flow,
+        "generate_followup_question",
+        lambda gateway, field, checklist, spec_text, **kwargs: "What is the short behavior summary for this module?",
+    )
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+
+    updated, _ = spec_flow._complete_checklist(
+        gateway=object(),
+        spec_text="Module: and2_demo",
+        checklist=checklist,
+        interactive=True,
+        rigor_level="L2",
+        design_kind="single_module",
+        is_top_module=True,
+        append_notes=False,
+    )
+
+    out = capsys.readouterr().out
+    assert updated["L1"]["role_summary"] == "1-bit combinational AND gate."
+    assert "target rigor" not in out
+    assert "L0" not in out
+    assert "L1" not in out
+    assert "L2" not in out
+    assert "L3" not in out
+    assert "L4" not in out
+    assert "L5" not in out
+    assert "planning blockers remaining" in out
+    assert "Current area: behavior" in out
+    assert "Missing" in out
+    assert "behavior summary" in out

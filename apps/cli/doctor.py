@@ -12,14 +12,12 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
-from urllib.parse import urlparse
 
 import pika
 
 from core.runtime.config import DEFAULT_CONFIG_PATH, RuntimeConfig, get_runtime_config
 
 PROBLEM_RE = re.compile(r"^(Prob\d+)", re.IGNORECASE)
-_LOCAL_BROKER_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 @dataclass(frozen=True)
@@ -54,15 +52,11 @@ def _has_langchain_schema() -> bool:
 
 def _resolve_broker_url(configured_url: str) -> str:
     """
-    Keep doctor aligned with the main CLI: if runtime YAML points to localhost
-    but the environment points to a container/service host, prefer the env URL.
+    Keep doctor aligned with the main CLI: treat RABBITMQ_URL as an explicit
+    runtime override for the broker URL.
     """
     env_url = os.getenv("RABBITMQ_URL", "").strip()
-    if not env_url:
-        return configured_url
-    cfg_host = (urlparse(configured_url).hostname or "").strip().lower()
-    env_host = (urlparse(env_url).hostname or "").strip().lower()
-    if cfg_host in _LOCAL_BROKER_HOSTS and env_host and env_host not in _LOCAL_BROKER_HOSTS:
+    if env_url:
         return env_url
     return configured_url
 
@@ -124,15 +118,16 @@ def _recognized_prompt_counts(prompts_dir: Path) -> tuple[int, int, int]:
 
 def run_checks(config: RuntimeConfig, *, force_benchmark: bool = False) -> List[CheckResult]:
     results: List[CheckResult] = []
-    preset = config.resolved_preset
 
     results.append(
         CheckResult(
             name="runtime_config",
             status="PASS",
             message=(
-                f"preset={config.active_preset} "
-                f"(spec_profile={preset.spec_profile}, verification_profile={preset.verification_profile})"
+                "run="
+                f"(interaction={config.run.spec_profile.interaction}, "
+                f"rigor_level={config.run.spec_profile.rigor_level}, "
+                f"verification_profile={config.run.verification_profile})"
             ),
         )
     )
@@ -188,7 +183,7 @@ def run_checks(config: RuntimeConfig, *, force_benchmark: bool = False) -> List[
     else:
         results.append(CheckResult("tool_vvp", "WARN", "vvp not found"))
 
-    benchmark_needed = bool(force_benchmark or preset.benchmark_mode)
+    benchmark_needed = bool(force_benchmark)
     if benchmark_needed:
         root = Path(config.benchmark.verilog_eval_root).resolve()
         required = [
@@ -272,11 +267,10 @@ def run_checks(config: RuntimeConfig, *, force_benchmark: bool = False) -> List[
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run preflight checks for local runtime readiness.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to runtime YAML config.")
-    parser.add_argument("--preset", help="Preset override for checks.")
     parser.add_argument(
         "--benchmark",
         action="store_true",
-        help="Force benchmark-specific checks even if the selected preset is not benchmark.",
+        help="Run benchmark-specific checks against the configured benchmark environment.",
     )
     parser.add_argument(
         "--strict",
@@ -300,7 +294,8 @@ def run_from_args(args: argparse.Namespace) -> int:
     print(
         "\nDoctor summary: "
         f"{pass_count} pass, {warn_count} warn, {fail_count} fail "
-        f"(preset={config.active_preset})"
+        f"(interaction={config.run.spec_profile.interaction}, "
+        f"verification_profile={config.run.verification_profile})"
     )
     if fail_count > 0:
         return 1

@@ -23,15 +23,15 @@ Then inside the container shell:
 ```bash
 export RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
 git submodule update --init --recursive
-PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --preset benchmark --benchmark
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --preset benchmark --campaign smoke --sampled
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --config config/runtime.benchmark.yaml --benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign smoke
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign smoke --sampled
 ```
 
 List available benchmark cases:
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --preset benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --config config/runtime.benchmark.yaml
 ```
 
 Compare two benchmark mode directories:
