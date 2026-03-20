@@ -64,7 +64,7 @@ Generated outputs go to `artifacts/generated/`, stage logs to `artifacts/task_me
 
 ## Host Fallback
 ```bash
-poetry install -E openai --with dev
+poetry install --with dev
 PYTHONPATH=. poetry run python3 apps/cli/cli.py --timeout 120 --config config/runtime.yaml
 ```
 

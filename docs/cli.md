@@ -11,7 +11,7 @@ This command surface has two user modes:
 ## Command Environment
 Run CLI commands in one of these contexts:
 - inside the `app` container after `make build`, `make up`, `make deps`, `make shell`
-- on the host after `poetry install -E openai --with dev`
+- on the host after `poetry install --with dev`
 
 Notes:
 - `make shell` rewrites `RABBITMQ_URL=...localhost...` to the container-safe broker URL `amqp://user:password@rabbitmq:5672/`.

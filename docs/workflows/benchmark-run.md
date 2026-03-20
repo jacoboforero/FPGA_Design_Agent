@@ -67,7 +67,7 @@ PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark compare \
 Host fallback:
 
 ```bash
-poetry install -E openai --with dev
+poetry install --with dev
 git submodule update --init --recursive
 PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --config config/runtime.benchmark.yaml --benchmark
 ```
@@ -288,7 +288,7 @@ Symptoms:
 Actions:
 1. In Docker, run `make deps` before opening `make shell`.
 2. Invoke the CLI with `PYTHONPATH=. poetry run python3 ...` instead of bare `python3`.
-3. On the host, run `poetry install -E openai --with dev` before using the CLI.
+3. On the host, run `poetry install --with dev` before using the CLI.
 
 ### Symptom: run fails because output directory already exists
 Symptoms:
