@@ -1,5 +1,5 @@
 run:
   spec_profile:
     interaction: interactive
-    rigor_level: L2
+    rigor_level: L3
   verification_profile: testbench-agent

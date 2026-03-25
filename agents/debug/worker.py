@@ -27,6 +27,7 @@ from workers.tb_lint.worker import (
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import TaskInputError
 from core.runtime.config import get_runtime_config
+from core.runtime.testbench_contract import extract_reset_semantics, normalize_testbench_contract
 
 _VERILATOR_QUIET_UNSUPPORTED_RE = re.compile(r"invalid option:\s*--quiet", re.IGNORECASE)
 _ALWAYS_FF_RE = re.compile(r"\balways_ff\b")
@@ -86,6 +87,7 @@ class DebugWorker(AgentWorkerBase):
         tb_lint_log_prompt = _truncate_prompt_text(tb_lint_log, max_chars=8000)
         distilled_prompt = _truncate_prompt_text(distilled, max_chars=10000)
         reflection_prompt = _truncate_prompt_text(reflection, max_chars=10000)
+        tb_contract = _testbench_contract_for_context(ctx)
 
         system = (
             "You are a Debug Agent for an RTL design pipeline. Your job is to PATCH CODE.\n"
@@ -125,6 +127,7 @@ class DebugWorker(AgentWorkerBase):
             "- If stuck=true or a failure signature repeats, your patch MUST change strategy materially and explain the delta in summary.\n"
             "- If waveform dumping uses a cycle window, do NOT treat DUMP_START=0 as \"disabled\"; some benches accidentally $dumpoff forever.\n"
             "- If the context includes child modules and connection wiring, preserve the integration structure; only fix wiring or glue logic as needed.\n"
+            f"{_debug_testbench_guidance(tb_contract)}"
             "- Your patch is accepted only if local deterministic validation passes (tb_lint for TB changes; lint for RTL changes).\n"
         )
         if rtl_only_debug:
@@ -137,6 +140,7 @@ class DebugWorker(AgentWorkerBase):
             f"Attempt: {sim_attempt if sim_attempt is not None else 'unknown'}\n"
             f"Debug reason: {debug_reason}\n"
             f"Context:\n{json.dumps(ctx, indent=2)}\n\n"
+            f"Normalized testbench contract:\n{_format_testbench_contract(tb_contract)}\n\n"
             f"{benchmark_prompt_label}:\n{benchmark_prompt or 'None provided.'}\n\n"
             "Current RTL (verbatim):\n"
             f"{rtl_prompt}\n\n"
@@ -414,6 +418,59 @@ def _rtl_language_for_context(ctx: dict) -> str:
     return "verilog2001"
 
 
+def _testbench_contract_for_context(ctx: dict) -> dict:
+    iface = ctx.get("interface") if isinstance(ctx.get("interface"), dict) else {}
+    behavior = str(ctx.get("demo_behavior", "") or "").strip()
+    return normalize_testbench_contract(
+        ctx.get("testbench_contract"),
+        interface_signals=iface.get("signals", []),
+        raw_clocking=ctx.get("clocking"),
+        module_contract=ctx.get("module_contract"),
+        reset_semantics=extract_reset_semantics(behavior),
+    )
+
+
+def _format_testbench_contract(contract: dict) -> str:
+    return "\n".join(
+        [
+            f"- mode: {contract.get('mode')}",
+            f"- timing_style: {contract.get('timing_style')}",
+            f"- checker_style: {contract.get('checker_style')}",
+            f"- requires_clock: {contract.get('requires_clock')}",
+            f"- clock_name: {contract.get('clock_name')}",
+            f"- sample_edge: {contract.get('sample_edge')}",
+            f"- drive_edge: {contract.get('drive_edge')}",
+            f"- requires_reset: {contract.get('requires_reset')}",
+            f"- reset_name: {contract.get('reset_name')}",
+            f"- reset_polarity: {contract.get('reset_polarity')}",
+            f"- reset_is_async: {contract.get('reset_is_async')}",
+            f"- post_reset_settle_cycles: {contract.get('post_reset_settle_cycles')}",
+        ]
+    )
+
+
+def _debug_testbench_guidance(contract: dict) -> str:
+    mode = str(contract.get("mode") or "").strip().lower()
+    if mode == "combinational_no_reset":
+        return (
+            "- This node uses a combinational/no-reset testbench contract.\n"
+            "- Do not invent clk/clock or rst/reset signals if they are not DUT ports.\n"
+            "- Do not use sampled-edge scoreboards, prev_* gating, or reset-release checker activation.\n"
+            "- Prefer direct input-step stimulus and direct expected-value comparisons after a small settle delay only if needed.\n"
+        )
+    if mode == "clocked_no_reset":
+        return (
+            f"- This node is clocked on {contract['sample_edge']} {contract['clock_name']} but has no required reset in the testbench.\n"
+            "- Do not invent reset handling or post-reset checker gating.\n"
+            f"- Keep stimulus on {contract['drive_edge']} {contract['clock_name']} and checking on {contract['sample_edge']} {contract['clock_name']}.\n"
+        )
+    return (
+        f"- This node uses a clocked/reset testbench contract on {contract['sample_edge']} {contract['clock_name']}.\n"
+        "- Keep reset handling explicit and gate checking through reset release stabilization.\n"
+        "- Avoid stale prev_* control comparisons when using # delays inside sampled checkers.\n"
+    )
+
+
 def _behavior_prompt_for_context(ctx: dict) -> tuple[str, str]:
     execution_policy = ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else {}
     prompt_mode = str(execution_policy.get("benchmark_prompt_mode", "normalized")).strip().lower()
@@ -677,8 +734,9 @@ def _run_tb_lint_check(*, ctx: dict, rtl_paths: list[str], tb_path: Path) -> dic
                 if name_field:
                     signal_names.append(str(name_field))
         clocking_raw = ctx.get("clocking")
-        clocking = _normalize_tb_clocking_context(clocking_raw, signal_names)
-        clock_name = str(clocking.get("clock_name", "clk") or "clk")
+        clocking = _normalize_tb_clocking_context(clocking_raw, signal_names, ctx.get("testbench_contract"))
+        clock_name_raw = clocking.get("clock_name")
+        clock_name = str(clock_name_raw).strip() if clock_name_raw else None
         reset_name_raw = clocking.get("reset_name")
         reset_name = str(reset_name_raw).strip() if reset_name_raw else None
         reset_polarity = str(clocking.get("reset_polarity", "ACTIVE_LOW")).upper()

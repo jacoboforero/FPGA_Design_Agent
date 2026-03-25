@@ -1,0 +1,385 @@
+Module: double_inv_buffer_top
+Title: Simple multi-module double-inverter buffer demo
+
+Functional intent
+Role summary: Top-level integration module that instantiates inv_stage1 and inv_stage2 to compute y = a through two inversions.
+Key rules:
+- inv_stage1 computes mid_n = ~a.
+- inv_stage2 computes y = ~mid_n.
+- double_inv_buffer_top performs only structural integration and explicit wiring between child modules.
+Performance intent: Same-cycle combinational response from input to output.
+Reset semantics: No reset; output depends only on current input.
+Corner cases:
+- a=0
+- a=1
+Open questions:
+- none
+
+Interface details
+Clocking: []
+Signals:
+- name: a
+  direction: INPUT
+  width_expr: 1
+  semantics: top-level input
+- name: y
+  direction: OUTPUT
+  width_expr: 1
+  semantics: top-level output equal to a after two inversions
+Handshake semantics:
+- name: none
+  rules: none
+Transaction unit: one combinational evaluation of y from a.
+Configuration parameters:
+- name: none
+  default_value: none
+  description: none
+
+Verification plan
+Test goals:
+- Verify top-level truth table for y = a.
+- Verify integration preserves the two-stage inversion behavior.
+Oracle strategy: Direct truth-table reference y_expected = a.
+Stimulus strategy: Drive a = 0 then 1 at the top-level port.
+Pass/fail criteria:
+- y matches a for both input values.
+Coverage targets:
+- coverage_id: branch
+  description: branch coverage for the top-level two-case truth-table flow
+  metric_type: branch
+  goal: 0.5
+  notes: none
+- coverage_id: toggle
+  description: toggle coverage for a and y
+  metric_type: toggle
+  goal: 0.5
+  notes: none
+Reset constraints:
+  min_cycles_after_reset: 0
+  ordering_notes: no reset applies for this combinational design.
+Scenarios:
+- scenario_id: top_truth_table
+  description: exercise both input values at the top level
+  stimulus: drive a = 0 then 1
+  oracle: y equals a
+  pass_fail_criteria: no mismatches across the full truth table
+  illegal: false
+
+Architecture plan
+Block diagram:
+- node_id: double_inv_buffer_top
+  description: top-level structural wrapper for a two-stage inverter buffer
+  node_type: top_level
+  interface_refs: [double_inv_buffer_top_if]
+  uses_standard_component: false
+  notes: integration-only wrapper
+- node_id: inv_stage1
+  description: first combinational inverter stage
+  node_type: combinational_inverter
+  interface_refs: [inv_stage1_if]
+  uses_standard_component: false
+  notes: drives the inverted form of a
+- node_id: inv_stage2
+  description: second combinational inverter stage
+  node_type: combinational_inverter
+  interface_refs: [inv_stage2_if]
+  uses_standard_component: false
+  notes: reinverts the intermediate signal to recover a
+Dependencies:
+- parent_id: inv_stage1
+  child_id: double_inv_buffer_top
+  dependency_type: structural
+- parent_id: inv_stage2
+  child_id: double_inv_buffer_top
+  dependency_type: structural
+Connections:
+- src:
+    node_id: double_inv_buffer_top
+    port: a
+  dst:
+    node_id: inv_stage1
+    port: a
+- src:
+    node_id: inv_stage1
+    port: y
+  dst:
+    node_id: inv_stage2
+    port: a
+- src:
+    node_id: inv_stage2
+    port: y
+  dst:
+    node_id: double_inv_buffer_top
+    port: y
+Clock domains: []
+Resource strategy: two inverter stages and top-level wiring.
+Latency budget: same-cycle combinational propagation through two inverter stages.
+Assertion plan:
+  sva:
+  - y == a
+  scoreboard_assertions:
+  - top-level truth-table reference matches DUT output
+
+Acceptance criteria
+Required artifacts:
+- name: rtl
+  description: synthesizable RTL for double_inv_buffer_top and child modules
+  mandatory: true
+- name: testbench
+  description: self-checking top-level truth-table testbench
+  mandatory: true
+- name: lint_report
+  description: verilator lint log
+  mandatory: true
+- name: sim_log
+  description: simulation transcript
+  mandatory: true
+- name: coverage_report
+  description: coverage summary
+  mandatory: true
+Acceptance metrics:
+- metric_id: branch
+  description: branch coverage >= 0.5
+  operator: ">="
+  target_value: "0.5"
+  metric_source: coverage_report
+- metric_id: toggle
+  description: toggle coverage >= 0.5
+  operator: ">="
+  target_value: "0.5"
+  metric_source: coverage_report
+Exclusions:
+- none
+Synthesis target: fpga_generic
+
+Module: inv_stage1
+Title: 1-bit combinational inverter first stage
+
+Functional intent
+Role summary: 1-bit combinational inverter that drives y = ~a.
+Key rules:
+- y = ~a for both input values.
+- No internal state or sequential behavior.
+Performance intent: Same-cycle combinational response.
+Reset semantics: No reset; output depends only on current input.
+Corner cases:
+- a=0
+- a=1
+Open questions:
+- none
+
+Interface details
+Clocking: []
+Signals:
+- name: a
+  direction: INPUT
+  width_expr: 1
+  semantics: inverter input
+- name: y
+  direction: OUTPUT
+  width_expr: 1
+  semantics: inverted output
+Handshake semantics:
+- name: none
+  rules: none
+Transaction unit: one combinational inversion.
+Configuration parameters:
+- name: none
+  default_value: none
+  description: none
+
+Verification plan
+Test goals:
+- Verify y = ~a for both input values.
+Oracle strategy: Direct truth-table reference y_expected = ~a.
+Stimulus strategy: Drive a = 0 then 1.
+Pass/fail criteria:
+- y matches ~a for both input values.
+Coverage targets:
+- coverage_id: branch
+  description: branch coverage for the inverter two-case truth-table flow
+  metric_type: branch
+  goal: 0.5
+  notes: none
+- coverage_id: toggle
+  description: toggle coverage for a and y
+  metric_type: toggle
+  goal: 0.5
+  notes: none
+Reset constraints:
+  min_cycles_after_reset: 0
+  ordering_notes: no reset applies for this combinational design.
+Scenarios:
+- scenario_id: inverter_truth_table
+  description: exercise both input values
+  stimulus: drive a = 0 then 1
+  oracle: y equals ~a
+  pass_fail_criteria: no mismatches across the full truth table
+  illegal: false
+
+Architecture plan
+Block diagram:
+- node_id: inv_stage1
+  description: combinational inverter
+  node_type: combinational_inverter
+  interface_refs: [inv_stage1_if]
+  uses_standard_component: false
+  notes: single NOT operator
+Dependencies: []
+Connections: []
+Clock domains: []
+Resource strategy: one inverter.
+Latency budget: same-cycle combinational propagation.
+Assertion plan:
+  sva:
+  - y == ~a
+  scoreboard_assertions:
+  - inverter truth-table reference matches DUT output
+
+Acceptance criteria
+Required artifacts:
+- name: rtl
+  description: synthesizable RTL for inv_stage1
+  mandatory: true
+- name: testbench
+  description: self-checking truth-table testbench
+  mandatory: true
+- name: lint_report
+  description: verilator lint log
+  mandatory: true
+- name: sim_log
+  description: simulation transcript
+  mandatory: true
+- name: coverage_report
+  description: coverage summary
+  mandatory: true
+Acceptance metrics:
+- metric_id: branch
+  description: branch coverage >= 0.5
+  operator: ">="
+  target_value: "0.5"
+  metric_source: coverage_report
+- metric_id: toggle
+  description: toggle coverage >= 0.5
+  operator: ">="
+  target_value: "0.5"
+  metric_source: coverage_report
+Exclusions:
+- none
+Synthesis target: fpga_generic
+
+Module: inv_stage2
+Title: 1-bit combinational inverter second stage
+
+Functional intent
+Role summary: 1-bit combinational inverter that drives y = ~a.
+Key rules:
+- y = ~a for both input values.
+- No internal state or sequential behavior.
+Performance intent: Same-cycle combinational response.
+Reset semantics: No reset; output depends only on current input.
+Corner cases:
+- a=0
+- a=1
+Open questions:
+- none
+
+Interface details
+Clocking: []
+Signals:
+- name: a
+  direction: INPUT
+  width_expr: 1
+  semantics: inverter input
+- name: y
+  direction: OUTPUT
+  width_expr: 1
+  semantics: inverted output
+Handshake semantics:
+- name: none
+  rules: none
+Transaction unit: one combinational inversion.
+Configuration parameters:
+- name: none
+  default_value: none
+  description: none
+
+Verification plan
+Test goals:
+- Verify y = ~a for both input values.
+Oracle strategy: Direct truth-table reference y_expected = ~a.
+Stimulus strategy: Drive a = 0 then 1.
+Pass/fail criteria:
+- y matches ~a for both input values.
+Coverage targets:
+- coverage_id: branch
+  description: branch coverage for the inverter two-case truth-table flow
+  metric_type: branch
+  goal: 0.5
+  notes: none
+- coverage_id: toggle
+  description: toggle coverage for a and y
+  metric_type: toggle
+  goal: 0.5
+  notes: none
+Reset constraints:
+  min_cycles_after_reset: 0
+  ordering_notes: no reset applies for this combinational design.
+Scenarios:
+- scenario_id: inverter_truth_table
+  description: exercise both input values
+  stimulus: drive a = 0 then 1
+  oracle: y equals ~a
+  pass_fail_criteria: no mismatches across the full truth table
+  illegal: false
+
+Architecture plan
+Block diagram:
+- node_id: inv_stage2
+  description: combinational inverter
+  node_type: combinational_inverter
+  interface_refs: [inv_stage2_if]
+  uses_standard_component: false
+  notes: single NOT operator
+Dependencies: []
+Connections: []
+Clock domains: []
+Resource strategy: one inverter.
+Latency budget: same-cycle combinational propagation.
+Assertion plan:
+  sva:
+  - y == ~a
+  scoreboard_assertions:
+  - inverter truth-table reference matches DUT output
+
+Acceptance criteria
+Required artifacts:
+- name: rtl
+  description: synthesizable RTL for inv_stage2
+  mandatory: true
+- name: testbench
+  description: self-checking truth-table testbench
+  mandatory: true
+- name: lint_report
+  description: verilator lint log
+  mandatory: true
+- name: sim_log
+  description: simulation transcript
+  mandatory: true
+- name: coverage_report
+  description: coverage summary
+  mandatory: true
+Acceptance metrics:
+- metric_id: branch
+  description: branch coverage >= 0.5
+  operator: ">="
+  target_value: "0.5"
+  metric_source: coverage_report
+- metric_id: toggle
+  description: toggle coverage >= 0.5
+  operator: ">="
+  target_value: "0.5"
+  metric_source: coverage_report
+Exclusions:
+- none
+Synthesis target: fpga_generic

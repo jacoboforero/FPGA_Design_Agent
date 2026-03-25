@@ -161,6 +161,7 @@ def test_planner_generates_design_context_and_dag(tmp_path: Path, monkeypatch):
     assert node["testbench_file"] == "rtl/foo_tb.sv"
     assert node["interface"]["signals"]
     assert node["module_contract"]["style"] == "integration"
+    assert node["testbench_contract"]["mode"] == "clocked_reset"
 
     dag_nodes = dag["nodes"]
     assert dag_nodes[0]["id"] == "foo"
@@ -324,6 +325,50 @@ def test_planner_infers_combinational_contract_for_comparator(tmp_path: Path):
     cmp_contract = design_context["nodes"]["cmp"]["module_contract"]
     assert cmp_contract["style"] == "combinational"
     assert cmp_contract["forbid_edge_always"] is True
+
+
+def test_planner_builds_combinational_no_reset_testbench_contract_for_top_wrapper(tmp_path: Path):
+    spec_dir = tmp_path / "specs"
+    out_dir = tmp_path / "out"
+    write_specs(spec_dir)
+
+    l1_path = spec_dir / "L1_functional.json"
+    l1 = json.loads(l1_path.read_text())
+    l1["role_summary"] = "combinational wrapper"
+    l1["key_rules"] = ["y mirrors ~a combinationally"]
+    l1["performance_intent"] = "same-cycle combinational response"
+    l1["reset_semantics"] = "no reset"
+    l1["corner_cases"] = ["a=0", "a=1"]
+    l1_path.write_text(json.dumps(l1, indent=2))
+
+    l2_path = spec_dir / "L2_interface.json"
+    l2 = json.loads(l2_path.read_text())
+    l2["clocking"] = []
+    l2["signals"] = [
+        {"name": "a", "direction": "INPUT", "width_expr": "1", "semantics": "input"},
+        {"name": "y", "direction": "OUTPUT", "width_expr": "1", "semantics": "output"},
+    ]
+    l2["transaction_unit"] = "combinational evaluation"
+    l2["configuration_parameters"] = []
+    l2_path.write_text(json.dumps(l2, indent=2))
+
+    l3_path = spec_dir / "L3_verification.json"
+    l3 = json.loads(l3_path.read_text())
+    l3["test_goals"] = ["check y = ~a"]
+    l3["oracle_strategy"] = "direct combinational truth table"
+    l3["stimulus_strategy"] = "drive a=0 then a=1"
+    l3["pass_fail_criteria"] = ["y matches ~a"]
+    l3["coverage_targets"] = []
+    l3["reset_constraints"] = {"min_cycles_after_reset": 0, "ordering_notes": None}
+    l3_path.write_text(json.dumps(l3, indent=2))
+
+    planner.generate_from_specs(spec_dir=spec_dir, out_dir=out_dir)
+
+    design_context = json.loads((out_dir / "design_context.json").read_text())
+    contract = design_context["nodes"]["foo"]["testbench_contract"]
+    assert contract["mode"] == "combinational_no_reset"
+    assert contract["requires_clock"] is False
+    assert contract["requires_reset"] is False
 
 
 def test_planner_requires_connections_when_generated_children_exist(tmp_path: Path):

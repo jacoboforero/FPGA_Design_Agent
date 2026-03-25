@@ -18,6 +18,7 @@ from agents.common.tb_sanitizer import sanitize_testbench
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
 from core.runtime.config import get_runtime_config
+from core.runtime.testbench_contract import extract_reset_semantics, normalize_testbench_contract
 
 
 def _truncate_prompt_text(text: str, *, max_chars: int) -> str:
@@ -25,6 +26,83 @@ def _truncate_prompt_text(text: str, *, max_chars: int) -> str:
         return text
     omitted = len(text) - max_chars
     return f"{text[:max_chars]}\n... [truncated {omitted} char(s) for prompt efficiency]"
+
+
+def _testbench_contract_for_context(ctx: dict) -> dict:
+    iface = ctx.get("interface") if isinstance(ctx.get("interface"), dict) else {}
+    behavior = str(ctx.get("demo_behavior", "") or "").strip()
+    return normalize_testbench_contract(
+        ctx.get("testbench_contract"),
+        interface_signals=iface.get("signals", []),
+        raw_clocking=ctx.get("clocking"),
+        module_contract=ctx.get("module_contract"),
+        reset_semantics=extract_reset_semantics(behavior),
+    )
+
+
+def _format_testbench_contract(contract: dict) -> str:
+    lines = [
+        f"- mode: {contract.get('mode')}",
+        f"- timing_style: {contract.get('timing_style')}",
+        f"- checker_style: {contract.get('checker_style')}",
+        f"- requires_clock: {contract.get('requires_clock')}",
+        f"- clock_name: {contract.get('clock_name')}",
+        f"- sample_edge: {contract.get('sample_edge')}",
+        f"- drive_edge: {contract.get('drive_edge')}",
+        f"- requires_reset: {contract.get('requires_reset')}",
+        f"- reset_name: {contract.get('reset_name')}",
+        f"- reset_polarity: {contract.get('reset_polarity')}",
+        f"- reset_is_async: {contract.get('reset_is_async')}",
+        f"- post_reset_settle_cycles: {contract.get('post_reset_settle_cycles')}",
+    ]
+    return "\n".join(lines)
+
+
+def _testbench_contract_guidance(contract: dict) -> str:
+    mode = str(contract.get("mode") or "").strip().lower()
+    if mode == "combinational_no_reset":
+        return (
+            "Timing contract (must follow exactly):\n"
+            "- This DUT is combinational for testbench purposes.\n"
+            "- Do not invent clk/clock or rst/reset signals if they are not DUT ports.\n"
+            "- Do not create sampled-edge scoreboards, cycle counters, prev_* gating, or post-reset enable logic.\n"
+            "- Apply input vectors from simple initial/task-based stimulus.\n"
+            "- After each input change, allow at most one small settle delay (for example #1) before checking outputs.\n"
+            "- Compare DUT outputs directly against the combinational expected value.\n"
+        )
+    if mode == "clocked_no_reset":
+        return (
+            "Timing contract (must follow exactly):\n"
+            f"- DUT sample edge: {contract['sample_edge']} {contract['clock_name']}.\n"
+            f"- Drive DUT inputs only on {contract['drive_edge']} {contract['clock_name']}. Do not drive stimulus on DUT sample edge.\n"
+            f"- Use exactly one clock generator block for {contract['clock_name']}.\n"
+            "- Do not invent reset handling or post-reset checker gating.\n"
+            "- Use one scoreboard block on DUT sample edge.\n"
+            "- In that scoreboard block use this order:\n"
+            "  (a) compute expected_next from sampled inputs/state,\n"
+            "  (b) wait #1,\n"
+            "  (c) compare DUT outputs against expected_next,\n"
+            "  (d) commit expected state for next cycle.\n"
+        )
+    return (
+        "Timing contract (must follow exactly):\n"
+        f"- DUT sample edge: {contract['sample_edge']} {contract['clock_name']}.\n"
+        f"- Drive DUT inputs only on {contract['drive_edge']} {contract['clock_name']}. Do not drive stimulus on DUT sample edge.\n"
+        f"- Use exactly one clock generator block for {contract['clock_name']}.\n"
+        "- Use one scoreboard block on DUT sample edge.\n"
+        "- In that scoreboard block use this order:\n"
+        "  (a) handle reset and checker gating,\n"
+        "  (b) compute expected_next using blocking assignments from previous expected state and sampled inputs,\n"
+        "  (c) wait #1,\n"
+        "  (d) compare DUT outputs against expected_next,\n"
+        "  (e) commit expected state for next cycle.\n"
+        "- Do not split reference-update and compare into separate sample-edge blocks.\n"
+        "- Do not rely on multiple #1 delays across multiple always blocks for correctness.\n"
+        "Reset contract:\n"
+        "- Apply reset from time 0.\n"
+        f"- Active-reset expression is {contract['reset_active_expr']}.\n"
+        f"- Gate checker while reset is active and for at least {contract['post_reset_settle_cycles']} sampled edge(s) after reset release.\n"
+    )
 
 
 class TestbenchWorker(AgentWorkerBase):
@@ -151,20 +229,20 @@ class TestbenchWorker(AgentWorkerBase):
 
     def _generate_deterministic_smoke_tb(self, ctx: dict, node_id: str) -> Tuple[str, str]:
         iface = ctx["interface"]["signals"]
-        clocking = self._normalize_clocking(ctx.get("clocking"))
+        tb_contract = _testbench_contract_for_context(ctx)
         tb_module = f"tb_{node_id}"
-        clock_name = clocking["clock_name"]
-        reset_name = clocking["reset_name"]
-        reset_active_low = bool(clocking["reset_active_expr"].startswith("!"))
-        drive_edge = clocking["drive_edge"]
+        clock_name = str(tb_contract.get("clock_name") or "clk")
+        reset_name = str(tb_contract.get("reset_name") or "")
+        reset_active_low = bool(str(tb_contract.get("reset_active_expr") or "").startswith("!"))
+        drive_edge = str(tb_contract.get("drive_edge") or "negedge")
 
         declared_inputs = {
             str(sig.get("name", "")).strip()
             for sig in iface
             if str(sig.get("direction", "")).upper() == "INPUT"
         }
-        has_clock = clock_name in declared_inputs
-        has_reset = bool(reset_name) and reset_name in declared_inputs
+        has_clock = bool(tb_contract.get("requires_clock")) and clock_name in declared_inputs
+        has_reset = bool(tb_contract.get("requires_reset")) and bool(reset_name) and reset_name in declared_inputs
 
         lines: list[str] = [f"module {tb_module};", ""]
         lines.extend(
@@ -208,7 +286,7 @@ class TestbenchWorker(AgentWorkerBase):
                     f"  always #5 {clock_name} = ~{clock_name};",
                     "",
                     "  initial cycle = 0;",
-                    f"  always @({clocking['sample_edge']} {clock_name}) cycle <= cycle + 1;",
+                    f"  always @({tb_contract['sample_edge']} {clock_name}) cycle <= cycle + 1;",
                     "",
                 ]
             )
@@ -229,7 +307,7 @@ class TestbenchWorker(AgentWorkerBase):
             inactive = "1'b1" if reset_active_low else "1'b0"
             lines.append(f"    {reset_name} = {active};")
             if has_clock:
-                lines.append(f"    repeat (3) @({clocking['sample_edge']} {clock_name});")
+                lines.append(f"    repeat (3) @({tb_contract['sample_edge']} {clock_name});")
             else:
                 lines.append("    #30;")
             lines.append(f"    {reset_name} = {inactive};")
@@ -245,7 +323,7 @@ class TestbenchWorker(AgentWorkerBase):
                 lines.append(f"    {stim_inputs[0]} = ~{stim_inputs[0]};")
                 lines.append(f"    @({drive_edge} {clock_name});")
                 lines.append(f"    {stim_inputs[0]} = 0;")
-            lines.append(f"    repeat (20) @({clocking['sample_edge']} {clock_name});")
+            lines.append(f"    repeat (20) @({tb_contract['sample_edge']} {clock_name});")
             lines.append('    $display("PASS: cycle=%0d time=%0t smoke test completed", cycle, $time);')
         else:
             lines.append("    #200;")
@@ -295,39 +373,6 @@ class TestbenchWorker(AgentWorkerBase):
                 return int(text)
         return None
 
-    def _normalize_clocking(self, raw_clocking: object) -> dict:
-        # Accept either dict or list[dict] and apply deterministic fallbacks.
-        item = {}
-        if isinstance(raw_clocking, dict):
-            item = raw_clocking
-        elif isinstance(raw_clocking, list) and raw_clocking and isinstance(raw_clocking[0], dict):
-            item = raw_clocking[0]
-
-        clock_name = str(item.get("clock_name") or "clk")
-        clock_polarity = str(item.get("clock_polarity") or "POSEDGE").upper()
-        sample_edge = "negedge" if clock_polarity == "NEGEDGE" else "posedge"
-        drive_edge = "posedge" if sample_edge == "negedge" else "negedge"
-
-        reset_name_raw = item.get("reset_name")
-        reset_name = str(reset_name_raw).strip() if reset_name_raw else "rst_n"
-        reset_polarity = str(item.get("reset_polarity") or "ACTIVE_LOW").upper()
-        reset_active_low = reset_polarity in {"ACTIVE_LOW", "LOW", "0"}
-        reset_active_expr = f"!{reset_name}" if reset_active_low else reset_name
-
-        reset_is_async_raw = item.get("reset_is_async")
-        reset_is_async = True if reset_is_async_raw is None else bool(reset_is_async_raw)
-
-        return {
-            "clock_name": clock_name,
-            "clock_polarity": clock_polarity,
-            "sample_edge": sample_edge,
-            "drive_edge": drive_edge,
-            "reset_name": reset_name,
-            "reset_polarity": reset_polarity,
-            "reset_is_async": reset_is_async,
-            "reset_active_expr": reset_active_expr,
-        }
-
     def _verification_summary(self, verification: dict) -> str:
         if not isinstance(verification, dict):
             return "- No verification plan provided."
@@ -376,7 +421,7 @@ class TestbenchWorker(AgentWorkerBase):
         verification = ctx.get("verification", {})
         behavior = _truncate_prompt_text(str(ctx.get("demo_behavior", "")), max_chars=4000)
         verification_summary = _truncate_prompt_text(self._verification_summary(verification), max_chars=4000)
-        clocking = self._normalize_clocking(ctx.get("clocking"))
+        tb_contract = _testbench_contract_for_context(ctx)
         tb_module = f"tb_{node_id}"
         system = (
             "You are a hardware RTL testbench generation agent.\n"
@@ -398,23 +443,7 @@ class TestbenchWorker(AgentWorkerBase):
             "- DUT output ports are observe-only; never drive them from testbench logic.\n"
             "- Do not assign DUT output nets via continuous assign, procedural assignment, force/release, or task side-effects.\n"
             "- For protocol/reference modeling, use separate ref_* variables instead of driving DUT outputs.\n\n"
-            "Hard timing contract (must follow exactly):\n"
-            f"- DUT sample edge: {clocking['sample_edge']} {clocking['clock_name']}.\n"
-            f"- Drive DUT inputs only on {clocking['drive_edge']} {clocking['clock_name']}. Do not drive stimulus on DUT sample edge.\n"
-            f"- Use exactly one clock generator block for {clocking['clock_name']}.\n"
-            "- Use one scoreboard block on DUT sample edge.\n"
-            "- In that scoreboard block use this order:\n"
-            "  (a) handle reset and checker gating,\n"
-            "  (b) compute expected_next using blocking assignments from previous expected state and sampled inputs,\n"
-            "  (c) wait #1,\n"
-            "  (d) compare DUT outputs against expected_next,\n"
-            "  (e) commit expected state for next cycle.\n"
-            "- Do not split reference-update and compare into separate sample-edge blocks.\n"
-            "- Do not rely on multiple #1 delays across multiple always blocks for correctness.\n\n"
-            "Reset contract:\n"
-            "- Apply reset from time 0.\n"
-            f"- Active-reset expression is {clocking['reset_active_expr']}.\n"
-            "- Gate checker while reset is active and for at least one sampled edge after reset release.\n\n"
+            f"{_testbench_contract_guidance(tb_contract)}\n"
             "Optional dumping:\n"
             "- If +DUMP is present, enable VCD dump.\n"
             "- +DUMP_FILE=<path> via $value$plusargs(\"DUMP_FILE=%s\", ...), default dump.vcd.\n"
@@ -429,15 +458,7 @@ class TestbenchWorker(AgentWorkerBase):
             f"- DUT input ports (TB may drive): {', '.join(dut_inputs) if dut_inputs else 'none'}\n"
             f"- DUT output ports (observe-only, TB must never drive): {', '.join(dut_outputs) if dut_outputs else 'none'}\n"
             f"- DUT inout ports (avoid driving unless explicitly required): {', '.join(dut_inouts) if dut_inouts else 'none'}\n\n"
-            f"Normalized clock/reset contract:\n"
-            f"- clock_name: {clocking['clock_name']}\n"
-            f"- clock_polarity: {clocking['clock_polarity']}\n"
-            f"- sample_edge: {clocking['sample_edge']}\n"
-            f"- drive_edge: {clocking['drive_edge']}\n"
-            f"- reset_name: {clocking['reset_name']}\n"
-            f"- reset_polarity: {clocking['reset_polarity']}\n"
-            f"- reset_is_async: {clocking['reset_is_async']}\n"
-            f"- reset_active_expr: {clocking['reset_active_expr']}\n\n"
+            f"Normalized testbench contract:\n{_format_testbench_contract(tb_contract)}\n\n"
             f"Behavior summary:\n{behavior}\n\n"
             f"Verification summary:\n{verification_summary}\n\n"
             "Generate the full testbench now."

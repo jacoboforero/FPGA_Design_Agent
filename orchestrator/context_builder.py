@@ -68,4 +68,5 @@ class DemoContextBuilder:
             "child_interfaces": child_interfaces,
             "connections": connections,
             "module_contract": node.get("module_contract", {}),
+            "testbench_contract": node.get("testbench_contract", {}),
         }

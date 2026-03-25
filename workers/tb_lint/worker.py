@@ -18,6 +18,7 @@ from core.observability.emitter import emit_runtime_event
 from core.runtime.retry import RetryableError, TaskInputError, get_max_retries, get_retry_count, next_retry_headers
 from core.runtime.broker import DEFAULT_RESULTS_ROUTING_KEY, TASK_EXCHANGE, resolve_task_queue
 from core.runtime.config import get_runtime_config
+from core.runtime.testbench_contract import normalize_testbench_contract
 
 _PROC_START_RE = re.compile(r"(?im)^\s*(always\s*@\s*\(([^)]*)\)|initial)(?:\s|$)")
 _COMPARE_IF_RE = re.compile(r"if\s*\(([^)]*(?:!==|!=)[^)]*)\)", flags=re.IGNORECASE | re.DOTALL)
@@ -182,8 +183,13 @@ class TestbenchLintWorker(threading.Thread):
                         if name:
                             signal_names.append(str(name))
                 clocking_raw = task.context.get("clocking")
-                clocking = _normalize_clocking_context(clocking_raw, signal_names)
-                clock_name = str(clocking.get("clock_name", "clk") or "clk")
+                clocking = _normalize_clocking_context(
+                    clocking_raw,
+                    signal_names,
+                    task.context.get("testbench_contract"),
+                )
+                clock_name_raw = clocking.get("clock_name")
+                clock_name = str(clock_name_raw).strip() if clock_name_raw else None
                 reset_name_raw = clocking.get("reset_name")
                 reset_name = str(reset_name_raw).strip() if reset_name_raw else None
                 reset_polarity = str(clocking.get("reset_polarity", "ACTIVE_LOW")).upper()
@@ -255,7 +261,7 @@ class TestbenchLintWorker(threading.Thread):
 def _run_tb_semantic_lint(
     *,
     tb_text: str,
-    clock_name: str,
+    clock_name: str | None,
     reset_name: str | None,
     reset_active_low: bool,
     signal_names: list[str],
@@ -505,31 +511,19 @@ def _extract_display_identifiers(text: str) -> set[str]:
     return ids
 
 
-def _normalize_clocking_context(raw_clocking, signal_names: list[str]) -> dict:
-    item = {}
-    if isinstance(raw_clocking, dict):
-        item = raw_clocking
-    elif isinstance(raw_clocking, list):
-        for entry in raw_clocking:
-            if isinstance(entry, dict):
-                item = entry
-                break
-    reset_name = item.get("reset_name")
-    if not reset_name:
-        lowered = {str(name).lower(): str(name) for name in signal_names if isinstance(name, str)}
-        for candidate in ("rst_n", "reset_n", "rst", "reset"):
-            if candidate in lowered:
-                reset_name = lowered[candidate]
-                break
-    reset_polarity = item.get("reset_polarity")
-    if not reset_polarity:
-        reset_polarity = "ACTIVE_LOW" if str(reset_name or "").lower().endswith("_n") else "ACTIVE_HIGH"
+def _normalize_clocking_context(raw_clocking, signal_names: list[str], raw_testbench_contract=None) -> dict:
+    interface_signals = [{"name": name} for name in signal_names if isinstance(name, str)]
+    contract = normalize_testbench_contract(
+        raw_testbench_contract,
+        interface_signals=interface_signals,
+        raw_clocking=raw_clocking,
+    )
     return {
-        "clock_name": item.get("clock_name") or "clk",
-        "clock_polarity": item.get("clock_polarity") or "POSEDGE",
-        "reset_name": reset_name,
-        "reset_polarity": reset_polarity,
-        "reset_is_async": item.get("reset_is_async"),
+        "clock_name": contract.get("clock_name"),
+        "clock_polarity": contract.get("clock_polarity") or "POSEDGE",
+        "reset_name": contract.get("reset_name"),
+        "reset_polarity": contract.get("reset_polarity") or "ACTIVE_LOW",
+        "reset_is_async": contract.get("reset_is_async"),
     }
 
 

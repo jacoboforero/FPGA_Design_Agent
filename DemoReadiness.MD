@@ -27,9 +27,9 @@ The main issue is not that the story is wrong. The issue is that it is slightly 
 My current overall assessment is:
 
 - single-module CLI pass: `High`
-- multi-module CLI pass: `Medium`
-- bad-spec spec-helper showcase: `Medium`
-- tiny benchmark run: `Medium-High`
+- multi-module CLI pass: `Low`
+- bad-spec spec-helper showcase: `Medium-High`
+- tiny benchmark run: `High`
 - local cost/observability summary: `High`
 - hosted AgentOps dashboard as a live dependency: `Medium`
 
@@ -39,6 +39,53 @@ The best version of this demo is:
 - keep the benchmark scope extremely small
 - treat local observability artifacts as primary
 - treat hosted AgentOps as a bonus, not the only way to show costs
+
+## Latest Retest On 2026-03-23
+
+This section reflects a fresh live retest on the current `homebrew-cli-demo` branch state, using the actual CLI workflow in the app container.
+
+Validated positive results:
+
+- `PYTHONPATH=. poetry run python3 apps/cli/cli.py --config config/runtime.yaml --spec-file tests/test_specs/01_counter3_basic.txt --yes --narrative-mode off --run-name demo_retest_counter3_basic_20260323`
+  Result: `PASS` on the first try.
+  Notes: this is now the safest current live CLI example. It reached `sim_attempt1: SUCCESS` and `acceptance_attempt1: SUCCESS`. Observability summary: `artifacts/observability/demo_retest_counter3_basic_20260323_summary.json`.
+
+- interactive bad-spec helper rehearsal using `artifacts/tmp/demo_bad_counter3_spec.txt`
+  Result: the helper behavior itself worked.
+  Notes: the helper asked a single plain-English clarification question about the missing reference-checking plan, accepted a chat answer, and resumed planning/execution automatically. It did not expose internal `L*` jargon in the interaction. The downstream run still failed later in `tb_lint`/`debug`, so this is good as a helper demo, not as a second live end-to-end success path. Observability summary: `artifacts/observability/demo_retest_bad_counter3_helper_pty_20260323_summary.json`.
+
+- `PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign demo_readiness --run-id smoke10_20260323_retest2 --max-problems 10`
+  Result: `PASS` with `10/10`.
+  Notes: benchmark artifacts were generated successfully under `artifacts/benchmarks/verilog_eval/demo_readiness/smoke10_20260323_retest2/`, including `run_manifest.json`, `canonical/summary.txt`, `canonical/summary.csv`, and `canonical/aggregate.json`.
+
+Negative results that materially affect the demo:
+
+- `tests/test_specs/02_counter3_load.txt`
+  Result: `FAIL`.
+  Notes: it failed in `tb_lint_attempt1`, then `debug_attempt1`, and is not demo-safe.
+
+- `tests/test_specs/demo_and2_structured.txt`
+  Result: `PASS`, but only after retries.
+  Notes: it required repeated TB/debug repair and only passed on `sim_attempt3`. This is now a fallback, not the preferred live example.
+
+- `tests/test_specs/demo_inv1_wrapper_multimodule.txt`
+  Result: `FAIL`.
+  Notes: `inv1_leaf` passed, but `inv1_top` failed after repeated top-level `tb_lint`/`sim`/`debug` churn through attempt 4. Observability summary: `artifacts/observability/demo_retest_inv1_wrapper_multimodule_20260323_summary.json`.
+
+- `tests/test_specs/demo_and_not_multimodule.txt`
+  Result: `FAIL`.
+  Notes: `inv1_cell` passed, but `and2_cell` failed at `tb_lint_attempt1`, then `debug_attempt1`, causing the top-level run to fail. Observability summary: `artifacts/observability/demo_retest_and_not_multimodule_20260323_summary.json`.
+
+- `tests/test_specs/05_pwm_led_multimodule.txt`
+  Result: `FAIL` during spec collection.
+  Notes: current error is `Spec/module mismatch between Module blocks and L4.block_diagram non-standard nodes; missing Module section(s): pwm_counter8, duty_reg8, pwm_compare8.`
+
+Current bottom line from the retest:
+
+- the live single-module CLI demo is ready if you use `tests/test_specs/01_counter3_basic.txt`
+- the spec-helper interaction is ready to show as an interaction
+- the 10-problem benchmark harness is ready, but the benchmark environment must include `langchain<0.2>` for the current `sv-iv-analyze` dependency path
+- the live multi-module CLI success path is still the main demo blocker
 
 ## Validated Runs On 2026-03-19
 
@@ -66,10 +113,10 @@ Additional negative results that matter for demo planning:
 
 | Demo Item | Readiness | Why It Is Reasonable To Demo | Main Risks | Recommended Demo Posture |
 | --- | --- | --- | --- | --- |
-| 3-bit counter with a filled spec through CLI | High | The engineer CLI flow is documented, the planner and execution checkpoints are documented, and the execution pipeline has passing automated coverage. | Broker, LLM, and tool dependencies must all be healthy. The CLI still pauses at `Proceed to execution?` unless `--yes` is passed. | Use a prepared known-good spec file, use `engineer_fast`, and pass `--yes`. |
-| Simple multi-module design through CLI that passes | Medium | The multimodule spec flow has test coverage, and the execution pipeline has coverage for a multi-node DAG. | More moving parts than the single-module case. Success is more sensitive to planner/spec quality and design choice. | Keep the design very small, with 2-3 modules max, and pre-run the exact example you plan to show. |
-| 3-bit counter with a bad spec to show spec helper | Medium | The helper loop is real and supports edit/chat/draft recovery while tracking missing fields. | Current UX still exposes legacy numbered-section wording and raw “missing fields” status. A badly chosen bad spec could create a long, messy interaction. | Make the spec incomplete but salvageable. Omit 1-2 important facts instead of making it chaotic. |
-| Benchmarking run with a limited set of problems | Medium-High | Benchmark mode is documented, configurable, and has recent automated coverage for direct and orchestrated benchmark behavior plus run artifact generation. | Benchmark mode has more environment prerequisites. The current default path is `direct_single_module`, which is not the same thing as the long-term intended shared planner/spec-helper architecture. | Keep it tiny. Prefer `--max-problems 1` live, or at most `3` if pre-timed. Show dry-run first if useful. |
+| 3-bit counter with a filled spec through CLI | High | `tests/test_specs/01_counter3_basic.txt` currently passes cleanly first try end-to-end. | Broker, LLM, and tool dependencies must all be healthy. The CLI still pauses at `Proceed to execution?` unless `--yes` is passed. | Use `tests/test_specs/01_counter3_basic.txt`, pass `--yes`, and treat this as the anchor live run. |
+| Simple multi-module design through CLI that passes | Low | The multimodule pipeline exists, but the currently prepared multimodule fixtures do not pass reliably in live retesting. | The current top-level multimodule flow falls into TB lint/sim/debug churn or fails collection outright. | Do not rely on a live multimodule pass unless you fix it first. If you keep this segment, use a prerecorded run or make it an honest “known remaining limitation” discussion. |
+| 3-bit counter with a bad spec to show spec helper | Medium-High | The helper now asks plain-language clarification questions and keeps internal rigor labels hidden. | The interaction works, but the downstream run can still fall into TB/debug instability if you continue all the way through execution. | Use a narrowly incomplete spec, show 1-2 clarifications, and stop after the helper has repaired the spec unless the downstream path has been revalidated that day. |
+| Benchmarking run with a limited set of problems | High | The 10-problem canonical slice passed `10/10` in the current retest. | The benchmark environment currently depends on `langchain<0.2` being present for `sv-iv-analyze`. | Either ensure that dependency is installed in the demo environment or precompute the benchmark artifacts and show the results. |
 | Show AgentOps working and show costs for all runs | Medium for hosted AgentOps, High for local cost evidence | The tracker writes local cost and summary artifacts even when AgentOps is unavailable, and run-scoped observability paths are tested. | Hosted AgentOps depends on env setup, key availability, SDK availability, and network behavior. | Use local `artifacts/observability/...` as the primary proof. Treat the AgentOps dashboard as a bonus view. |
 
 ## Detailed Evaluation By Demo Segment
@@ -92,7 +139,7 @@ Main risks:
 
 Recommendation:
 
-- use a prepared spec file for the “good” 3-bit counter
+- use `tests/test_specs/01_counter3_basic.txt` for the “good” 3-bit counter
 - keep the design intentionally boring
 - use the passing run to briefly show that the planner emitted a DAG and design context before execution
 
@@ -115,11 +162,10 @@ Main risks:
 
 Recommendation:
 
-- use a multi-module example that is structurally simple rather than conceptually novel
-- the best choice is probably a design that stays close to the counter theme so the instructor does not have to load a new mental model
-- good candidates are a top module plus a small counter core plus a tiny terminal-count or decode helper
+- as of the latest retest, do not plan on a live multimodule success unless you fix and revalidate that path first
+- if you keep the segment, either use a prerecorded successful run or present it as a clearly identified remaining limitation
 
-I would not use this segment to prove design complexity. I would use it to prove that the system can handle decomposition at all.
+Right now this is the only part of the proposed demo that is not substantively ready as a live end-to-end success path.
 
 ### 3. Bad 3-Bit Counter Spec To Demonstrate Spec Helper
 
@@ -133,9 +179,8 @@ Why it is worth including:
 
 Current readiness caveat:
 
-- the helper still thinks and talks in terms of the legacy numbered spec/checklist layout
-- current CLI status text includes `missing fields remaining` and `Current section: <phase>`
-- that is functionally useful, but it is not the clean future architecture you have documented elsewhere
+- the helper interaction itself is now human-facing and avoids internal rigor labels
+- the remaining weakness is not the wording of the questions; it is whether you choose to continue into a full downstream execution run after the helper has repaired the spec
 
 Main risks:
 
@@ -177,8 +222,8 @@ Main risks:
 
 Recommendation:
 
-- keep the live benchmark run to `--max-problems 1` if you want reliability
-- use `list-problems` and `run --dry-run` as quick credibility steps if useful
+- the current 10-problem canonical slice is passing, so the benchmark segment itself is in good shape
+- the remaining caveat is environment packaging: the current app container needed `langchain<0.2>` installed for `sv-iv-analyze`
 - if you want the benchmark segment to feel cleaner, do the real benchmark run beforehand and show the resulting `summary.txt`, `summary.csv`, and `aggregate.json`
 
 This segment is best positioned as “we can evaluate the system on benchmark-style workloads,” not “this is the canonical architecture.”
@@ -232,7 +277,7 @@ The most important adjustment I would make is this:
 
 A better framing is:
 
-- core live demo: good counter run, spec helper recovery, simple multi-module run
+- core live demo: good counter run, spec helper recovery
 - controlled evaluation segment: tiny benchmark run or precomputed benchmark outputs
 - observability close: local cost artifacts first, hosted AgentOps second
 
@@ -315,7 +360,7 @@ If you want the safest version of the demo, I would scope it like this:
 
 - live: good counter
 - live: bad counter spec-helper recovery
-- live: tiny multi-module example only if already proven stable
+- prerecorded or omitted: multi-module example unless it is revalidated first
 - live or precomputed: benchmark
 - live: local observability and cost files
 - optional: hosted AgentOps dashboard

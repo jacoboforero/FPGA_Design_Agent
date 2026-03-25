@@ -35,6 +35,7 @@ from core.schemas.specifications import (
     SpecificationState,
     VerificationScenario,
 )
+from core.runtime.testbench_contract import build_testbench_contract
 from orchestrator.preplan_validator import ValidationIssue, validate_preplan_inputs
 
 SPEC_DIR = Path("artifacts/task_memory/specs")
@@ -761,6 +762,12 @@ def generate_from_specs(
             interface_signals=interface_signals,
             children=children,
         )
+        testbench_contract = build_testbench_contract(
+            interface_signals=interface_signals,
+            raw_clocking=clocking,
+            module_contract=node_contract,
+            reset_semantics=mod_l1.reset_semantics,
+        )
 
         nodes[module] = {
             "rtl_file": rtl_file,
@@ -777,6 +784,7 @@ def generate_from_specs(
             "children": children,
             "connections": node_connections,
             "module_contract": node_contract,
+            "testbench_contract": testbench_contract,
         }
 
     design_context = {

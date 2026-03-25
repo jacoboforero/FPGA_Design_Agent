@@ -33,6 +33,7 @@ from core.observability.agentops_tracker import get_tracker
 from core.observability.setup import configure_observability
 from core.runtime.broker import create_run_routing, declare_task_topology
 from core.runtime.config import DEFAULT_CONFIG_PATH, get_runtime_config, set_runtime_config
+from core.runtime.testbench_contract import build_testbench_contract
 from core.schemas.contracts import AgentType, EntityType, TaskMessage, TaskStatus
 from orchestrator import planner
 from orchestrator.context_builder import DemoContextBuilder
@@ -869,6 +870,12 @@ def _build_direct_design_context(
             "description": f"Direct benchmark module for {target_module_name}.",
         },
     }
+    node["testbench_contract"] = build_testbench_contract(
+        interface_signals=interface_signals,
+        raw_clocking=clocking,
+        module_contract=node["module_contract"],
+        reset_semantics="no reset" if contract_style == "combinational" else "",
+    )
     design_context = {
         "design_context_hash": None,
         "nodes": {target_module_name: node},

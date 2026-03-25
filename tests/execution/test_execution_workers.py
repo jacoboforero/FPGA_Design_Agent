@@ -22,6 +22,16 @@ from workers.sim.worker import SimulationWorker
 from workers.tb_lint.worker import TestbenchLintWorker
 
 
+class CaptureGateway:
+    def __init__(self, response: FakeResponse):
+        self.response = response
+        self.messages = None
+
+    async def generate(self, messages, config):
+        self.messages = messages
+        return self.response
+
+
 def _iface_signals() -> list[dict]:
     return [
         {"name": "clk", "direction": "INPUT", "width": 1, "semantics": "clock"},
@@ -409,6 +419,54 @@ def test_testbench_worker_rewrites_invalid_dump_plusargs(tmp_path):
     contents = Path(result.artifacts_path).read_text()
     assert "$test$plusargs(\"DUMP\")" in contents
     assert "$value$plusargs(\"DUMP\")" not in contents
+
+
+def test_testbench_worker_prompt_uses_combinational_no_reset_contract(tmp_path):
+    worker = TestbenchWorker(connection_params=None, stop_event=None)
+    gateway = CaptureGateway(
+        FakeResponse(
+            content=(
+                "module tb_demo_top;\n"
+                "  reg a;\n"
+                "  wire y;\n"
+                "  demo_top dut(.a(a), .y(y));\n"
+                "  initial begin a = 0; #1; a = 1; #1; $finish(0); end\n"
+                "endmodule\n"
+            )
+        )
+    )
+    worker.gateway = gateway
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.TESTBENCH,
+        context={
+            "node_id": "demo_top",
+            "rtl_path": str(tmp_path / "demo_top.sv"),
+            "interface": {
+                "signals": [
+                    {"name": "a", "direction": "INPUT", "width": 1, "semantics": "input"},
+                    {"name": "y", "direction": "OUTPUT", "width": 1, "semantics": "output"},
+                ]
+            },
+            "module_contract": {"style": "integration"},
+            "testbench_contract": {
+                "mode": "combinational_no_reset",
+                "timing_style": "combinational",
+                "checker_style": "combinational_settle",
+                "requires_clock": False,
+                "requires_reset": False,
+            },
+            "demo_behavior": "Reset: no reset\nPerformance: same-cycle combinational response.",
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert gateway.messages is not None
+    system_prompt = gateway.messages[0].content
+    user_prompt = gateway.messages[1].content
+    assert "Do not invent clk/clock or rst/reset signals" in system_prompt
+    assert "Apply reset from time 0." not in system_prompt
+    assert "mode: combinational_no_reset" in user_prompt
 
 
 def test_lint_worker_missing_verilator(tmp_path):
@@ -1492,3 +1550,90 @@ def test_debug_worker_local_validation_retry_then_success(sandbox, monkeypatch):
     assert result.status is TaskStatus.SUCCESS
     assert worker.gateway.calls == 2
     assert "Local validation passed" in result.log_output
+
+
+def test_debug_worker_prompt_uses_combinational_no_reset_contract(sandbox, monkeypatch):
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.debug.max_attempts = 1
+    set_runtime_config(cfg)
+    monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
+
+    def fake_run(cmd, timeout_s):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("agents.debug.worker._run_subprocess", fake_run)
+
+    rtl = Path("demo_top.sv")
+    tb = Path("demo_top_tb.sv")
+    rtl.write_text("module demo_top(input a, output y); assign y = ~a; endmodule\n")
+    tb.write_text(
+        "module tb_demo_top;\n"
+        "  reg a;\n"
+        "  wire y;\n"
+        "  demo_top dut(.a(a), .y(y));\n"
+        "  initial begin a = 0; #1; $finish(0); end\n"
+        "endmodule\n"
+    )
+
+    worker = DebugWorker(connection_params=None, stop_event=None)
+    gateway = CaptureGateway(
+        FakeResponse(
+            content=json.dumps(
+                {
+                    "summary": "minimal tb cleanup",
+                    "touched_files": ["tb"],
+                    "rtl_lines": None,
+                    "tb_lines": [
+                        "module tb_demo_top;",
+                        "  reg a;",
+                        "  wire y;",
+                        "  demo_top dut(.a(a), .y(y));",
+                        "  initial begin",
+                        "    a = 0;",
+                        "    #1;",
+                        "    a = 1;",
+                        "    #1;",
+                        "    $finish(0);",
+                        "  end",
+                        "endmodule",
+                    ],
+                    "risks": [],
+                    "next_steps": ["re-run tb lint"],
+                }
+            )
+        )
+    )
+    worker.gateway = gateway
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.DEBUG,
+        context={
+            "node_id": "demo_top",
+            "rtl_path": str(rtl),
+            "tb_path": str(tb),
+            "attempt": 1,
+            "debug_reason": "tb_lint",
+            "interface": {
+                "signals": [
+                    {"name": "a", "direction": "INPUT", "width": 1, "semantics": "input"},
+                    {"name": "y", "direction": "OUTPUT", "width": 1, "semantics": "output"},
+                ]
+            },
+            "module_contract": {"style": "integration"},
+            "testbench_contract": {
+                "mode": "combinational_no_reset",
+                "timing_style": "combinational",
+                "checker_style": "combinational_settle",
+                "requires_clock": False,
+                "requires_reset": False,
+            },
+            "demo_behavior": "Reset: no reset\nPerformance: same-cycle combinational response.",
+        },
+    )
+    result = worker.handle_task(task)
+    assert gateway.messages is not None
+    system_prompt = gateway.messages[0].content
+    user_prompt = gateway.messages[1].content
+    assert "Do not invent clk/clock or rst/reset signals" in system_prompt
+    assert "mode: combinational_no_reset" in user_prompt
+    assert result.status is TaskStatus.SUCCESS
