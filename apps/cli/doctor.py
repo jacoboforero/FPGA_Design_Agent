@@ -16,6 +16,7 @@ from typing import List
 import pika
 
 from core.runtime.config import DEFAULT_CONFIG_PATH, RuntimeConfig, get_runtime_config
+from core.runtime.paths import resource_root
 
 PROBLEM_RE = re.compile(r"^(Prob\d+)", re.IGNORECASE)
 
@@ -75,6 +76,13 @@ def _benchmark_broker_ready(config: RuntimeConfig) -> tuple[bool, str]:
         return True, "RabbitMQ reachable for orchestrated benchmark execution."
     except Exception as exc:  # noqa: BLE001
         return False, f"RabbitMQ unreachable for orchestrated benchmark execution: {exc}"
+
+
+def _resolve_benchmark_resource_path(path_like: str | Path) -> Path:
+    path = Path(path_like).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (resource_root() / path).resolve()
 
 
 def _prompt_problem_id(path: Path) -> str | None:
@@ -185,7 +193,7 @@ def run_checks(config: RuntimeConfig, *, force_benchmark: bool = False) -> List[
 
     benchmark_needed = bool(force_benchmark)
     if benchmark_needed:
-        root = Path(config.benchmark.verilog_eval_root).resolve()
+        root = _resolve_benchmark_resource_path(config.benchmark.verilog_eval_root)
         required = [
             root / "scripts" / "sv-iv-analyze",
             root / "Makefile.in",
@@ -203,7 +211,7 @@ def run_checks(config: RuntimeConfig, *, force_benchmark: bool = False) -> List[
         else:
             results.append(CheckResult("benchmark_framework", "PASS", f"orchestrated benchmark framework ready at {root}"))
 
-        prompts_dir = Path(config.benchmark.prompts_dir).resolve()
+        prompts_dir = _resolve_benchmark_resource_path(config.benchmark.prompts_dir)
         if prompts_dir.exists():
             n_official, n_legacy, n_total = _recognized_prompt_counts(prompts_dir)
             results.append(

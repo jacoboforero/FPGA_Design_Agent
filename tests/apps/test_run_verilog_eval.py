@@ -55,6 +55,12 @@ def test_summary_metrics_parses_official_kv_lines(tmp_path: Path):
     assert metrics["tokens"] == 12345
 
 
+def test_resolve_resource_path_uses_mhd_resource_root_for_relative(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("MHD_RESOURCE_ROOT", str(tmp_path))
+    resolved = run_verilog_eval._resolve_resource_path("third_party/verilog-eval")
+    assert resolved == (tmp_path / "third_party" / "verilog-eval").resolve()
+
+
 def test_summary_rows_parses_problem_rows(tmp_path: Path):
     summary_csv = tmp_path / "summary.csv"
     summary_csv.write_text(

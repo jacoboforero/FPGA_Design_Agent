@@ -72,6 +72,13 @@ If you want the full installed CLI smoke too:
 MHD_RUN_FULL_SMOKE=1 bash scripts/test_homebrew_install.sh
 ```
 
+By default, that full smoke uses `tests/test_specs/01_counter3_basic.txt`, the
+current safest live engineer demo fixture. You can override it with
+`MHD_SMOKE_SPEC=/absolute/path/to/spec.txt`.
+The helper also pins the full smoke broker to `amqp://guest:guest@localhost:5672/`
+unless you override it with
+`MHD_SMOKE_RABBITMQ_URL=amqp://user:password@host:5672/`.
+
 Runtime notes:
 - `mhd doctor` verifies the installed config, credentials, and tools.
 - RabbitMQ must already be installed and running.

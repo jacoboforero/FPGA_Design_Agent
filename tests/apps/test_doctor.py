@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import apps.cli.doctor as doctor
 from apps.cli.doctor import run_checks
 from core.runtime.config import load_runtime_config
 
@@ -22,6 +23,12 @@ def test_doctor_reports_missing_openai_key(monkeypatch):
     results = run_checks(cfg, force_benchmark=False)
     statuses = _status_by_name(results)
     assert statuses.get("llm_credentials") == "FAIL"
+
+
+def test_doctor_resolves_benchmark_paths_from_resource_root(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("MHD_RESOURCE_ROOT", str(tmp_path))
+    resolved = doctor._resolve_benchmark_resource_path("third_party/verilog-eval")
+    assert resolved == (tmp_path / "third_party" / "verilog-eval").resolve()
 
 
 def test_doctor_reports_missing_benchmark_framework(tmp_path: Path, monkeypatch):

@@ -9,6 +9,11 @@ TAP_DIR="$TMPDIR/homebrew-mhd-demo"
 FORMULA_DIR="$TAP_DIR/Formula"
 FORMULA_PATH="$FORMULA_DIR/mhd.rb"
 KEEP_TAP="${MHD_KEEP_TAP:-0}"
+SMOKE_SPEC="${MHD_SMOKE_SPEC:-$ROOT/tests/test_specs/01_counter3_basic.txt}"
+SMOKE_RABBITMQ_URL="${MHD_SMOKE_RABBITMQ_URL:-amqp://guest:guest@localhost:5672/}"
+
+export HOMEBREW_NO_AUTO_UPDATE="${HOMEBREW_NO_AUTO_UPDATE:-1}"
+export HOMEBREW_NO_INSTALL_CLEANUP="${HOMEBREW_NO_INSTALL_CLEANUP:-1}"
 
 cleanup() {
   if [[ "$KEEP_TAP" != "1" ]]; then
@@ -98,7 +103,7 @@ echo "[4/7] tap local formula repo"
 brew tap "$TAP_NAME" "$TAP_DIR"
 
 echo "[5/7] install mhd from local tap"
-if ! HOMEBREW_NO_AUTO_UPDATE=1 brew install "$TAP_NAME/mhd"; then
+if ! brew install "$TAP_NAME/mhd"; then
   brew link --overwrite mhd >/dev/null 2>&1 || true
   if command -v mhd >/dev/null 2>&1; then
     echo "Homebrew reported a non-fatal formula install issue, but mhd is linked and runnable; continuing smoke test."
@@ -121,13 +126,18 @@ mhd --help >/dev/null
 USE_LLM=1 OPENAI_API_KEY="${OPENAI_API_KEY:-dummy}" mhd doctor
 
 if [[ "${MHD_RUN_FULL_SMOKE:-0}" == "1" ]]; then
-  echo "[7/7] run installed full CLI smoke"
+  if [[ ! -f "$SMOKE_SPEC" ]]; then
+    echo "Smoke spec not found: $SMOKE_SPEC" >&2
+    exit 1
+  fi
+  echo "[7/7] run installed full CLI smoke with $(basename "$SMOKE_SPEC")"
   WORKDIR="$(mktemp -d)"
   pushd "$WORKDIR" >/dev/null
   MHD_ENV_FILE="$ROOT/.env" \
+    RABBITMQ_URL="$SMOKE_RABBITMQ_URL" \
     USE_LLM=1 \
     timeout 420s mhd \
-      --spec-file "$ROOT/tests/test_specs/demo_and2_structured.txt" \
+      --spec-file "$SMOKE_SPEC" \
       --yes \
       --narrative-mode off \
       --run-name homebrew_install_smoke

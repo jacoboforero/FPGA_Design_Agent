@@ -31,6 +31,14 @@ The script:
 4. runs `mhd --help` and `mhd doctor`,
 5. optionally runs a full CLI smoke with `MHD_RUN_FULL_SMOKE=1`.
 
+Full-smoke notes:
+
+- defaults to the safer current engineer demo spec: `tests/test_specs/01_counter3_basic.txt`
+- override the spec with `MHD_SMOKE_SPEC=/absolute/path/to/spec.txt`
+- defaults the full smoke broker to `amqp://guest:guest@localhost:5672/`
+- override the broker with `MHD_SMOKE_RABBITMQ_URL=amqp://user:password@host:5672/`
+- disables Homebrew auto-update and install cleanup by default to keep demo setup faster
+
 ## Runtime Prerequisites
 
 - RabbitMQ must already be installed and running.

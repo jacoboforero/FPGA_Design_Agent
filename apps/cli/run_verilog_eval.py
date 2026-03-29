@@ -33,6 +33,7 @@ from core.observability.agentops_tracker import get_tracker
 from core.observability.setup import configure_observability
 from core.runtime.broker import create_run_routing, declare_task_topology
 from core.runtime.config import DEFAULT_CONFIG_PATH, get_runtime_config, set_runtime_config
+from core.runtime.paths import resource_root, workspace_root
 from core.runtime.testbench_contract import build_testbench_contract
 from core.schemas.contracts import AgentType, EntityType, TaskMessage, TaskStatus
 from orchestrator import planner
@@ -203,6 +204,20 @@ def _slug_token(text: str | None, *, default: str) -> str:
     raw = str(text or "").strip()
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-._")
     return cleaned or default
+
+
+def _resolve_resource_path(path_like: str | Path) -> Path:
+    path = Path(path_like).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (resource_root() / path).resolve()
+
+
+def _resolve_workspace_path(path_like: str | Path) -> Path:
+    path = Path(path_like).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (workspace_root() / path).resolve()
 
 
 def _hash_json_payload(payload: dict[str, Any]) -> str:
@@ -2065,10 +2080,10 @@ def run_from_args(args: argparse.Namespace) -> None:
     if command == "run" and build_dir_arg:
         command = "analyze"
 
-    root = Path(benchmark_cfg.verilog_eval_root).resolve()
-    prompts_dir = Path(benchmark_cfg.prompts_dir).resolve()
+    root = _resolve_resource_path(benchmark_cfg.verilog_eval_root)
+    prompts_dir = _resolve_resource_path(benchmark_cfg.prompts_dir)
     output_root_arg = getattr(args, "output_root", None)
-    output_root = Path(output_root_arg).resolve() if output_root_arg else Path(benchmark_cfg.output_root).resolve()
+    output_root = _resolve_workspace_path(output_root_arg) if output_root_arg else _resolve_workspace_path(benchmark_cfg.output_root)
 
     if command == "compare":
         left_raw = getattr(args, "left_dir", None)
@@ -2104,7 +2119,7 @@ def run_from_args(args: argparse.Namespace) -> None:
 
     oracle_manifest: dict[str, dict[str, str]] | None = None
     if benchmark_cfg.oracle_manifest:
-        oracle_manifest = _load_oracle_manifest(Path(benchmark_cfg.oracle_manifest).resolve())
+        oracle_manifest = _load_oracle_manifest(_resolve_resource_path(benchmark_cfg.oracle_manifest))
 
     max_problems = max(0, int(getattr(args, "max_problems", 0) or 0))
     only_problem = getattr(args, "only_problem", []) or []
