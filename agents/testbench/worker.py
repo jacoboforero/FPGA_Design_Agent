@@ -66,9 +66,11 @@ def _testbench_contract_guidance(contract: dict) -> str:
             "- This DUT is combinational for testbench purposes.\n"
             "- Do not invent clk/clock or rst/reset signals if they are not DUT ports.\n"
             "- Do not create sampled-edge scoreboards, cycle counters, prev_* gating, or post-reset enable logic.\n"
+            "- Do not use persistent ref_* scoreboard state across multiple vectors.\n"
             "- Apply input vectors from simple initial/task-based stimulus.\n"
             "- After each input change, allow at most one small settle delay (for example #1) before checking outputs.\n"
             "- Compare DUT outputs directly against the combinational expected value.\n"
+            "- If an expected value helper is needed, use a one-shot combinational expression or helper function, not a ref_* register that is updated across vectors.\n"
         )
     if mode == "clocked_no_reset":
         return (
@@ -442,13 +444,16 @@ class TestbenchWorker(AgentWorkerBase):
             "- Drive only DUT input ports from the testbench.\n"
             "- DUT output ports are observe-only; never drive them from testbench logic.\n"
             "- Do not assign DUT output nets via continuous assign, procedural assignment, force/release, or task side-effects.\n"
-            "- For protocol/reference modeling, use separate ref_* variables instead of driving DUT outputs.\n\n"
+            "- For clocked or stateful protocol/reference modeling, use separate ref_* variables instead of driving DUT outputs.\n"
+            "- For combinational/no-reset benches, prefer direct expected-value comparisons and avoid persistent ref_* scoreboards.\n\n"
             f"{_testbench_contract_guidance(tb_contract)}\n"
             "Optional dumping:\n"
             "- If +DUMP is present, enable VCD dump.\n"
             "- +DUMP_FILE=<path> via $value$plusargs(\"DUMP_FILE=%s\", ...), default dump.vcd.\n"
             "- Optional +DUMP_START/+DUMP_END window using %d.\n"
-            "- Do not treat DUMP_START=0 as disabled."
+            "- Do not treat DUMP_START=0 as disabled.\n"
+            "- Do not implement dump control with unconditional always-begin polling loops.\n"
+            "- Any always loop must have an unconditional timing or event control at the top of each iteration."
         )
         user = (
             f"Task:\n"

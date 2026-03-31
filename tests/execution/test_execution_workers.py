@@ -465,6 +465,9 @@ def test_testbench_worker_prompt_uses_combinational_no_reset_contract(tmp_path):
     system_prompt = gateway.messages[0].content
     user_prompt = gateway.messages[1].content
     assert "Do not invent clk/clock or rst/reset signals" in system_prompt
+    assert "Do not use persistent ref_* scoreboard state across multiple vectors" in system_prompt
+    assert "avoid persistent ref_* scoreboards" in system_prompt
+    assert "Do not implement dump control with unconditional always-begin polling loops" in system_prompt
     assert "Apply reset from time 0." not in system_prompt
     assert "mode: combinational_no_reset" in user_prompt
 
@@ -699,6 +702,52 @@ def test_tb_lint_worker_delay_semantic_ignores_comment_tokens_and_allows_two_del
     result = worker.handle_task(task)
     assert result.status is TaskStatus.SUCCESS
     assert "TBSEM006" not in result.log_output
+
+
+def test_tb_lint_worker_semantic_failure_detects_zero_time_polling_loop(tmp_path, monkeypatch):
+    worker = TestbenchLintWorker(connection_params=None, stop_event=None)
+    worker.iverilog = "iverilog"
+    rtl_path = tmp_path / "demo.sv"
+    tb_path = tmp_path / "demo_tb.sv"
+    rtl_path.write_text("module demo(input a, output y); assign y = a; endmodule\n")
+    tb_path.write_text(
+        "`timescale 1ns/1ps\n"
+        "module tb_demo;\n"
+        "  reg a;\n"
+        "  wire y;\n"
+        "  integer dump_enabled;\n"
+        "  integer dump_start;\n"
+        "  demo dut(.a(a), .y(y));\n"
+        "  always begin\n"
+        "    if (dump_enabled && dump_start > 0) begin\n"
+        "      #(dump_start);\n"
+        "      $dumpvars(0, tb_demo);\n"
+        "    end\n"
+        "  end\n"
+        "  initial begin\n"
+        "    a = 0;\n"
+        "    #1;\n"
+        "    if (y !== a) begin\n"
+        "      $display(\"FAIL\");\n"
+        "      $finish(1);\n"
+        "    end\n"
+        "    $finish(0);\n"
+        "  end\n"
+        "endmodule\n"
+    )
+
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("workers.tb_lint.worker.subprocess.run", fake_run)
+    task = TaskMessage(
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.TESTBENCH_LINTER,
+        context={"rtl_path": str(rtl_path), "tb_path": str(tb_path)},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "TBSEM008" in result.log_output
 
 
 def test_tb_lint_worker_semantic_can_be_disabled(tmp_path, monkeypatch):
@@ -1077,8 +1126,10 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
         def __init__(self, responses):
             self.responses = responses
             self.calls = 0
+            self.call_messages = []
 
         async def generate(self, messages, config):
+            self.call_messages.append(messages)
             resp = self.responses[self.calls]
             self.calls += 1
             return resp
@@ -1097,10 +1148,22 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
     tb = Path("demo_tb.sv")
     rtl.write_text("module demo; endmodule\n")
     tb.write_text('module tb_demo; initial begin $display("old"); $finish; end endmodule\n')
+    invalid_json = (
+        "{\n"
+        '  "summary": "needs retry",\n'
+        '  "touched_files": ["tb"],\n'
+        '  "rtl_lines": null,\n'
+        '  "tb_lines": [\n'
+        '    "module tb_demo;",\n'
+        '    "endmodule"\n'
+        '  ], // invalid comment\n'
+        '  "risks": [],\n'
+        '  "next_steps": ["retry"]\n'
+        "}\n"
+    )
     worker.gateway = SequenceGateway(
         [
-            FakeResponse(content="not json"),
-            FakeResponse(content="still not json"),
+            FakeResponse(content=invalid_json),
             FakeResponse(
                 content=json.dumps(
                     {
@@ -1129,7 +1192,15 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
     )
     result = worker.handle_task(task)
     assert result.status is TaskStatus.SUCCESS
-    assert worker.gateway.calls == 3
+    assert worker.gateway.calls == 2
+    retry_messages = worker.gateway.call_messages[1]
+    assert len(retry_messages) == 4
+    assert retry_messages[2].content.strip() == invalid_json.strip()
+    retry_prompt = retry_messages[3].content
+    assert "Your previous response was not valid JSON." in retry_prompt
+    assert "Parse error:" in retry_prompt
+    assert "Problem excerpt:" in retry_prompt
+    assert "// invalid comment" in retry_prompt
 
 
 def test_debug_worker_success(sandbox, monkeypatch):
@@ -1635,5 +1706,8 @@ def test_debug_worker_prompt_uses_combinational_no_reset_contract(sandbox, monke
     system_prompt = gateway.messages[0].content
     user_prompt = gateway.messages[1].content
     assert "Do not invent clk/clock or rst/reset signals" in system_prompt
+    assert "Do not keep persistent ref_* scoreboard state across multiple vectors" in system_prompt
+    assert "replace the ref_* scoreboard with direct expected-value comparisons" in system_prompt
+    assert "inspect the testbench for zero-time loops" in system_prompt
     assert "mode: combinational_no_reset" in user_prompt
     assert result.status is TaskStatus.SUCCESS

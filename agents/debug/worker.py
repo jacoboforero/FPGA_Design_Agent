@@ -123,6 +123,8 @@ class DebugWorker(AgentWorkerBase):
             "- For sim failures, do not assume the RTL is wrong: check for common testbench issues like stimulus timing races.\n"
             "  If the testbench drives inputs immediately after an @(posedge clk) (same timestep as the sampling edge),\n"
             "  it can race the DUT/reference model and cause deterministic mismatches. Prefer driving on negedge (or add a small #1 delay).\n"
+            "- For simulation timeouts, inspect the testbench for zero-time loops such as always-begin polling blocks without\n"
+            "  an unconditional timing/event control at the top of each iteration, especially in dump/window helpers.\n"
             "- If attempt_history is provided, avoid repeating a previously attempted patch strategy for the same failure_signature.\n"
             "- If stuck=true or a failure signature repeats, your patch MUST change strategy materially and explain the delta in summary.\n"
             "- If waveform dumping uses a cycle window, do NOT treat DUMP_START=0 as \"disabled\"; some benches accidentally $dumpoff forever.\n"
@@ -214,8 +216,8 @@ class DebugWorker(AgentWorkerBase):
             except Exception:
                 pass
 
-            parsed = _safe_json(resp.content)
-            if parsed:
+            parsed, json_error_detail, json_error_excerpt = _safe_json_with_error(resp.content)
+            if isinstance(parsed, dict):
                 try:
                     (stage_dir / f"llm_parsed_attempt{llm_attempt}.json").write_text(
                         json.dumps(parsed, indent=2),
@@ -314,7 +316,24 @@ class DebugWorker(AgentWorkerBase):
                     ),
                 )
             last_error = "Debug LLM response was not valid JSON."
+            if json_error_detail:
+                last_error = f"{last_error} {json_error_detail}"
             if llm_attempt < max_attempts:
+                msgs.extend(
+                    [
+                        Message(
+                            role=MessageRole.ASSISTANT,
+                            content=_truncate_prompt_text(resp.content, max_chars=6000),
+                        ),
+                        Message(
+                            role=MessageRole.USER,
+                            content=_build_json_retry_feedback(
+                                error_detail=json_error_detail,
+                                excerpt=json_error_excerpt,
+                            ),
+                        ),
+                    ]
+                )
                 continue
             return ResultMessage(
                 task_id=task.task_id,
@@ -331,19 +350,36 @@ class DebugWorker(AgentWorkerBase):
         )
 
 
-def _safe_json(text: str):
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
+def _safe_json_with_error(text: str) -> tuple[dict | list | None, str | None, str | None]:
+    errors: list[tuple[str, Exception, str]] = []
+
+    def _try_parse(candidate: str, source: str):
+        try:
+            return json.loads(candidate), None
+        except Exception as exc:  # noqa: BLE001
+            return None, (source, exc, candidate)
+
+    parsed, error = _try_parse(text, "response")
+    if parsed is not None:
+        return parsed, None, None
+    if error is not None:
+        errors.append(error)
+
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
-        try:
-            return json.loads(text[start : end + 1])
-        except Exception:
-            return None
-    return None
+        sliced = text[start : end + 1]
+        if sliced != text:
+            parsed, error = _try_parse(sliced, "json_object")
+            if parsed is not None:
+                return parsed, None, None
+            if error is not None:
+                errors.append(error)
+
+    if not errors:
+        return None, None, None
+    source, exc, candidate = errors[-1]
+    return None, _format_json_error_detail(exc, source=source), _format_json_error_excerpt(candidate, exc)
 
 
 def _truncate_prompt_text(text: str, *, max_chars: int) -> str:
@@ -353,6 +389,48 @@ def _truncate_prompt_text(text: str, *, max_chars: int) -> str:
         return text
     omitted = len(text) - max_chars
     return f"{text[:max_chars]}\n... [truncated {omitted} char(s) for prompt efficiency]"
+
+
+def _format_json_error_detail(exc: Exception, *, source: str) -> str:
+    if isinstance(exc, json.JSONDecodeError):
+        location = f"line {exc.lineno} column {exc.colno}"
+        if source == "json_object":
+            return f"Parse error while reading extracted JSON object: {exc.msg} at {location}."
+        return f"Parse error: {exc.msg} at {location}."
+    if source == "json_object":
+        return f"Parse error while reading extracted JSON object: {type(exc).__name__}: {exc}."
+    return f"Parse error: {type(exc).__name__}: {exc}."
+
+
+def _format_json_error_excerpt(text: str, exc: Exception) -> str | None:
+    if isinstance(exc, json.JSONDecodeError):
+        lines = text.splitlines() or [text]
+        line_index = max(exc.lineno - 1, 0)
+        start = max(line_index - 1, 0)
+        end = min(line_index + 2, len(lines))
+        excerpt_lines = [f"L{idx + 1}: {lines[idx]}" for idx in range(start, end)]
+        return "\n".join(excerpt_lines)
+    trimmed = text.strip()
+    if not trimmed:
+        return None
+    return _truncate_prompt_text(trimmed, max_chars=280)
+
+
+def _build_json_retry_feedback(*, error_detail: str | None, excerpt: str | None) -> str:
+    parts = ["Your previous response was not valid JSON."]
+    if error_detail:
+        parts.extend(["Parse error:", error_detail])
+    if excerpt:
+        parts.extend(["Problem excerpt:", excerpt])
+    parts.extend(
+        [
+            "Return the same patch again using the exact schema from the system prompt.",
+            "Return ONLY one JSON object and no extra text.",
+            "Do not include comments, trailing commas, code fences, or explanations outside the JSON object.",
+            "Each entry in rtl_lines and tb_lines must be a plain JSON string representing exactly one source line.",
+        ]
+    )
+    return "\n".join(parts)
 
 
 _NO_FENCE_PREFIXES = ("```", "`systemverilog")
@@ -457,6 +535,8 @@ def _debug_testbench_guidance(contract: dict) -> str:
             "- Do not invent clk/clock or rst/reset signals if they are not DUT ports.\n"
             "- Do not use sampled-edge scoreboards, prev_* gating, or reset-release checker activation.\n"
             "- Prefer direct input-step stimulus and direct expected-value comparisons after a small settle delay only if needed.\n"
+            "- Do not keep persistent ref_* scoreboard state across multiple vectors in one procedural block.\n"
+            "- If TB semantic lint reports stale ref_* ordering, replace the ref_* scoreboard with direct expected-value comparisons or a non-persistent helper strategy.\n"
         )
     if mode == "clocked_no_reset":
         return (

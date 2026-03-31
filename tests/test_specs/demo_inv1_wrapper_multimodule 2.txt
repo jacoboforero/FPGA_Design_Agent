@@ -1,11 +1,11 @@
-Module: buf1_top
-Title: Smallest true multi-module demo wrapper around a buffer child
+Module: inv1_top
+Title: Smallest true multi-module demo wrapper around an inverter child
 
 Functional intent
-Role summary: Top-level integration module that instantiates buf1_leaf to compute y = a.
+Role summary: Top-level integration module that instantiates inv1_leaf to compute y = ~a.
 Key rules:
-- buf1_leaf computes y_int = a.
-- buf1_top performs only structural integration and explicit wiring between the top-level ports and buf1_leaf.
+- inv1_leaf computes y_int = ~a.
+- inv1_top performs only structural integration and explicit wiring between the top-level ports and inv1_leaf.
 Performance intent: Same-cycle combinational response from input to output.
 Reset semantics: No reset; output depends only on current input.
 Corner cases:
@@ -24,7 +24,7 @@ Signals:
 - name: y
   direction: OUTPUT
   width_expr: 1
-  semantics: top-level output equal to a
+  semantics: top-level output equal to ~a
 Handshake semantics:
 - name: none
   rules: none
@@ -36,12 +36,12 @@ Configuration parameters:
 
 Verification plan
 Test goals:
-- Verify top-level truth table for y = a.
+- Verify top-level truth table for y = ~a.
 - Verify integration preserves child behavior.
-Oracle strategy: Direct truth-table reference y_expected = a.
+Oracle strategy: Direct truth-table reference y_expected = ~a.
 Stimulus strategy: Drive a = 0 then 1 at the top-level port.
 Pass/fail criteria:
-- y matches a for both input values.
+- y matches ~a for both input values.
 Coverage targets:
 - coverage_id: branch
   description: branch coverage for the top-level two-case truth-table flow
@@ -60,54 +60,54 @@ Scenarios:
 - scenario_id: top_truth_table
   description: exercise both input values at the top level
   stimulus: drive a = 0 then 1
-  oracle: y equals a
+  oracle: y equals ~a
   pass_fail_criteria: no mismatches across the full truth table
   illegal: false
 
 Architecture plan
 Block diagram:
-- node_id: buf1_top
-  description: top-level structural wrapper for a combinational buffer
+- node_id: inv1_top
+  description: top-level structural wrapper for a combinational inverter
   node_type: top_level
-  interface_refs: [buf1_top_if]
+  interface_refs: [inv1_top_if]
   uses_standard_component: false
   notes: integration-only wrapper
-- node_id: buf1_leaf
-  description: combinational buffer
-  node_type: combinational_buffer
-  interface_refs: [buf1_leaf_if]
+- node_id: inv1_leaf
+  description: combinational inverter
+  node_type: combinational_inverter
+  interface_refs: [inv1_leaf_if]
   uses_standard_component: false
-  notes: drives the input value through unchanged
+  notes: drives the inverted form of a
 Dependencies:
-- parent_id: buf1_leaf
-  child_id: buf1_top
+- parent_id: inv1_leaf
+  child_id: inv1_top
   dependency_type: structural
 Connections:
 - src:
-    node_id: buf1_top
+    node_id: inv1_top
     port: a
   dst:
-    node_id: buf1_leaf
+    node_id: inv1_leaf
     port: a
 - src:
-    node_id: buf1_leaf
+    node_id: inv1_leaf
     port: y
   dst:
-    node_id: buf1_top
+    node_id: inv1_top
     port: y
 Clock domains: []
-Resource strategy: one buffer and top-level wiring.
-Latency budget: same-cycle combinational propagation through one wire stage.
+Resource strategy: one inverter and top-level wiring.
+Latency budget: same-cycle combinational propagation through one gate stage.
 Assertion plan:
   sva:
-  - y == a
+  - y == ~a
   scoreboard_assertions:
   - top-level truth-table reference matches DUT output
 
 Acceptance criteria
 Required artifacts:
 - name: rtl
-  description: synthesizable RTL for buf1_top and buf1_leaf
+  description: synthesizable RTL for inv1_top and inv1_leaf
   mandatory: true
 - name: testbench
   description: self-checking top-level truth-table testbench
@@ -136,13 +136,13 @@ Exclusions:
 - none
 Synthesis target: fpga_generic
 
-Module: buf1_leaf
-Title: 1-bit combinational buffer child cell
+Module: inv1_leaf
+Title: 1-bit combinational inverter child cell
 
 Functional intent
-Role summary: 1-bit combinational buffer that drives y = a.
+Role summary: 1-bit combinational inverter that drives y = ~a.
 Key rules:
-- y = a for both input values.
+- y = ~a for both input values.
 - No internal state or sequential behavior.
 Performance intent: Same-cycle combinational response.
 Reset semantics: No reset; output depends only on current input.
@@ -158,15 +158,15 @@ Signals:
 - name: a
   direction: INPUT
   width_expr: 1
-  semantics: buffer input
+  semantics: inverter input
 - name: y
   direction: OUTPUT
   width_expr: 1
-  semantics: buffered output
+  semantics: inverted output
 Handshake semantics:
 - name: none
   rules: none
-Transaction unit: one combinational pass-through.
+Transaction unit: one combinational inversion.
 Configuration parameters:
 - name: none
   default_value: none
@@ -174,14 +174,14 @@ Configuration parameters:
 
 Verification plan
 Test goals:
-- Verify y = a for both input values.
-Oracle strategy: Direct truth-table reference y_expected = a.
+- Verify y = ~a for both input values.
+Oracle strategy: Direct truth-table reference y_expected = ~a.
 Stimulus strategy: Drive a = 0 then 1.
 Pass/fail criteria:
-- y matches a for both input values.
+- y matches ~a for both input values.
 Coverage targets:
 - coverage_id: branch
-  description: branch coverage for the buffer two-case truth-table flow
+  description: branch coverage for the inverter two-case truth-table flow
   metric_type: branch
   goal: 0.5
   notes: none
@@ -194,36 +194,36 @@ Reset constraints:
   min_cycles_after_reset: 0
   ordering_notes: no reset applies for this combinational design.
 Scenarios:
-- scenario_id: buffer_truth_table
+- scenario_id: inverter_truth_table
   description: exercise both input values
   stimulus: drive a = 0 then 1
-  oracle: y equals a
+  oracle: y equals ~a
   pass_fail_criteria: no mismatches across the full truth table
   illegal: false
 
 Architecture plan
 Block diagram:
-- node_id: buf1_leaf
-  description: combinational buffer
-  node_type: combinational_buffer
-  interface_refs: [buf1_leaf_if]
+- node_id: inv1_leaf
+  description: combinational inverter
+  node_type: combinational_inverter
+  interface_refs: [inv1_leaf_if]
   uses_standard_component: false
-  notes: single pass-through assignment
+  notes: single NOT operator
 Dependencies: []
 Connections: []
 Clock domains: []
-Resource strategy: one buffer.
+Resource strategy: one inverter.
 Latency budget: same-cycle combinational propagation.
 Assertion plan:
   sva:
-  - y == a
+  - y == ~a
   scoreboard_assertions:
-  - buffer truth-table reference matches DUT output
+  - inverter truth-table reference matches DUT output
 
 Acceptance criteria
 Required artifacts:
 - name: rtl
-  description: synthesizable RTL for buf1_leaf
+  description: synthesizable RTL for inv1_leaf
   mandatory: true
 - name: testbench
   description: self-checking truth-table testbench
