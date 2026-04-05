@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -55,6 +56,7 @@ from core.runtime.broker import (
 )
 from core.runtime.config import get_runtime_config, initialize_runtime_config, resolve_runtime_config_path, set_runtime_config
 from core.runtime.paths import default_env_file, generated_root, task_memory_root
+from adapters.rag.rag_service import default_knowledge_base_path, default_memory_file
 
 
 def _load_env_file(path: Path) -> None:
@@ -351,6 +353,41 @@ def _build_rag_preview_entries(
             execution_policy=ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else None,
         )
         entries.append({"node_id": node_id, "rag": rag_metadata})
+
+    if not any(bool(item.get("rag", {}).get("used")) for item in entries):
+        kb_path = default_knowledge_base_path()
+        memory_path = default_memory_file()
+        kb_module_count = 0
+        memory_design_count = 0
+        try:
+            if kb_path.exists():
+                kb_module_count = len(re.findall(r"\bmodule\s+\w+\b", kb_path.read_text(encoding="utf-8", errors="ignore")))
+        except Exception:
+            kb_module_count = 0
+        try:
+            if memory_path.exists():
+                payload = json.loads(memory_path.read_text(encoding="utf-8"))
+                designs = payload.get("designs") if isinstance(payload, dict) else None
+                if isinstance(designs, list):
+                    memory_design_count = len(designs)
+        except Exception:
+            memory_design_count = 0
+        if kb_module_count == 0 and memory_design_count == 0:
+            entries.insert(
+                0,
+                {
+                    "node_id": "pipeline",
+                    "rag": {
+                        "used": False,
+                        "degraded": False,
+                        "skip_reason": "empty_corpus",
+                        "knowledge_base_path": str(kb_path),
+                        "memory_file_path": str(memory_path),
+                        "knowledge_base_module_count": 0,
+                        "memory_design_count": 0,
+                    },
+                },
+            )
     return entries
 
 
@@ -474,7 +511,17 @@ def run_full(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Hardware agent system CLI")
+    parser = argparse.ArgumentParser(
+        prog="mhd",
+        description="Planning-first multi-agent hardware design CLI.",
+        epilog=(
+            "Additional commands:\n"
+            "  mhd doctor\n"
+            "  mhd doctor --benchmark\n"
+            "  mhd benchmark --help"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--config", default=None, help="Path to runtime YAML config.")
     parser.add_argument("--timeout", type=float, default=0.0, help="Pipeline timeout in seconds (0 disables)")
     parser.add_argument("--run-name", help="Optional run name for observability/AgentOps")

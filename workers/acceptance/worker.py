@@ -307,6 +307,11 @@ def _extract_mismatch_count(text: str | None) -> int | None:
 def _load_metric_value(metric_id: str, source: str | None, node_id: str, attempt: int | None):
     base = Path("artifacts/task_memory") / node_id
     src = (source or "coverage_report").lower()
+    if src in ("rtl", "rtl_file", "rtl_source"):
+        if metric_id == "implementation_complete":
+            return 1 if _rtl_artifact_exists(base, node_id) else 0
+        path = _resolve_rtl_artifact_path(base, node_id)
+        return _extract_metric_from_text(metric_id, path) if path is not None else None
     if src in ("sim_log", "simulation_log"):
         if metric_id == "benchmark_pass":
             return 1 if _sim_passed(node_id, attempt) else 0
@@ -327,6 +332,25 @@ def _load_metric_value(metric_id: str, source: str | None, node_id: str, attempt
     if src.endswith(".txt"):
         return _extract_metric_from_text(metric_id, Path(src))
     return _extract_metric_from_text(metric_id, base / "sim" / "log.txt")
+
+
+def _resolve_rtl_artifact_path(base: Path, node_id: str) -> Path | None:
+    marker = base / "impl" / "artifact_path.txt"
+    if marker.exists():
+        try:
+            candidate = Path(marker.read_text().strip())
+        except Exception:
+            candidate = None
+        if candidate and candidate.exists():
+            return candidate
+    generated = Path("artifacts/generated/rtl") / f"{node_id}.sv"
+    if generated.exists():
+        return generated
+    return None
+
+
+def _rtl_artifact_exists(base: Path, node_id: str) -> bool:
+    return _resolve_rtl_artifact_path(base, node_id) is not None
 
 
 def _parse_attempt(value) -> int | None:

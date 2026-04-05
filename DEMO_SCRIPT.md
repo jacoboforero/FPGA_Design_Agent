@@ -5,7 +5,15 @@
 Prepare the shell environment before the audience is present. Installed `mhd`
 reads credentials from the shell, not from a workspace `.env`.
 
-Set your clone path once so the script commands work from any directory:
+Set your repo root once so the script commands work from any directory.
+
+On this demo machine:
+
+```bash
+export REPO_ROOT="/Users/jacoboforero/Desktop/School/SD1 Proj"
+```
+
+If the repo is cloned somewhere else, replace that path with the actual repo root.
 
 ```bash
 export REPO_ROOT="/absolute/path/to/your/cloned/FPGA_Design_Agent"
@@ -56,6 +64,7 @@ bash "$REPO_ROOT/scripts/test_homebrew_install.sh"
 ```bash
 bash "$REPO_ROOT/scripts/setup_homebrew_demo_env.sh"
 cd "$HOME/Desktop/mhd-homebrew-demo"
+ls artifacts/rag/memory.json
 ```
 
 ## 3. Show Standard Shell Setup
@@ -144,19 +153,27 @@ Fallback local files:
 ## 10. Show YAML Config Per-Agent LLMs
 
 ```bash
-sed -n '1,120p' "$HOME/.config/mhd/domains/agents.yaml"
-sed -n '1,40p' "$HOME/.config/mhd/runtime.benchmark.yaml"
+nano "$HOME/.config/mhd/domains/agents.yaml"
+nano "$HOME/.config/mhd/runtime.benchmark.yaml"
 ```
 
 ## 11. Spec-Helper Workflow 3-Bit Counter Example
 
 ```bash
-mhd --spec-file demo_bad_counter3_spec.txt --narrative-mode off --run-name demo_spec_helper
+mhd --spec-file "$HOME/Desktop/mhd-homebrew-demo/demo_bad_counter3_spec.txt" --narrative-mode off --run-name demo_spec_helper
 ```
 
 UI actions:
 
-- Answer the spec-helper clarification question in plain English
+- First, when it asks `Select 1/2/3:`, type `1` to show that the spec file can be edited manually.
+- Return to the prompt, then type `3` to let the spec helper propose a draft.
+- Reject that draft and return to the prompt.
+- Finally, type `2` and paste this answer if it asks about the reference model or scoreboard plan:
+
+```text
+Use a cycle-accurate reference model that tracks the expected count and rollover on each rising clock edge. The scoreboard should compare the DUT count and rollover outputs against that reference every cycle, including reset behavior, enable hold behavior, and the 7-to-0 wrap with a one-cycle rollover pulse.
+```
+
 - When it asks `Proceed to execution?`, type `n`
 - Stop after the repaired spec/planning handoff
 

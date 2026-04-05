@@ -329,7 +329,10 @@ def run_checks(config: RuntimeConfig, *, force_benchmark: bool = False) -> List[
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run preflight checks for local runtime readiness.")
+    parser = argparse.ArgumentParser(
+        prog="mhd doctor",
+        description="Run preflight checks for local runtime readiness.",
+    )
     parser.add_argument("--config", default=None, help="Path to runtime YAML config.")
     parser.add_argument(
         "--benchmark",

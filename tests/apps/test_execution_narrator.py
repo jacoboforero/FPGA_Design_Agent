@@ -175,6 +175,31 @@ def test_rag_preview_emits_intro_and_hit_blocks(tmp_path):
     assert any("similar design found: buf1_leaf" in line.lower() for line in lines)
 
 
+def test_rag_preview_reports_empty_corpus(tmp_path):
+    lines: list[str] = []
+    narrator = ExecutionNarrator(
+        task_memory_root=tmp_path / "artifacts" / "task_memory",
+        mode="deterministic",
+        emit_line=lines.append,
+    )
+
+    narrator.emit_rag_preview(
+        [
+            {
+                "node_id": "pipeline",
+                "rag": {
+                    "used": False,
+                    "skip_reason": "empty_corpus",
+                    "memory_file_path": "/tmp/demo/artifacts/rag/memory.json",
+                },
+            }
+        ]
+    )
+
+    assert any("pipeline | rag preview | empty corpus" in line.lower() for line in lines)
+    assert any("no stored designs found" in line.lower() for line in lines)
+
+
 def test_llm_narrative_falls_back_when_card_conflicts_with_status(tmp_path, monkeypatch):
     class FakeGateway:
         provider = "openai"

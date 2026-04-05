@@ -80,22 +80,20 @@ def test_summary_rows_parses_problem_rows(tmp_path: Path):
     assert rows[1]["problem_id"] == "Prob002"
 
 
-def test_script_cmd_uses_python3_for_env_python_when_python_missing(tmp_path: Path, monkeypatch):
+def test_script_cmd_uses_current_python_for_python_shebang(tmp_path: Path):
     script = tmp_path / "sv-iv-analyze"
     script.write_text("#!/usr/bin/env python\nprint('ok')\n", encoding="utf-8")
     script.chmod(0o755)
 
-    monkeypatch.setattr("apps.cli.run_verilog_eval.shutil.which", lambda name: None if name == "python" else "/usr/bin/python3")
     cmd = _script_cmd(script, ["--csv=summary.csv"])
-    assert cmd[:2] == ["python3", str(script)]
+    assert cmd[:2] == [run_verilog_eval.sys.executable, str(script)]
 
 
-def test_script_cmd_keeps_executable_when_python_available(tmp_path: Path, monkeypatch):
+def test_script_cmd_keeps_executable_for_non_python_script(tmp_path: Path):
     script = tmp_path / "sv-iv-analyze"
-    script.write_text("#!/usr/bin/env python\nprint('ok')\n", encoding="utf-8")
+    script.write_text("#!/usr/bin/env bash\necho ok\n", encoding="utf-8")
     script.chmod(0o755)
 
-    monkeypatch.setattr("apps.cli.run_verilog_eval.shutil.which", lambda name: "/usr/bin/python" if name == "python" else "/usr/bin/python3")
     cmd = _script_cmd(script, ["--csv=summary.csv"])
     assert cmd[0] == str(script)
 

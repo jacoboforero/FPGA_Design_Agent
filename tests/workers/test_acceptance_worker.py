@@ -156,3 +156,63 @@ def test_acceptance_benchmark_pass_metric_fails_on_timeout_marker(tmp_path, monk
     result = worker.handle_task(task)
     assert result.status is TaskStatus.FAILURE
     assert "Metric 'benchmark_pass' failed" in result.log_output
+
+
+def test_acceptance_implementation_complete_passes_when_rtl_artifact_exists(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    node_id = "counter3"
+    rtl = Path("artifacts/generated/rtl") / f"{node_id}.sv"
+    rtl.parent.mkdir(parents=True, exist_ok=True)
+    rtl.write_text("module counter3; endmodule\n")
+
+    worker = AcceptanceWorker(connection_params=None, stop_event=None)
+    task = TaskMessage(
+        priority=TaskPriority.MEDIUM,
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.ACCEPTANCE,
+        context={
+            "node_id": node_id,
+            "attempt": 1,
+            "acceptance": {
+                "acceptance_metrics": [
+                    {
+                        "metric_id": "implementation_complete",
+                        "operator": "==",
+                        "target_value": "1",
+                        "metric_source": "rtl",
+                    }
+                ]
+            },
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+
+
+def test_acceptance_implementation_complete_fails_when_rtl_artifact_missing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    node_id = "counter3"
+
+    worker = AcceptanceWorker(connection_params=None, stop_event=None)
+    task = TaskMessage(
+        priority=TaskPriority.MEDIUM,
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.ACCEPTANCE,
+        context={
+            "node_id": node_id,
+            "attempt": 1,
+            "acceptance": {
+                "acceptance_metrics": [
+                    {
+                        "metric_id": "implementation_complete",
+                        "operator": "==",
+                        "target_value": "1",
+                        "metric_source": "rtl",
+                    }
+                ]
+            },
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "Metric 'implementation_complete' failed" in result.log_output

@@ -238,6 +238,30 @@ class ExecutionNarrator:
             )
             return
 
+        empty_corpus_preview = next(
+            (
+                item for item in previews
+                if isinstance(item, dict)
+                and isinstance(item.get("rag"), dict)
+                and str(item["rag"].get("skip_reason", "")).strip() == "empty_corpus"
+            ),
+            None,
+        )
+        if empty_corpus_preview is not None:
+            rag = empty_corpus_preview["rag"]
+            memory_path = str(rag.get("memory_file_path", "")).strip() or "artifacts/rag/memory.json"
+            self._emit_block(
+                "pipeline",
+                "pipeline | RAG preview | empty corpus",
+                [
+                    "I checked the current knowledge base and design memory before execution, but there is no seeded reusable design corpus available for this run.",
+                    f"\"No stored designs found. Expected demo memory file: {memory_path}\"",
+                    "Next I will proceed from the locked spec unless a curated memory seed is added before rerunning.",
+                ],
+                tone="warn",
+            )
+            return
+
         self._emit_block(
             "pipeline",
             "pipeline | RAG preview | no strong matches",

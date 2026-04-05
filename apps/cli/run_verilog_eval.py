@@ -91,7 +91,10 @@ class PromptCase:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run VerilogEval-compatible benchmark workflows.")
+    parser = argparse.ArgumentParser(
+        prog="mhd benchmark",
+        description="Run VerilogEval-compatible benchmark workflows.",
+    )
     parser.add_argument(
         "command",
         nargs="?",
@@ -295,15 +298,15 @@ def _safe_read_json(path: Path) -> dict[str, Any]:
 
 def _script_cmd(script: Path, args: list[str]) -> list[str]:
     if script.exists() and script.is_file():
-        # Some upstream scripts use `#!/usr/bin/env python`; prefer python3 when
-        # python is unavailable in PATH (common on modern macOS/Linux setups).
+        # Always run Python helper scripts with the current interpreter so the
+        # benchmark analyzer sees the same site-packages as the active mhd
+        # runtime, including the Homebrew venv.
         try:
             shebang = script.read_text(encoding="utf-8", errors="ignore").splitlines()[0].strip()
         except Exception:  # noqa: BLE001
             shebang = ""
-        if shebang.startswith("#!") and "python" in shebang and "python3" not in shebang:
-            if shutil.which("python") is None and shutil.which("python3") is not None:
-                return ["python3", str(script), *args]
+        if shebang.startswith("#!") and "python" in shebang:
+            return [sys.executable, str(script), *args]
     if script.exists() and script.is_file() and (script.stat().st_mode & 0o111):
         return [str(script), *args]
     return ["python3", str(script), *args]
