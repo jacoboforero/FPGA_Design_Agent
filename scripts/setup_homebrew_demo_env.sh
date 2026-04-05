@@ -5,16 +5,21 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE="${1:-$HOME/Desktop/mhd-homebrew-demo}"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/mhd"
 RAG_FIXTURE="$ROOT/tests/fixtures/rag/buf1_leaf_memory.json"
+BAD_SPEC_FIXTURE="$ROOT/tests/test_specs/demo_bad_counter3_spec.txt"
 
-mkdir -p "$WORKSPACE"
-rm -rf "$WORKSPACE/artifacts"
+if [[ -z "$WORKSPACE" || "$WORKSPACE" == "/" ]]; then
+  echo "Refusing to prepare invalid workspace path: '$WORKSPACE'" >&2
+  exit 1
+fi
+
+rm -rf "$WORKSPACE"
 mkdir -p "$WORKSPACE/artifacts/rag"
 
 cp "$ROOT/tests/test_specs/01_counter3_basic.txt" "$WORKSPACE/01_counter3_basic.txt"
 cp "$ROOT/tests/test_specs/demo_inv1_wrapper_multimodule.txt" "$WORKSPACE/demo_inv1_wrapper_multimodule.txt"
 cp "$RAG_FIXTURE" "$WORKSPACE/artifacts/rag/memory.json"
-if [[ -f "$ROOT/artifacts/tmp/demo_bad_counter3_spec.txt" ]]; then
-  cp "$ROOT/artifacts/tmp/demo_bad_counter3_spec.txt" "$WORKSPACE/demo_bad_counter3_spec.txt"
+if [[ -f "$BAD_SPEC_FIXTURE" ]]; then
+  cp "$BAD_SPEC_FIXTURE" "$WORKSPACE/demo_bad_counter3_spec.txt"
 fi
 
 cat <<EOF

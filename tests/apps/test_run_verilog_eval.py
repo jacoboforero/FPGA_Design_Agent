@@ -267,6 +267,52 @@ def test_run_sample_test_writes_timeout_marker(tmp_path: Path, monkeypatch):
     assert calls[1][0][0] == "vvp_bin"
 
 
+def test_run_sample_test_normalizes_public_testbench_before_compile(tmp_path: Path, monkeypatch):
+    prompt_path = tmp_path / "Prob001_prompt.txt"
+    test_sv = tmp_path / "Prob001_test.sv"
+    ref_sv = tmp_path / "Prob001_ref.sv"
+    prompt_path.write_text("prompt\n")
+    test_sv.write_text(
+        "module tb();\n"
+        "  initial begin\n"
+        "    $dumpvars(1, tb_mismatch);\n"
+        "  end\n"
+        "  wire tb_match;\n"
+        "  wire tb_mismatch = ~tb_match;\n"
+        "endmodule\n"
+    )
+    ref_sv.write_text("module RefModule(); endmodule\n")
+
+    case = PromptCase(problem_id="Prob001", prompt_path=prompt_path, test_sv=test_sv, ref_sv=ref_sv)
+    sample_dir = tmp_path / "out" / "Prob001"
+    sample_dir.mkdir(parents=True)
+    (sample_dir / "Prob001_sample01.sv").write_text("module Prob001(); endmodule\n")
+
+    calls = []
+
+    def fake_run_cmd(cmd, *, cwd, timeout_s=300):  # noqa: ANN001
+        calls.append((cmd, cwd, timeout_s))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("apps.cli.run_verilog_eval._run_cmd", fake_run_cmd)
+
+    _run_sample_test(
+        case=case,
+        sample_index=1,
+        sample_dir=sample_dir,
+        iverilog_bin="iverilog_bin",
+        vvp_bin="vvp_bin",
+    )
+
+    compile_cmd = calls[0][0]
+    staged_test = Path(compile_cmd[-2])
+    staged_ref = Path(compile_cmd[-1])
+    assert staged_test.parent == sample_dir / "oracle_assets"
+    assert staged_ref.parent == sample_dir / "oracle_assets"
+    assert "assign tb_mismatch = ~tb_match;" in staged_test.read_text()
+    assert "wire tb_mismatch = ~tb_match;" not in staged_test.read_text()
+
+
 def test_run_official_analyze_auto_discovers_problem_dirs(tmp_path: Path, monkeypatch):
     root = tmp_path / "verilog_eval"
     build_dir = tmp_path / "build"

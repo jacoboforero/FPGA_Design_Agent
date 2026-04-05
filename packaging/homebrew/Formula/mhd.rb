@@ -18,6 +18,24 @@ class Mhd < Formula
     system pip, "install", "--upgrade", "pip", "setuptools", "wheel"
     system pip, "install", "-r", buildpath/"packaging/homebrew/requirements.txt"
 
+    # Some wheel-installed extension modules publish an @rpath install name whose
+    # basename does not match the actual filename on disk. Homebrew's linkage
+    # fix-up assumes those basenames line up, so normalize them here first.
+    Dir[(venv/"lib/python3.12/site-packages/**/*.so").to_s].sort.each do |bundle|
+      next unless File.file?(bundle)
+
+      install_id_lines = Utils.safe_popen_read("otool", "-D", bundle).lines.map(&:strip).reject(&:empty?)
+      next if install_id_lines.length < 2
+
+      install_id = install_id_lines[1]
+      next unless install_id.start_with?("@rpath/")
+
+      bundle_name = File.basename(bundle)
+      next if File.basename(install_id) == bundle_name
+
+      system "install_name_tool", "-id", "@rpath/#{bundle_name}", bundle
+    end
+
     (bin/"mhd").write <<~EOS
       #!/bin/bash
       export MHD_RESOURCE_ROOT="#{runtime_root}"

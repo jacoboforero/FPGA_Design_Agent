@@ -1828,6 +1828,11 @@ def _run_sample_test(
     sample_sv = sample_dir / f"{sample_name}.sv"
     sample_bin = sample_dir / sample_name
     iv_log_path = sample_dir / f"{sample_name}-sv-iv-test.log"
+    staged_test_sv, staged_ref_sv = _stage_public_benchmark_oracle_assets(
+        run_root=sample_dir,
+        test_sv=case.test_sv,
+        ref_sv=case.ref_sv,
+    )
     compile_cmd = [
         iverilog_bin,
         "-Wall",
@@ -1839,8 +1844,8 @@ def _run_sample_test(
         "-o",
         str(sample_bin),
         str(sample_sv),
-        str(case.test_sv),
-        str(case.ref_sv),
+        str(staged_test_sv),
+        str(staged_ref_sv),
     ]
     compile_proc = _run_cmd(
         compile_cmd,

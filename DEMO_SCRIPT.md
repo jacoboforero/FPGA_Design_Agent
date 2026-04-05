@@ -38,6 +38,7 @@ Optional cleanup and environment prep:
 brew uninstall --ignore-dependencies --force mhd || true
 brew untap local/mhd-demo || true
 brew services start rabbitmq
+bash "$REPO_ROOT/scripts/reset_demo_user_config.sh"
 ```
 
 ## Live Presentation Starts Here
