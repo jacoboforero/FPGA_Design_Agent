@@ -8,12 +8,13 @@ import asyncio
 import json
 import re
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
+from adapters.rag.rag_service import retrieve_for_stage
 from core.schemas.contracts import AgentType, ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
 from agents.common.base import AgentWorkerBase
-from agents.common.llm_gateway import init_llm_gateway, Message, MessageRole, GenerationConfig
+from agents.common.llm_gateway import apply_reproducibility_settings, init_llm_gateway, Message, MessageRole, GenerationConfig
 from agents.common.tb_sanitizer import sanitize_testbench
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
@@ -66,9 +67,14 @@ def _testbench_contract_guidance(contract: dict) -> str:
             "- This DUT is combinational for testbench purposes.\n"
             "- Do not invent clk/clock or rst/reset signals if they are not DUT ports.\n"
             "- Do not create sampled-edge scoreboards, cycle counters, prev_* gating, or post-reset enable logic.\n"
+            "- Do not use persistent ref_* scoreboard state across multiple vectors.\n"
+            "- Use one simple initial/task-driven stimulus flow; do not add always blocks, while loops, or background polling for check logic.\n"
             "- Apply input vectors from simple initial/task-based stimulus.\n"
-            "- After each input change, allow at most one small settle delay (for example #1) before checking outputs.\n"
+            "- For each vector: drive inputs, wait exactly one small settle delay (for example #1), then compare outputs immediately.\n"
+            "- Never use more than one delay control between driving a vector and checking that vector.\n"
             "- Compare DUT outputs directly against the combinational expected value.\n"
+            "- If an expected value helper is needed, use a one-shot combinational expression or helper function, not a ref_* register that is updated across vectors.\n"
+            "- If +DUMP is present, dump the whole run. Do not implement DUMP_START/DUMP_END windows with loops or extra delay chains in combinational benches.\n"
         )
     if mode == "clocked_no_reset":
         return (
@@ -79,10 +85,11 @@ def _testbench_contract_guidance(contract: dict) -> str:
             "- Do not invent reset handling or post-reset checker gating.\n"
             "- Use one scoreboard block on DUT sample edge.\n"
             "- In that scoreboard block use this order:\n"
-            "  (a) compute expected_next from sampled inputs/state,\n"
-            "  (b) wait #1,\n"
+            "  (a) compute expected_next from the current expected state and current sampled DUT inputs,\n"
+            "  (b) wait exactly one #1 settle delay so DUT nonblocking updates are visible,\n"
             "  (c) compare DUT outputs against expected_next,\n"
             "  (d) commit expected state for next cycle.\n"
+            "- Do not create prev_* shadow copies of sampled controls or expected state for delayed comparisons.\n"
         )
     return (
         "Timing contract (must follow exactly):\n"
@@ -92,10 +99,11 @@ def _testbench_contract_guidance(contract: dict) -> str:
         "- Use one scoreboard block on DUT sample edge.\n"
         "- In that scoreboard block use this order:\n"
         "  (a) handle reset and checker gating,\n"
-        "  (b) compute expected_next using blocking assignments from previous expected state and sampled inputs,\n"
-        "  (c) wait #1,\n"
+        "  (b) compute expected_next using blocking assignments from the current expected state and current sampled inputs,\n"
+        "  (c) wait exactly one #1 settle delay so DUT nonblocking updates are visible,\n"
         "  (d) compare DUT outputs against expected_next,\n"
         "  (e) commit expected state for next cycle.\n"
+        "- Do not create prev_* shadow copies of sampled controls or expected state for delayed comparisons.\n"
         "- Do not split reference-update and compare into separate sample-edge blocks.\n"
         "- Do not rely on multiple #1 delays across multiple always blocks for correctness.\n"
         "Reset contract:\n"
@@ -141,7 +149,7 @@ class TestbenchWorker(AgentWorkerBase):
                     log_output="LLM gateway unavailable; set USE_LLM=1 and configure provider credentials.",
                 )
             try:
-                tb_source, log_output = asyncio.run(self._llm_generate_tb(ctx, node_id))
+                tb_source, log_output, runtime_metadata = asyncio.run(self._llm_generate_tb(ctx, node_id))
             except Exception as exc:  # noqa: BLE001
                 if is_transient_error(exc):
                     raise RetryableError(f"LLM testbench transient error: {exc}")
@@ -200,6 +208,7 @@ class TestbenchWorker(AgentWorkerBase):
             status=TaskStatus.SUCCESS,
             artifacts_path=str(tb_path),
             log_output=log_output,
+            runtime_metadata=runtime_metadata if not self._should_use_deterministic_smoke_tb(ctx, node_id) else None,
         )
 
     def _should_use_deterministic_smoke_tb(self, ctx: dict, node_id: str) -> bool:
@@ -393,7 +402,7 @@ class TestbenchWorker(AgentWorkerBase):
             lines.extend(f"- {str(item)}" for item in pass_fail)
         return "\n".join(lines) if lines else "- No verification plan provided."
 
-    async def _llm_generate_tb(self, ctx, node_id: str) -> Tuple[str, str]:
+    async def _llm_generate_tb(self, ctx, node_id: str) -> Tuple[str, str, dict[str, Any]]:
         iface = ctx["interface"]["signals"]
         ports = []
         dut_inputs: list[str] = []
@@ -423,6 +432,18 @@ class TestbenchWorker(AgentWorkerBase):
         verification_summary = _truncate_prompt_text(self._verification_summary(verification), max_chars=4000)
         tb_contract = _testbench_contract_for_context(ctx)
         tb_module = f"tb_{node_id}"
+        rag_query = _build_testbench_rag_query(
+            node_id=node_id,
+            iface=iface,
+            behavior=behavior,
+            verification=verification,
+            tb_contract=tb_contract,
+        )
+        rag_context, rag_metadata = retrieve_for_stage(
+            "testbench",
+            rag_query,
+            execution_policy=ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else None,
+        )
         system = (
             "You are a hardware RTL testbench generation agent.\n"
             "Generate one complete self-checking Verilog-2001 testbench.\n\n"
@@ -442,14 +463,23 @@ class TestbenchWorker(AgentWorkerBase):
             "- Drive only DUT input ports from the testbench.\n"
             "- DUT output ports are observe-only; never drive them from testbench logic.\n"
             "- Do not assign DUT output nets via continuous assign, procedural assignment, force/release, or task side-effects.\n"
-            "- For protocol/reference modeling, use separate ref_* variables instead of driving DUT outputs.\n\n"
+            "- For clocked or stateful protocol/reference modeling, use separate ref_* variables instead of driving DUT outputs.\n"
+            "- For combinational/no-reset benches, prefer direct expected-value comparisons and avoid persistent ref_* scoreboards.\n\n"
             f"{_testbench_contract_guidance(tb_contract)}\n"
             "Optional dumping:\n"
             "- If +DUMP is present, enable VCD dump.\n"
             "- +DUMP_FILE=<path> via $value$plusargs(\"DUMP_FILE=%s\", ...), default dump.vcd.\n"
             "- Optional +DUMP_START/+DUMP_END window using %d.\n"
-            "- Do not treat DUMP_START=0 as disabled."
+            "- Do not treat DUMP_START=0 as disabled.\n"
+            "- Do not implement dump control with unconditional always-begin polling loops.\n"
+            "- Any always loop must have an unconditional timing or event control at the top of each iteration.\n"
+            "- For combinational_no_reset benches, prefer whole-run dumping and avoid DUMP_START/DUMP_END window logic entirely."
         )
+        if rag_context.strip():
+            system += (
+                "\nRelevant prior designs and verification patterns (optional guidance, reuse or adapt when appropriate to the contract and interface):\n"
+                f"{rag_context}\n"
+            )
         user = (
             f"Task:\n"
             f"- DUT module: {node_id}\n"
@@ -472,6 +502,7 @@ class TestbenchWorker(AgentWorkerBase):
         temperature = float(llm_cfg.temperature)
         top_p = llm_cfg.top_p
         cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
+        cfg = apply_reproducibility_settings(cfg, provider=getattr(self.gateway, "provider", None))
         resp = await self.gateway.generate(messages=msgs, config=cfg)  # type: ignore[arg-type]
         tracker = get_tracker()
         try:
@@ -484,8 +515,43 @@ class TestbenchWorker(AgentWorkerBase):
                 completion_tokens=getattr(resp, "output_tokens", 0),
                 total_tokens=getattr(resp, "total_tokens", 0),
                 estimated_cost_usd=getattr(resp, "estimated_cost_usd", None),
-                metadata={"stage": "testbench"},
+                metadata={
+                    "stage": "testbench",
+                    "rag_used": bool(rag_metadata.get("used")),
+                    "rag_hit_count": int(rag_metadata.get("hit_count", 0)),
+                },
             )
         except Exception:
             pass
-        return resp.content, f"LLM TB generation via {getattr(resp, 'provider', 'llm')}/{getattr(resp, 'model_name', 'unknown')}"
+        return (
+            resp.content,
+            f"LLM TB generation via {getattr(resp, 'provider', 'llm')}/{getattr(resp, 'model_name', 'unknown')}",
+            {"rag": rag_metadata},
+        )
+
+
+def _build_testbench_rag_query(
+    *,
+    node_id: str,
+    iface: list[dict],
+    behavior: str,
+    verification: dict[str, Any],
+    tb_contract: dict[str, Any],
+) -> str:
+    port_lines = []
+    for signal in iface:
+        if not isinstance(signal, dict):
+            continue
+        port_lines.append(
+            f"{signal.get('direction', 'signal')} {signal.get('name', 'unnamed')} width={signal.get('width', 1)}"
+        )
+    verification_goals = verification.get("test_goals") if isinstance(verification.get("test_goals"), list) else []
+    lines = [
+        f"testbench query for module {node_id}",
+        "interface:",
+        *[f"- {item}" for item in port_lines[:24]],
+        f"behavior: {behavior or 'none provided'}",
+        f"verification_goals: {json.dumps(verification_goals[:8])}",
+        f"testbench_contract: {json.dumps(tb_contract, sort_keys=True)}",
+    ]
+    return "\n".join(lines)

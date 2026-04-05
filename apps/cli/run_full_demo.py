@@ -20,6 +20,7 @@ from agents.planner.worker import PlannerWorker
 from agents.testbench.worker import TestbenchWorker
 from agents.reflection.worker import ReflectionWorker
 from agents.debug.worker import DebugWorker
+from agents.finalizer.worker import FinalizerWorker
 from agents.spec_helper.worker import SpecHelperWorker
 from workers.lint.worker import LintWorker
 from workers.acceptance.worker import AcceptanceWorker
@@ -29,10 +30,11 @@ from workers.distill.worker import DistillWorker
 from orchestrator.orchestrator_service import DemoOrchestrator
 from core.schemas.contracts import AgentType, EntityType, ResultMessage, TaskMessage, TaskStatus
 from core.runtime.broker import TASK_EXCHANGE, create_run_routing, declare_results_queue
-from core.runtime.config import DEFAULT_CONFIG_PATH, get_runtime_config, initialize_runtime_config
+from core.runtime.config import get_runtime_config, initialize_runtime_config
 from apps.cli.cli import _load_env_file, connection_params_from_config
 from core.observability.setup import configure_observability
 from core.observability.agentops_tracker import get_tracker
+from core.runtime.paths import default_env_file
 
 
 def _run_planner_task(
@@ -79,8 +81,10 @@ def _run_planner_task(
 
 
 def main() -> None:
-    _load_env_file(REPO_ROOT / ".env")
-    initialize_runtime_config(DEFAULT_CONFIG_PATH)
+    env_file = default_env_file()
+    if env_file is not None:
+        _load_env_file(env_file)
+    initialize_runtime_config(default_name="runtime.yaml")
     runtime_cfg = get_runtime_config()
     execution_policy = {
         "spec_profile": runtime_cfg.run.spec_profile.model_dump(mode="python"),
@@ -120,6 +124,8 @@ def main() -> None:
         DistillWorker(params, stop_event),
         SimulationWorker(params, stop_event),
     ]
+    if int(runtime_cfg.workers.pool_sizes.finalizer) > 0:
+        workers.append(FinalizerWorker(params, stop_event))
     for w in workers:
         w.start()
 

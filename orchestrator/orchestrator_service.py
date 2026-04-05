@@ -65,6 +65,11 @@ def _is_near_miss_sim_failure(log_output: str | None, *, max_mismatches: int) ->
     return 0 < mismatches <= max_mismatches
 
 
+def _finalizer_active() -> bool:
+    runtime_cfg = get_runtime_config()
+    return bool(runtime_cfg.rag.finalizer.enabled) and int(runtime_cfg.workers.pool_sizes.finalizer) > 0
+
+
 class DemoOrchestrator:
     """
     Drives a richer state machine:
@@ -373,6 +378,8 @@ class DemoOrchestrator:
                             entry["artifact_hashes"] = hashes
                         if result.status is TaskStatus.SUCCESS:
                             entry["outcome"] = "debug_patched"
+                if kind == "finalize" and result.status is TaskStatus.SUCCESS:
+                    entry["outcome"] = "archived"
 
             def _attempt_history_context(node_id: str, attempt: int | None, max_items: int = 3) -> list[dict[str, Any]]:
                 by_attempt = attempt_history_by_node.get(node_id, {})
@@ -620,6 +627,8 @@ class DemoOrchestrator:
                         runtime_name = "agent_reflection"
                     elif task_type == AgentType.DEBUG.value:
                         runtime_name = "agent_debug"
+                    elif task_type == AgentType.FINALIZE.value:
+                        runtime_name = "agent_finalizer"
                     elif task_type == AgentType.PLANNER.value:
                         runtime_name = "agent_planner"
                     elif task_type == AgentType.SPECIFICATION_HELPER.value:
@@ -665,6 +674,13 @@ class DemoOrchestrator:
                     )
                 if result.reflections:
                     self.task_memory.record_json(target_node, stage, "reflections.json", _maybe_json(result.reflections))
+                if result.runtime_metadata:
+                    self.task_memory.record_json(
+                        target_node,
+                        stage,
+                        "runtime_metadata.json",
+                        _dump_model(result.runtime_metadata),
+                    )
                 _record_attempt_history(node_id=target_node, kind=kind, stage_attempt=stage_attempt, result=result)
 
                 if result.status is not TaskStatus.SUCCESS:
@@ -685,6 +701,7 @@ class DemoOrchestrator:
                         "artifacts_path": result.artifacts_path,
                         "reflections": result.reflections,
                         "reflection_insights": _dump_model(result.reflection_insights),
+                        "runtime_metadata": _dump_model(result.runtime_metadata),
                     },
                 )
                 emit_runtime_event(
@@ -909,6 +926,26 @@ class DemoOrchestrator:
                     )
                     _register_task(target_node, accept_key, accept_task)
                 elif kind == "acceptance":
+                    attempt = stage_attempt or attempt_by_node.get(target_node, 1)
+                    if _finalizer_active():
+                        self._advance(target_node, NodeState.FINALIZING)
+                        finalize_key = _stage_key("finalize", attempt)
+                        finalize_task = self._publish_task(
+                            ch,
+                            EntityType.REASONING,
+                            AgentType.FINALIZE,
+                            target_node,
+                            attempt=attempt,
+                        )
+                        _register_task(target_node, finalize_key, finalize_task)
+                    else:
+                        self._emit_progress(
+                            f"{target_node} accepted; finalizer disabled, marking done.",
+                            event_type="execution_note",
+                            payload={"node_id": target_node, "attempt": attempt, "reason": "finalizer_disabled"},
+                        )
+                        _finish_done(target_node)
+                elif kind == "finalize":
                     _finish_done(target_node)
                 elif kind == "distill":
                     attempt = stage_attempt

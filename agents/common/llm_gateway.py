@@ -166,4 +166,25 @@ def init_llm_gateway(
         return None
 
 
-__all__ = ["init_llm_gateway", "Message", "MessageRole", "GenerationConfig"]
+def apply_reproducibility_settings(
+    cfg: "GenerationConfig",
+    *,
+    provider: Optional[str] = None,
+) -> "GenerationConfig":
+    llm_cfg = get_runtime_config().llm
+    if not getattr(llm_cfg, "deterministic", False):
+        return cfg
+
+    effective_provider = (provider or getattr(llm_cfg, "provider", "") or "").strip().lower()
+    adjusted = cfg.model_copy(deep=True)
+    adjusted.temperature = 0.0
+    adjusted.top_p = 1.0
+    if effective_provider == "openai":
+        seed = getattr(llm_cfg, "seed", None)
+        if seed is None:
+            seed = 7
+        adjusted.provider_specific["seed"] = int(seed)
+    return adjusted
+
+
+__all__ = ["init_llm_gateway", "apply_reproducibility_settings", "Message", "MessageRole", "GenerationConfig"]

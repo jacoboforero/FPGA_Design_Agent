@@ -3,7 +3,7 @@ APP_SERVICE = app
 RABBIT_SERVICE = rabbitmq
 CLI_TIMEOUT ?= 0
 
-.PHONY: build up down shell deps cli test logs docs-check docs-check-full
+.PHONY: build up down shell deps lock lock-check demo-rag-seed cli test logs docs-check docs-check-full
 
 build:
 	$(COMPOSE) build $(APP_SERVICE)
@@ -18,7 +18,16 @@ shell:
 	$(COMPOSE) exec $(APP_SERVICE) bash -lc 'cd /workspace && git config --global --add safe.directory /workspace >/dev/null 2>&1 || true; set -a; [ -f .env ] && source .env; set +a; if [[ "$$RABBITMQ_URL" == *localhost* || "$$RABBITMQ_URL" == *127.0.0.1* || "$$RABBITMQ_URL" == *::1* ]]; then export RABBITMQ_URL=amqp://user:password@rabbitmq:5672/; fi; exec bash'
 
 deps:
-	$(COMPOSE) exec $(APP_SERVICE) bash -lc "cd /workspace && poetry install --with dev"
+	$(COMPOSE) exec $(APP_SERVICE) bash -lc "cd /workspace && poetry check --lock && poetry install --with dev"
+
+lock:
+	$(COMPOSE) exec $(APP_SERVICE) bash -lc "cd /workspace && poetry lock"
+
+lock-check:
+	$(COMPOSE) exec $(APP_SERVICE) bash -lc "cd /workspace && poetry check --lock"
+
+demo-rag-seed:
+	bash scripts/seed_demo_rag_memory.sh
 
 cli:
 	@$(COMPOSE) exec $(APP_SERVICE) bash -lc 'cd /workspace && git config --global --add safe.directory /workspace >/dev/null 2>&1 || true; set -a; [ -f .env ] && source .env; set +a; if [[ "$$RABBITMQ_URL" == *localhost* || "$$RABBITMQ_URL" == *127.0.0.1* || "$$RABBITMQ_URL" == *::1* ]]; then export RABBITMQ_URL=amqp://user:password@rabbitmq:5672/; fi; for i in {1..30}; do code=$$(curl -s -o /dev/null -w "%{http_code}" http://rabbitmq:15672/api/overview || true); if [[ "$$code" == "200" || "$$code" == "401" ]]; then ready=1; break; fi; sleep 1; done; if [[ -z "$$ready" ]]; then echo "RabbitMQ not ready at rabbitmq:15672"; exit 1; fi; PYTHONPATH=. poetry run python3 apps/cli/cli.py --timeout $(CLI_TIMEOUT)'

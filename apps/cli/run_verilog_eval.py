@@ -32,7 +32,7 @@ from apps.cli.cli import connection_params_from_config, start_workers, stop_work
 from core.observability.agentops_tracker import get_tracker
 from core.observability.setup import configure_observability
 from core.runtime.broker import create_run_routing, declare_task_topology
-from core.runtime.config import DEFAULT_CONFIG_PATH, get_runtime_config, set_runtime_config
+from core.runtime.config import get_runtime_config, resolve_runtime_config_path, set_runtime_config
 from core.runtime.paths import resource_root, workspace_root
 from core.runtime.testbench_contract import build_testbench_contract
 from core.schemas.contracts import AgentType, EntityType, TaskMessage, TaskStatus
@@ -99,7 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("run", "analyze", "compare", "list-problems"),
         help="Benchmark command to execute (default: run).",
     )
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to runtime YAML config.")
+    parser.add_argument("--config", default=None, help="Path to runtime YAML config.")
     parser.add_argument(
         "--output-root",
         default=None,
@@ -1207,6 +1207,64 @@ def _reset_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+_TB_MISMATCH_INLINE_RE = re.compile(
+    r"^(?P<indent>\s*)wire\s+tb_mismatch\s*=\s*~tb_match\s*;\s*(?P<comment>//.*)?$"
+)
+
+
+def _normalize_public_benchmark_testbench(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    dumpvars_idx = next(
+        (idx for idx, line in enumerate(lines) if "$dumpvars" in line and "tb_mismatch" in line),
+        None,
+    )
+    if dumpvars_idx is None:
+        return text
+    mismatch_idx = next(
+        (idx for idx, line in enumerate(lines) if _TB_MISMATCH_INLINE_RE.match(line.rstrip("\n"))),
+        None,
+    )
+    if mismatch_idx is None:
+        return text
+    initial_idx = None
+    for idx in range(dumpvars_idx, -1, -1):
+        if re.match(r"^\s*initial\b", lines[idx]):
+            initial_idx = idx
+            break
+    if initial_idx is None:
+        return text
+
+    mismatch_line = lines[mismatch_idx].rstrip("\n")
+    match = _TB_MISMATCH_INLINE_RE.match(mismatch_line)
+    if match is None:
+        return text
+    indent = match.group("indent") or ""
+    comment = f" {match.group('comment')}" if match.group("comment") else ""
+    decl_line = f"{indent}wire tb_mismatch;\n"
+
+    if not any(re.match(r"^\s*wire\s+tb_mismatch\s*;\s*(?://.*)?$", line.rstrip("\n")) for line in lines[: initial_idx + 1]):
+        lines.insert(initial_idx, decl_line)
+        if mismatch_idx >= initial_idx:
+            mismatch_idx += 1
+    lines[mismatch_idx] = f"{indent}assign tb_mismatch = ~tb_match;{comment}\n"
+    return "".join(lines)
+
+
+def _stage_public_benchmark_oracle_assets(*, run_root: Path, test_sv: Path, ref_sv: Path) -> tuple[Path, Path]:
+    oracle_dir = run_root / "oracle_assets"
+    oracle_dir.mkdir(parents=True, exist_ok=True)
+
+    staged_test = oracle_dir / test_sv.name
+    staged_test.write_text(
+        _normalize_public_benchmark_testbench(test_sv.read_text(encoding="utf-8")),
+        encoding="utf-8",
+    )
+
+    staged_ref = oracle_dir / ref_sv.name
+    shutil.copy2(ref_sv, staged_ref)
+    return staged_test, staged_ref
+
+
 def _bind_benchmark_oracle_assets(
     *,
     design_context_path: Path,
@@ -1237,9 +1295,19 @@ def _bind_benchmark_oracle_assets(
         policy.setdefault(key, value)
     payload["execution_policy"] = policy
 
-    test_path = str(test_sv.resolve())
-    ref_path = str(ref_sv.resolve())
-    if bool(policy.get("benchmark_use_public_testbench", True)):
+    policy_uses_public_tb = bool(policy.get("benchmark_use_public_testbench", True))
+    if policy_uses_public_tb:
+        staged_test_sv, staged_ref_sv = _stage_public_benchmark_oracle_assets(
+            run_root=design_context_path.parent,
+            test_sv=test_sv,
+            ref_sv=ref_sv,
+        )
+        test_path = str(staged_test_sv.resolve())
+        ref_path = str(staged_ref_sv.resolve())
+    else:
+        test_path = str(test_sv.resolve())
+        ref_path = str(ref_sv.resolve())
+    if policy_uses_public_tb:
         node["testbench_file"] = test_path
         node["oracle_ref_file"] = ref_path
 
@@ -2231,7 +2299,7 @@ def run_from_args(args: argparse.Namespace) -> None:
         "started_at": _utc_now_iso(),
         "finished_at": "",
         "command_line": " ".join(sys.argv),
-        "config_path": str(Path(getattr(args, "config", DEFAULT_CONFIG_PATH)).resolve()),
+        "config_path": str(resolve_runtime_config_path(getattr(args, "config", None), default_name="runtime.benchmark.yaml")),
         "campaign": run_root.parent.name if run_root.parent != output_root else "",
         "run_id": run_root.name,
         "run_root": str(run_root),

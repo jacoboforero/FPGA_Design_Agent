@@ -5,3 +5,5 @@ includes:
   - domains/infrastructure.yaml
   - domains/verification.yaml
   - domains/benchmark.yaml
+  - domains/rag.yaml
+  - domains/rag.benchmark.yaml

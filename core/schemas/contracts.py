@@ -50,6 +50,7 @@ class AgentType(Enum):
     DEBUG = "DebugAgent"
     INTEGRATION = "IntegrationAgent"
     REFLECTION = "ReflectionAgent"
+    FINALIZE = "FinalizerAgent"
     SPECIFICATION_HELPER = "SpecificationHelperAgent"
 
 class WorkerType(Enum):
@@ -161,6 +162,10 @@ class ResultMessage(BaseModel):
     # Optional fields for specific use cases
     reflections: Optional[str] = Field(None, description="For agents (especially DebugAgent), a reflection on the task outcome.")
     metrics: Optional[CostMetrics] = Field(None, description="Cost and token usage information, primarily for agent tasks.")
+    runtime_metadata: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Structured runtime metadata for narration and downstream orchestration, including RAG activity.",
+    )
     
     # Analysis pipeline artifacts
     analysis_metadata: Optional[AnalysisMetadata] = Field(None, description="Metadata for analysis pipeline stages")

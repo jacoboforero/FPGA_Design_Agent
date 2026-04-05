@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 
 from agents.debug.worker import DebugWorker
+from agents.finalizer.worker import FinalizerWorker
 from agents.implementation.worker import ImplementationWorker
 from agents.reflection.worker import ReflectionWorker
-from agents.testbench.worker import TestbenchWorker
+from agents.testbench.worker import TestbenchWorker, _testbench_contract_guidance
 from core.tools.registry import LintConfig, SimulationConfig, ToolRegistry
 from core.runtime.config import get_runtime_config, set_runtime_config
 from core.runtime.retry import TaskInputError
@@ -292,6 +293,92 @@ def test_implementation_worker_strips_extra_module_definitions(tmp_path):
     assert "module top_mod" in contents
 
 
+def test_implementation_worker_injects_rag_context(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "agents.implementation.worker.retrieve_for_stage",
+        lambda stage, query, execution_policy=None: (
+            "// SOURCE topic=stored_design module=counter rtl_hash=abc\nmodule counter(input clk, output reg [3:0] count); endmodule",
+            {
+                "used": True,
+                "mode": "retrieve",
+                "hit_count": 1,
+                "retrieved_module_names": ["counter"],
+                "applied_guidance_summary": "I consulted prior designs for reset handling.",
+            },
+        ),
+    )
+    worker = ImplementationWorker(connection_params=None, stop_event=None)
+    gateway = CaptureGateway(FakeResponse(content="module demo(input clk, output reg out); always @(posedge clk) out <= 1'b0; endmodule\n"))
+    worker.gateway = gateway
+    rtl_path = tmp_path / "demo.sv"
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.IMPLEMENTATION,
+        context={"node_id": "demo", "rtl_path": str(rtl_path), "interface": {"signals": _iface_signals()}},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert gateway.messages is not None
+    assert "Relevant prior designs" in gateway.messages[0].content
+    assert result.runtime_metadata["rag"]["used"] is True
+
+
+def test_multimodule_demo_leaf_prompt_reuses_curated_buf1_leaf_seed(tmp_path, monkeypatch):
+    fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "rag" / "buf1_leaf_memory.json"
+    fixture_payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    seeded = fixture_payload["designs"][0]
+    monkeypatch.setattr(
+        "agents.implementation.worker.retrieve_for_stage",
+        lambda stage, query, execution_policy=None: (
+            f"// SOURCE topic=stored_design module={seeded['module_name']} rtl_hash={seeded['rtl_hash']}\n{seeded['rtl']}",
+            {
+                "used": True,
+                "mode": "retrieve",
+                "hit_count": 1,
+                "retrieved_module_names": [seeded["module_name"]],
+                "applied_guidance_summary": "I consulted a prior buf1_leaf implementation before writing the leaf module.",
+            },
+        ),
+    )
+    worker = ImplementationWorker(connection_params=None, stop_event=None)
+    gateway = CaptureGateway(
+        FakeResponse(
+            content=(
+                "module buf1_leaf(\n"
+                "  input logic a,\n"
+                "  output logic y\n"
+                ");\n"
+                "assign y = a;\n"
+                "endmodule\n"
+            )
+        )
+    )
+    worker.gateway = gateway
+    rtl_path = tmp_path / "buf1_leaf.sv"
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.IMPLEMENTATION,
+        context={
+            "node_id": "buf1_leaf",
+            "rtl_path": str(rtl_path),
+            "interface": {
+                "signals": [
+                    {"name": "a", "direction": "INPUT", "width": 1, "semantics": "buffer input"},
+                    {"name": "y", "direction": "OUTPUT", "width": 1, "semantics": "buffered output"},
+                ]
+            },
+            "demo_behavior": "1-bit combinational buffer that drives y = a.",
+            "execution_policy": {"run_kind": "engineer", "run_name": "demo_multimodule_buf_llm"},
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert gateway.messages is not None
+    assert "reuse or adapt when appropriate to the contract and interface" in gateway.messages[0].content
+    assert "module=buf1_leaf" in gateway.messages[0].content
+    assert result.runtime_metadata["rag"]["retrieved_module_names"] == ["buf1_leaf"]
+
+
 def test_testbench_worker_missing_interface(tmp_path):
     worker = TestbenchWorker(connection_params=None, stop_event=None)
     task = TaskMessage(
@@ -465,8 +552,47 @@ def test_testbench_worker_prompt_uses_combinational_no_reset_contract(tmp_path):
     system_prompt = gateway.messages[0].content
     user_prompt = gateway.messages[1].content
     assert "Do not invent clk/clock or rst/reset signals" in system_prompt
+    assert "Do not use persistent ref_* scoreboard state across multiple vectors" in system_prompt
+    assert "Use one simple initial/task-driven stimulus flow" in system_prompt
+    assert "wait exactly one small settle delay" in system_prompt
+    assert "avoid DUMP_START/DUMP_END window logic entirely" in system_prompt
+    assert "avoid persistent ref_* scoreboards" in system_prompt
+    assert "Do not implement dump control with unconditional always-begin polling loops" in system_prompt
     assert "Apply reset from time 0." not in system_prompt
     assert "mode: combinational_no_reset" in user_prompt
+
+
+def test_testbench_worker_injects_rag_context(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "agents.testbench.worker.retrieve_for_stage",
+        lambda stage, query, execution_policy=None: (
+            "// SOURCE topic=stored_design module=counter_tb rtl_hash=tb1\nmodule tb_counter; endmodule",
+            {
+                "used": True,
+                "mode": "retrieve",
+                "hit_count": 1,
+                "retrieved_module_names": ["counter_tb"],
+                "applied_guidance_summary": "I consulted prior verification patterns for checker ordering.",
+            },
+        ),
+    )
+    worker = TestbenchWorker(connection_params=None, stop_event=None)
+    gateway = CaptureGateway(FakeResponse(content="module tb_demo;\nendmodule\n"))
+    worker.gateway = gateway
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.TESTBENCH,
+        context={
+            "node_id": "demo",
+            "rtl_path": str(tmp_path / "demo.sv"),
+            "interface": {"signals": _iface_signals()},
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert gateway.messages is not None
+    assert "Relevant prior designs and verification patterns" in gateway.messages[0].content
+    assert result.runtime_metadata["rag"]["used"] is True
 
 
 def test_lint_worker_missing_verilator(tmp_path):
@@ -701,6 +827,52 @@ def test_tb_lint_worker_delay_semantic_ignores_comment_tokens_and_allows_two_del
     assert "TBSEM006" not in result.log_output
 
 
+def test_tb_lint_worker_semantic_failure_detects_zero_time_polling_loop(tmp_path, monkeypatch):
+    worker = TestbenchLintWorker(connection_params=None, stop_event=None)
+    worker.iverilog = "iverilog"
+    rtl_path = tmp_path / "demo.sv"
+    tb_path = tmp_path / "demo_tb.sv"
+    rtl_path.write_text("module demo(input a, output y); assign y = a; endmodule\n")
+    tb_path.write_text(
+        "`timescale 1ns/1ps\n"
+        "module tb_demo;\n"
+        "  reg a;\n"
+        "  wire y;\n"
+        "  integer dump_enabled;\n"
+        "  integer dump_start;\n"
+        "  demo dut(.a(a), .y(y));\n"
+        "  always begin\n"
+        "    if (dump_enabled && dump_start > 0) begin\n"
+        "      #(dump_start);\n"
+        "      $dumpvars(0, tb_demo);\n"
+        "    end\n"
+        "  end\n"
+        "  initial begin\n"
+        "    a = 0;\n"
+        "    #1;\n"
+        "    if (y !== a) begin\n"
+        "      $display(\"FAIL\");\n"
+        "      $finish(1);\n"
+        "    end\n"
+        "    $finish(0);\n"
+        "  end\n"
+        "endmodule\n"
+    )
+
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("workers.tb_lint.worker.subprocess.run", fake_run)
+    task = TaskMessage(
+        entity_type=EntityType.LIGHT_DETERMINISTIC,
+        task_type=WorkerType.TESTBENCH_LINTER,
+        context={"rtl_path": str(rtl_path), "tb_path": str(tb_path)},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.FAILURE
+    assert "TBSEM008" in result.log_output
+
+
 def test_tb_lint_worker_semantic_can_be_disabled(tmp_path, monkeypatch):
     cfg = get_runtime_config().model_copy(deep=True)
     cfg.lint.tb_semantic_enabled = False
@@ -744,6 +916,22 @@ def test_tb_lint_worker_semantic_can_be_disabled(tmp_path, monkeypatch):
     result = worker.handle_task(task)
     assert result.status is TaskStatus.SUCCESS
     assert "TBSEM004" not in result.log_output
+
+
+def test_clocked_testbench_guidance_bans_prev_shadow_delayed_checker_patterns():
+    guidance = _testbench_contract_guidance(
+        {
+            "mode": "clocked_reset",
+            "clock_name": "clk",
+            "sample_edge": "posedge",
+            "drive_edge": "negedge",
+            "reset_active_expr": "!rst_n",
+            "post_reset_settle_cycles": 1,
+        }
+    )
+
+    assert "current expected state and current sampled inputs" in guidance
+    assert "Do not create prev_* shadow copies" in guidance
 
 
 def test_acceptance_worker_no_requirements(sandbox):
@@ -1077,8 +1265,10 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
         def __init__(self, responses):
             self.responses = responses
             self.calls = 0
+            self.call_messages = []
 
         async def generate(self, messages, config):
+            self.call_messages.append(messages)
             resp = self.responses[self.calls]
             self.calls += 1
             return resp
@@ -1097,10 +1287,22 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
     tb = Path("demo_tb.sv")
     rtl.write_text("module demo; endmodule\n")
     tb.write_text('module tb_demo; initial begin $display("old"); $finish; end endmodule\n')
+    invalid_json = (
+        "{\n"
+        '  "summary": "needs retry",\n'
+        '  "touched_files": ["tb"],\n'
+        '  "rtl_lines": null,\n'
+        '  "tb_lines": [\n'
+        '    "module tb_demo;",\n'
+        '    "endmodule"\n'
+        '  ], // invalid comment\n'
+        '  "risks": [],\n'
+        '  "next_steps": ["retry"]\n'
+        "}\n"
+    )
     worker.gateway = SequenceGateway(
         [
-            FakeResponse(content="not json"),
-            FakeResponse(content="still not json"),
+            FakeResponse(content=invalid_json),
             FakeResponse(
                 content=json.dumps(
                     {
@@ -1129,7 +1331,15 @@ def test_debug_worker_retries_until_valid_json(sandbox, monkeypatch):
     )
     result = worker.handle_task(task)
     assert result.status is TaskStatus.SUCCESS
-    assert worker.gateway.calls == 3
+    assert worker.gateway.calls == 2
+    retry_messages = worker.gateway.call_messages[1]
+    assert len(retry_messages) == 4
+    assert retry_messages[2].content.strip() == invalid_json.strip()
+    retry_prompt = retry_messages[3].content
+    assert "Your previous response was not valid JSON." in retry_prompt
+    assert "Parse error:" in retry_prompt
+    assert "Problem excerpt:" in retry_prompt
+    assert "// invalid comment" in retry_prompt
 
 
 def test_debug_worker_success(sandbox, monkeypatch):
@@ -1635,5 +1845,112 @@ def test_debug_worker_prompt_uses_combinational_no_reset_contract(sandbox, monke
     system_prompt = gateway.messages[0].content
     user_prompt = gateway.messages[1].content
     assert "Do not invent clk/clock or rst/reset signals" in system_prompt
+    assert "Do not keep persistent ref_* scoreboard state across multiple vectors" in system_prompt
+    assert "replace the ref_* scoreboard with direct expected-value comparisons" in system_prompt
+    assert "inspect the testbench for zero-time loops" in system_prompt
     assert "mode: combinational_no_reset" in user_prompt
     assert result.status is TaskStatus.SUCCESS
+
+
+def test_debug_worker_injects_rag_context(sandbox, monkeypatch):
+    cfg = get_runtime_config().model_copy(deep=True)
+    cfg.debug.max_attempts = 1
+    set_runtime_config(cfg)
+    monkeypatch.setattr("agents.debug.worker.shutil.which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(
+        "agents.debug.worker._run_subprocess",
+        lambda cmd, timeout_s: subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        "agents.debug.worker.retrieve_for_stage",
+        lambda stage, query, execution_policy=None: (
+            "// SOURCE topic=stored_design module=counter_fix rtl_hash=db1\nmodule counter_fix(input clk, output reg out); endmodule",
+            {
+                "used": True,
+                "mode": "retrieve",
+                "hit_count": 1,
+                "retrieved_module_names": ["counter_fix"],
+                "applied_guidance_summary": "I consulted prior design examples to choose a more targeted patch.",
+            },
+        ),
+    )
+
+    rtl = Path("demo.sv")
+    tb = Path("demo_tb.sv")
+    rtl.write_text("module demo; endmodule\n")
+    tb.write_text("module tb_demo; initial $finish; endmodule\n")
+
+    worker = DebugWorker(connection_params=None, stop_event=None)
+    gateway = CaptureGateway(
+        FakeResponse(
+            content=json.dumps(
+                {
+                    "summary": "ok",
+                    "touched_files": ["tb"],
+                    "rtl_lines": None,
+                    "tb_lines": [
+                        "module tb_demo;",
+                        "  initial begin",
+                        "    $finish;",
+                        "  end",
+                        "endmodule",
+                    ],
+                    "risks": [],
+                    "next_steps": ["step"],
+                }
+            )
+        )
+    )
+    worker.gateway = gateway
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.DEBUG,
+        context={"node_id": "demo", "rtl_path": str(rtl), "tb_path": str(tb), "attempt": 1},
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert gateway.messages is not None
+    assert "Relevant prior designs and repair patterns" in gateway.messages[0].content
+    assert result.runtime_metadata["rag"]["used"] is True
+
+
+def test_finalizer_worker_archives_passing_design(sandbox, monkeypatch):
+    monkeypatch.setattr(
+        "agents.finalizer.worker.archive_final_design",
+        lambda **kwargs: {
+            "used": True,
+            "mode": "archive",
+            "stored_module_names": ["demo"],
+            "applied_guidance_summary": "I captured this passing design in memory for future runs.",
+        },
+    )
+    worker = FinalizerWorker(connection_params=None, stop_event=None)
+    worker.gateway = None
+
+    rtl = Path("demo.sv")
+    tb = Path("demo_tb.sv")
+    rtl.write_text("module demo(input clk, output reg out); always @(posedge clk) out <= 1'b0; endmodule\n")
+    tb.write_text("module tb_demo; initial $finish(0); endmodule\n")
+    accept_log = Path("artifacts/task_memory/demo/acceptance_attempt1/log.txt")
+    accept_log.parent.mkdir(parents=True, exist_ok=True)
+    accept_log.write_text("PASS: acceptance satisfied\n")
+
+    task = TaskMessage(
+        entity_type=EntityType.REASONING,
+        task_type=AgentType.FINALIZE,
+        context={
+            "node_id": "demo",
+            "rtl_path": str(rtl),
+            "tb_path": str(tb),
+            "attempt": 1,
+            "interface": {"signals": _iface_signals()},
+            "verification": {"test_goals": ["basic smoke"]},
+            "demo_behavior": "Simple registered output.",
+        },
+    )
+    result = worker.handle_task(task)
+    assert result.status is TaskStatus.SUCCESS
+    assert result.runtime_metadata["rag"]["mode"] == "archive"
+    bundle_root = Path(result.artifacts_path)
+    assert (bundle_root / "rtl.sv").exists()
+    assert (bundle_root / "manifest.json").exists()

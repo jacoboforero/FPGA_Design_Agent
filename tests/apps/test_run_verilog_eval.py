@@ -18,6 +18,7 @@ from apps.cli.run_verilog_eval import (
     _ensure_framework,
     _load_oracle_manifest,
     _resolve_mode_dir_for_compare,
+    _normalize_public_benchmark_testbench,
     _run_official_analyze,
     _script_cmd,
     _run_mode,
@@ -456,13 +457,15 @@ def test_bind_benchmark_oracle_assets_repoints_design_context(tmp_path: Path):
         },
     )
     assert bound_node == "TopModule"
-    assert bound_tb == str(test_sv.resolve())
-    assert bound_ref == str(ref_sv.resolve())
+    assert Path(bound_tb).name == test_sv.name
+    assert Path(bound_ref).name == ref_sv.name
+    assert Path(bound_tb).parent.name == "oracle_assets"
+    assert Path(bound_ref).parent.name == "oracle_assets"
 
     payload = json.loads(design_context_path.read_text())
     node = payload["nodes"]["TopModule"]
-    assert node["testbench_file"] == str(test_sv.resolve())
-    assert node["oracle_ref_file"] == str(ref_sv.resolve())
+    assert node["testbench_file"] == bound_tb
+    assert node["oracle_ref_file"] == bound_ref
     assert payload["execution_policy"]["disable_tb_generation"] is True
     assert payload["execution_policy"]["debug_rtl_only"] is True
     assert payload["execution_policy"]["benchmark_use_public_testbench"] is True
@@ -510,6 +513,26 @@ def test_bind_benchmark_oracle_assets_respects_generated_tb_mode(tmp_path: Path)
     assert node["testbench_file"] == "rtl/TopModule_tb.sv"
     assert "oracle_ref_file" not in node
     assert payload["execution_policy"]["benchmark_use_public_testbench"] is False
+
+
+def test_normalize_public_benchmark_testbench_declares_tb_mismatch_before_dumpvars():
+    source = (
+        "module tb();\n"
+        "  initial begin\n"
+        "    $dumpfile(\"wave.vcd\");\n"
+        "    $dumpvars(1, tb_mismatch);\n"
+        "  end\n"
+        "  wire tb_match;\n"
+        "  wire tb_mismatch = ~tb_match;\n"
+        "  assign tb_match = 1'b1;\n"
+        "endmodule\n"
+    )
+
+    normalized = _normalize_public_benchmark_testbench(source)
+
+    assert "wire tb_mismatch;\n  initial begin" in normalized
+    assert "assign tb_mismatch = ~tb_match;" in normalized
+    assert "wire tb_mismatch = ~tb_match;" not in normalized
 
 
 def test_build_parser_includes_orchestrated_flags():

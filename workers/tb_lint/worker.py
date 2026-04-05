@@ -268,6 +268,7 @@ def _run_tb_semantic_lint(
 ) -> list[str]:
     issues: list[str] = []
     regions = list(_iter_procedural_regions(tb_text))
+    issues.extend(_check_zero_time_polling_loops(tb_text))
     has_checker = _looks_self_checking_testbench(tb_text)
     issues.extend(_check_clock_has_single_driver(regions, clock_name))
     if has_checker:
@@ -280,6 +281,29 @@ def _run_tb_semantic_lint(
         issues.extend(_check_fail_print_consistency(regions, signal_names))
     # Keep deterministic ordering for stable logs/narrative.
     return sorted(set(issues))
+
+
+def _check_zero_time_polling_loops(tb_text: str) -> list[str]:
+    issues: list[str] = []
+    lines = tb_text.splitlines()
+    always_begin_re = re.compile(r"^\s*always\s+begin\b", flags=re.IGNORECASE)
+    for idx, line in enumerate(lines):
+        if not always_begin_re.match(line):
+            continue
+        probe = idx + 1
+        while probe < len(lines):
+            stripped = _strip_verilog_comments(lines[probe]).strip()
+            if not stripped:
+                probe += 1
+                continue
+            lowered = stripped.lower()
+            if lowered.startswith(("end", "#", "@", "wait", "forever", "repeat")):
+                break
+            issues.append(
+                f"TBSEM008 L{idx + 1}: always-begin loop lacks an unconditional timing/event control at the top of the iteration; this can spin at time 0 and hang simulation."
+            )
+            break
+    return issues
 
 
 def _iter_procedural_regions(tb_text: str) -> list[dict]:

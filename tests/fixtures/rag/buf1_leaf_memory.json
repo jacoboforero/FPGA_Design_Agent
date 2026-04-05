@@ -1,0 +1,42 @@
+{
+  "schema_version": "1",
+  "designs": [
+    {
+      "module_name": "buf1_leaf",
+      "summary": "buf1_leaf is a 1-bit combinational buffer that drives y = a with a direct pass-through assignment.",
+      "signature": "module buf1_leaf(input logic a, output logic y);",
+      "rtl": "module buf1_leaf (\n    input logic a,\n    output logic y\n);\n    assign y = a;\nendmodule\n",
+      "rtl_hash": "0e14f3ebea",
+      "rtl_sha256": "0e14f3ebeae784915a0fb458dd7f4684894bdad3199ff05a0720ecaaaeaf9ef7",
+      "tb_text": "module buf1_leaf_tb;\n  logic a;\n  logic y;\n\n  buf1_leaf dut (\n    .a(a),\n    .y(y)\n  );\n\n  initial begin\n    a = 1'b0;\n    #1;\n    if (y !== 1'b0) $fatal(1, \"buf1_leaf failed for a=0\");\n    a = 1'b1;\n    #1;\n    if (y !== 1'b1) $fatal(1, \"buf1_leaf failed for a=1\");\n    $display(\"PASS\");\n    $finish;\n  end\nendmodule\n",
+      "tb_sha256": "a03983cd7b4401dd356da66672d67ae563124310684eeeac805b0c01a9e6405d",
+      "node_id": "buf1_leaf",
+      "run_id": "demo_seed_buf1_leaf",
+      "attempt": 1,
+      "interface_signals": [
+        {
+          "name": "a",
+          "direction": "INPUT",
+          "width": 1,
+          "semantics": "buffer input"
+        },
+        {
+          "name": "y",
+          "direction": "OUTPUT",
+          "width": 1,
+          "semantics": "buffered output"
+        }
+      ],
+      "verification": {
+        "test_goals": [
+          "Verify y = a for both input values."
+        ]
+      },
+      "tags": [
+        "generated_design",
+        "passing_design",
+        "demo_seed"
+      ]
+    }
+  ]
+}

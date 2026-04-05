@@ -127,3 +127,35 @@ def test_doctor_reports_missing_benchmark_verilator(tmp_path: Path, monkeypatch)
     results = run_checks(cfg, force_benchmark=True)
     statuses = _status_by_name(results)
     assert statuses.get("benchmark_verilator") == "FAIL"
+
+
+def test_doctor_warns_when_openai_rag_key_missing_but_fail_open(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("apps.cli.doctor._has_module", lambda name: True)
+    cfg = load_runtime_config()
+    cfg.rag.enabled = True
+    cfg.rag.fail_open = True
+    results = run_checks(cfg, force_benchmark=False)
+    statuses = _status_by_name(results)
+    assert statuses.get("rag_credentials") == "WARN"
+
+
+def test_doctor_reports_rag_benchmark_policy(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr("apps.cli.doctor._has_module", lambda name: True)
+    monkeypatch.setattr("apps.cli.doctor.resolve_resource_path", lambda path: Path(__file__).resolve())
+    cfg = load_runtime_config()
+    cfg.rag.enabled = True
+    cfg.rag.allow_benchmark = False
+    results = run_checks(cfg, force_benchmark=True)
+    statuses = _status_by_name(results)
+    assert statuses.get("rag_benchmark_policy") == "WARN"
+
+
+def test_doctor_reports_benchmark_rag_disabled_as_expected_default():
+    cfg = load_runtime_config(Path("config/runtime.benchmark.yaml"))
+    results = run_checks(cfg, force_benchmark=True)
+    statuses = _status_by_name(results)
+    messages = _message_by_name(results)
+    assert statuses.get("rag_enabled") == "PASS"
+    assert messages.get("rag_enabled") == "RAG disabled for benchmark runs by default."

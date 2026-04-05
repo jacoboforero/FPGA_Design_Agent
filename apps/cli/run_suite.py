@@ -21,7 +21,7 @@ from core.observability.agentops_tracker import get_tracker
 from core.schemas.contracts import AgentType, EntityType, ResultMessage, TaskMessage, TaskStatus
 from agents.planner.worker import PlannerWorker
 from core.runtime.broker import TASK_EXCHANGE, create_run_routing, declare_results_queue
-from core.runtime.config import DEFAULT_CONFIG_PATH, get_runtime_config, initialize_runtime_config
+from core.runtime.config import get_runtime_config, initialize_runtime_config, resolve_runtime_config_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_GEN = REPO_ROOT / "artifacts" / "generated"
@@ -234,9 +234,10 @@ def run_case(case: Dict[str, str], timeout: float) -> Dict[str, str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run increasing-complexity pipeline smoke tests.")
     parser.add_argument("--timeout", type=float, default=120.0, help="Per-case timeout in seconds")
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to runtime YAML config.")
+    parser.add_argument("--config", default=None, help="Path to runtime YAML config.")
     args = parser.parse_args()
-    initialize_runtime_config(Path(args.config))
+    args.config = str(resolve_runtime_config_path(args.config, default_name="runtime.yaml"))
+    initialize_runtime_config(args.config, default_name="runtime.yaml")
 
     results = []
     for case in SUITE:

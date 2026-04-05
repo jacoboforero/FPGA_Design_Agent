@@ -11,11 +11,13 @@ import shutil
 import subprocess
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
 
+from adapters.rag.rag_service import retrieve_for_stage
 from core.schemas.contracts import AgentType, ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
 from agents.common.base import AgentWorkerBase
-from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, init_llm_gateway
+from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, apply_reproducibility_settings, init_llm_gateway
 from agents.common.tb_sanitizer import sanitize_testbench
 from workers.lint.worker import _format_semantic_issues, _run_rtl_semantic_lint
 from workers.tb_lint.worker import (
@@ -88,6 +90,22 @@ class DebugWorker(AgentWorkerBase):
         distilled_prompt = _truncate_prompt_text(distilled, max_chars=10000)
         reflection_prompt = _truncate_prompt_text(reflection, max_chars=10000)
         tb_contract = _testbench_contract_for_context(ctx)
+        rag_query = _build_debug_rag_query(
+            node_id=node_id,
+            debug_reason=debug_reason,
+            rtl_text=rtl_text,
+            lint_log=lint_log,
+            sim_log=sim_log,
+            tb_lint_log=tb_lint_log,
+            reflection=reflection,
+            attempt_history=ctx.get("attempt_history"),
+        )
+        rag_context, rag_metadata = retrieve_for_stage(
+            "debug",
+            rag_query,
+            execution_policy=execution_policy,
+        )
+        rag_runtime_metadata = {"rag": rag_metadata}
 
         system = (
             "You are a Debug Agent for an RTL design pipeline. Your job is to PATCH CODE.\n"
@@ -123,6 +141,8 @@ class DebugWorker(AgentWorkerBase):
             "- For sim failures, do not assume the RTL is wrong: check for common testbench issues like stimulus timing races.\n"
             "  If the testbench drives inputs immediately after an @(posedge clk) (same timestep as the sampling edge),\n"
             "  it can race the DUT/reference model and cause deterministic mismatches. Prefer driving on negedge (or add a small #1 delay).\n"
+            "- For simulation timeouts, inspect the testbench for zero-time loops such as always-begin polling blocks without\n"
+            "  an unconditional timing/event control at the top of each iteration, especially in dump/window helpers.\n"
             "- If attempt_history is provided, avoid repeating a previously attempted patch strategy for the same failure_signature.\n"
             "- If stuck=true or a failure signature repeats, your patch MUST change strategy materially and explain the delta in summary.\n"
             "- If waveform dumping uses a cycle window, do NOT treat DUMP_START=0 as \"disabled\"; some benches accidentally $dumpoff forever.\n"
@@ -130,10 +150,20 @@ class DebugWorker(AgentWorkerBase):
             f"{_debug_testbench_guidance(tb_contract)}"
             "- Your patch is accepted only if local deterministic validation passes (tb_lint for TB changes; lint for RTL changes).\n"
         )
+        if "TBSEM008" in tb_lint_log:
+            system += (
+                "- TBSEM008 repair rule: if the checker waits with #1 after a sample edge, remove all prev_* shadow controls and prev_* expected-state variables from the delayed compare path.\n"
+                "- For TBSEM008, compute expected_next from the current expected state and current sampled DUT inputs, then compare after the single settle delay.\n"
+            )
         if rtl_only_debug:
             system += (
                 "- RTL-only debug mode is active: do not modify testbench files.\n"
                 "  touched_files MUST include only 'rtl' and tb_lines MUST be null.\n"
+            )
+        if rag_context.strip():
+            system += (
+                "Relevant prior designs and repair patterns (optional guidance, reuse or adapt when appropriate to the contract and interface):\n"
+                f"{rag_context}\n"
             )
         user = (
             f"Node: {node_id}\n"
@@ -166,6 +196,7 @@ class DebugWorker(AgentWorkerBase):
         temperature = float(llm_cfg.temperature_debug)
         top_p = llm_cfg.top_p
         cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
+        cfg = apply_reproducibility_settings(cfg, provider=getattr(self.gateway, "provider", None))
 
         stage_dir = Path("artifacts/task_memory") / node_id / _stage_dir("debug", sim_attempt)
         try:
@@ -191,6 +222,7 @@ class DebugWorker(AgentWorkerBase):
                     correlation_id=task.correlation_id,
                     status=TaskStatus.FAILURE,
                     log_output=last_error,
+                    runtime_metadata=rag_runtime_metadata,
                 )
 
             tracker = get_tracker()
@@ -204,7 +236,12 @@ class DebugWorker(AgentWorkerBase):
                     completion_tokens=getattr(resp, "output_tokens", 0),
                     total_tokens=getattr(resp, "total_tokens", 0),
                     estimated_cost_usd=getattr(resp, "estimated_cost_usd", None),
-                    metadata={"stage": "debug", "attempt": llm_attempt},
+                    metadata={
+                        "stage": "debug",
+                        "attempt": llm_attempt,
+                        "rag_used": bool(rag_metadata.get("used")),
+                        "rag_hit_count": int(rag_metadata.get("hit_count", 0)),
+                    },
                 )
             except Exception:
                 pass
@@ -214,8 +251,8 @@ class DebugWorker(AgentWorkerBase):
             except Exception:
                 pass
 
-            parsed = _safe_json(resp.content)
-            if parsed:
+            parsed, json_error_detail, json_error_excerpt = _safe_json_with_error(resp.content)
+            if isinstance(parsed, dict):
                 try:
                     (stage_dir / f"llm_parsed_attempt{llm_attempt}.json").write_text(
                         json.dumps(parsed, indent=2),
@@ -242,6 +279,7 @@ class DebugWorker(AgentWorkerBase):
                         correlation_id=task.correlation_id,
                         status=TaskStatus.FAILURE,
                         log_output=last_error,
+                        runtime_metadata=rag_runtime_metadata,
                     )
                 if not write_result["touched_files"]:
                     last_error = "Debug agent returned no patch (touched_files empty)."
@@ -252,6 +290,7 @@ class DebugWorker(AgentWorkerBase):
                         correlation_id=task.correlation_id,
                         status=TaskStatus.FAILURE,
                         log_output=last_error,
+                        runtime_metadata=rag_runtime_metadata,
                     )
                 local_validation = _run_local_validation(
                     ctx=ctx,
@@ -280,6 +319,7 @@ class DebugWorker(AgentWorkerBase):
                         correlation_id=task.correlation_id,
                         status=TaskStatus.FAILURE,
                         log_output=last_error,
+                        runtime_metadata=rag_runtime_metadata,
                     )
                 emit_runtime_event(
                     runtime=self.runtime_name,
@@ -312,15 +352,34 @@ class DebugWorker(AgentWorkerBase):
                         },
                         indent=2,
                     ),
+                    runtime_metadata=rag_runtime_metadata,
                 )
             last_error = "Debug LLM response was not valid JSON."
+            if json_error_detail:
+                last_error = f"{last_error} {json_error_detail}"
             if llm_attempt < max_attempts:
+                msgs.extend(
+                    [
+                        Message(
+                            role=MessageRole.ASSISTANT,
+                            content=_truncate_prompt_text(resp.content, max_chars=6000),
+                        ),
+                        Message(
+                            role=MessageRole.USER,
+                            content=_build_json_retry_feedback(
+                                error_detail=json_error_detail,
+                                excerpt=json_error_excerpt,
+                            ),
+                        ),
+                    ]
+                )
                 continue
             return ResultMessage(
                 task_id=task.task_id,
                 correlation_id=task.correlation_id,
                 status=TaskStatus.FAILURE,
                 log_output=last_error,
+                runtime_metadata=rag_runtime_metadata,
             )
 
         return ResultMessage(
@@ -328,22 +387,40 @@ class DebugWorker(AgentWorkerBase):
             correlation_id=task.correlation_id,
             status=TaskStatus.FAILURE,
             log_output=last_error or "Debug LLM response was not valid JSON.",
+            runtime_metadata=rag_runtime_metadata,
         )
 
 
-def _safe_json(text: str):
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
+def _safe_json_with_error(text: str) -> tuple[dict | list | None, str | None, str | None]:
+    errors: list[tuple[str, Exception, str]] = []
+
+    def _try_parse(candidate: str, source: str):
+        try:
+            return json.loads(candidate), None
+        except Exception as exc:  # noqa: BLE001
+            return None, (source, exc, candidate)
+
+    parsed, error = _try_parse(text, "response")
+    if parsed is not None:
+        return parsed, None, None
+    if error is not None:
+        errors.append(error)
+
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
-        try:
-            return json.loads(text[start : end + 1])
-        except Exception:
-            return None
-    return None
+        sliced = text[start : end + 1]
+        if sliced != text:
+            parsed, error = _try_parse(sliced, "json_object")
+            if parsed is not None:
+                return parsed, None, None
+            if error is not None:
+                errors.append(error)
+
+    if not errors:
+        return None, None, None
+    source, exc, candidate = errors[-1]
+    return None, _format_json_error_detail(exc, source=source), _format_json_error_excerpt(candidate, exc)
 
 
 def _truncate_prompt_text(text: str, *, max_chars: int) -> str:
@@ -353,6 +430,80 @@ def _truncate_prompt_text(text: str, *, max_chars: int) -> str:
         return text
     omitted = len(text) - max_chars
     return f"{text[:max_chars]}\n... [truncated {omitted} char(s) for prompt efficiency]"
+
+
+def _format_json_error_detail(exc: Exception, *, source: str) -> str:
+    if isinstance(exc, json.JSONDecodeError):
+        location = f"line {exc.lineno} column {exc.colno}"
+        if source == "json_object":
+            return f"Parse error while reading extracted JSON object: {exc.msg} at {location}."
+        return f"Parse error: {exc.msg} at {location}."
+    if source == "json_object":
+        return f"Parse error while reading extracted JSON object: {type(exc).__name__}: {exc}."
+    return f"Parse error: {type(exc).__name__}: {exc}."
+
+
+def _format_json_error_excerpt(text: str, exc: Exception) -> str | None:
+    if isinstance(exc, json.JSONDecodeError):
+        lines = text.splitlines() or [text]
+        line_index = max(exc.lineno - 1, 0)
+        start = max(line_index - 1, 0)
+        end = min(line_index + 2, len(lines))
+        excerpt_lines = [f"L{idx + 1}: {lines[idx]}" for idx in range(start, end)]
+        return "\n".join(excerpt_lines)
+    trimmed = text.strip()
+    if not trimmed:
+        return None
+    return _truncate_prompt_text(trimmed, max_chars=280)
+
+
+def _build_json_retry_feedback(*, error_detail: str | None, excerpt: str | None) -> str:
+    parts = ["Your previous response was not valid JSON."]
+    if error_detail:
+        parts.extend(["Parse error:", error_detail])
+    if excerpt:
+        parts.extend(["Problem excerpt:", excerpt])
+    parts.extend(
+        [
+            "Return the same patch again using the exact schema from the system prompt.",
+            "Return ONLY one JSON object and no extra text.",
+            "Do not include comments, trailing commas, code fences, or explanations outside the JSON object.",
+            "Each entry in rtl_lines and tb_lines must be a plain JSON string representing exactly one source line.",
+        ]
+    )
+    return "\n".join(parts)
+
+
+def _build_debug_rag_query(
+    *,
+    node_id: str,
+    debug_reason: str,
+    rtl_text: str,
+    lint_log: str,
+    sim_log: str,
+    tb_lint_log: str,
+    reflection: str,
+    attempt_history: Any,
+) -> str:
+    rtl_signature = ""
+    for line in rtl_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("module "):
+            rtl_signature = stripped
+            break
+    history_payload = attempt_history if isinstance(attempt_history, list) else []
+    lines = [
+        f"debug query for module {node_id}",
+        f"debug_reason: {debug_reason}",
+        f"rtl_signature: {rtl_signature or 'unknown'}",
+        "recent_failure_evidence:",
+        f"- lint_log: {_truncate_prompt_text(lint_log, max_chars=600)}",
+        f"- sim_log: {_truncate_prompt_text(sim_log, max_chars=600)}",
+        f"- tb_lint_log: {_truncate_prompt_text(tb_lint_log, max_chars=600)}",
+        f"- reflection: {_truncate_prompt_text(reflection, max_chars=800)}",
+        f"- attempt_history: {json.dumps(history_payload[-3:], indent=2) if history_payload else '[]'}",
+    ]
+    return "\n".join(lines)
 
 
 _NO_FENCE_PREFIXES = ("```", "`systemverilog")
@@ -457,17 +608,22 @@ def _debug_testbench_guidance(contract: dict) -> str:
             "- Do not invent clk/clock or rst/reset signals if they are not DUT ports.\n"
             "- Do not use sampled-edge scoreboards, prev_* gating, or reset-release checker activation.\n"
             "- Prefer direct input-step stimulus and direct expected-value comparisons after a small settle delay only if needed.\n"
+            "- Do not keep persistent ref_* scoreboard state across multiple vectors in one procedural block.\n"
+            "- If TB semantic lint reports stale ref_* ordering, replace the ref_* scoreboard with direct expected-value comparisons or a non-persistent helper strategy.\n"
         )
     if mode == "clocked_no_reset":
         return (
             f"- This node is clocked on {contract['sample_edge']} {contract['clock_name']} but has no required reset in the testbench.\n"
             "- Do not invent reset handling or post-reset checker gating.\n"
             f"- Keep stimulus on {contract['drive_edge']} {contract['clock_name']} and checking on {contract['sample_edge']} {contract['clock_name']}.\n"
+            "- If the checker uses a #1 settle delay after the sample edge, derive expected_next from current sampled inputs/state and compare after that delay.\n"
+            "- Do not use prev_* shadow controls or prev_* expected-state copies in delayed checker comparisons.\n"
         )
     return (
         f"- This node uses a clocked/reset testbench contract on {contract['sample_edge']} {contract['clock_name']}.\n"
         "- Keep reset handling explicit and gate checking through reset release stabilization.\n"
-        "- Avoid stale prev_* control comparisons when using # delays inside sampled checkers.\n"
+        "- If the checker uses a #1 settle delay after the sample edge, derive expected_next from current sampled inputs/state and compare after that delay.\n"
+        "- Do not use prev_* shadow controls or prev_* expected-state copies in delayed checker comparisons.\n"
     )
 
 

@@ -1,0 +1,3 @@
+# Intentionally empty.
+# Demo and install flows seed curated workspace-local RAG memory instead of
+# shipping broad sample RTL in the immutable knowledge base.

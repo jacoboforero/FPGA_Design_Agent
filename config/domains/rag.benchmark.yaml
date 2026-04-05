@@ -1,0 +1,3 @@
+rag:
+  enabled: false
+  allow_benchmark: false

@@ -1,10 +1,12 @@
 """
 Global pytest configuration and shared fixtures for the multi-agent hardware design system.
 """
+import os
 import pytest
 from datetime import datetime
 from uuid import UUID, uuid4
 from core.runtime.config import get_runtime_config, set_runtime_config
+from core.runtime.paths import ENV_ACTIVE_CONFIG_ROOT
 from core.schemas import (
     TaskPriority,
     TaskStatus,
@@ -24,5 +26,10 @@ from core.schemas import (
 @pytest.fixture(autouse=True)
 def _restore_runtime_config():
     baseline = get_runtime_config().model_copy(deep=True)
+    active_config_root = os.environ.get(ENV_ACTIVE_CONFIG_ROOT)
     yield
     set_runtime_config(baseline)
+    if active_config_root is None:
+        os.environ.pop(ENV_ACTIVE_CONFIG_ROOT, None)
+    else:
+        os.environ[ENV_ACTIVE_CONFIG_ROOT] = active_config_root

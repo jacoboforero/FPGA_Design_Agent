@@ -5,14 +5,15 @@ installed CLI path.
 
 ## Files
 
-- `runtime.yaml`
-  - Locked runtime config for the installed CLI.
-  - Uses interactive spec helper + `testbench-agent` verification.
 - `requirements.txt`
-  - Minimal Python dependencies for the installed CLI bundle.
+  - Runtime Python dependencies for the installed CLI bundle.
+- `stage_runtime.py`
+  - Builds the curated install payload used by the Homebrew formula.
+  - Stages only runtime code, `config/`, `tool_registry.yaml`, the shipped RAG knowledge base, and benchmark assets required by `mhd benchmark`.
 - `Formula/mhd.rb`
   - Reference Homebrew formula for a future real tap.
-  - Treat RabbitMQ as a runtime prerequisite rather than a formula dependency.
+  - Seeds user config into `$XDG_CONFIG_HOME/mhd` or `~/.config/mhd` on first run.
+  - Treats RabbitMQ as a runtime prerequisite rather than a formula dependency.
 
 ## Local Tap Smoke Test
 
@@ -37,14 +38,66 @@ Full-smoke notes:
 - override the spec with `MHD_SMOKE_SPEC=/absolute/path/to/spec.txt`
 - defaults the full smoke broker to `amqp://guest:guest@localhost:5672/`
 - override the broker with `MHD_SMOKE_RABBITMQ_URL=amqp://user:password@host:5672/`
+- uses a temporary `XDG_CONFIG_HOME` so the smoke test does not pollute your real user config
 - disables Homebrew auto-update and install cleanup by default to keep demo setup faster
 
 ## Runtime Prerequisites
 
 - RabbitMQ must already be installed and running.
-- `OPENAI_API_KEY` must be set for interactive spec-helper flows.
-- If broker credentials differ from the locked runtime YAML, set
-  `RABBITMQ_URL` explicitly in the environment.
+- `mhd` reads credentials from the shell environment.
+- Add `OPENAI_API_KEY` and optional `RABBITMQ_URL` to `~/.zshrc`, then open a new shell.
+- `OPENAI_API_KEY` powers both the default LLM path and OpenAI-backed RAG embeddings in the demo flow.
+- Use `--rag off` and `--rag on` on the installed command to control retrieval per run without editing YAML.
+- `MHD_ENV_FILE=/absolute/path/to/.env` remains available as an explicit advanced override.
+
+## Installed User Config
+
+- Installed `mhd` mirrors the repo config tree under `$XDG_CONFIG_HOME/mhd` when `XDG_CONFIG_HOME` is set.
+- Otherwise it uses `~/.config/mhd`.
+- First run seeds that directory from the bundled `config/` templates.
+- Existing user config is never overwritten automatically.
+- The old `/opt/homebrew/etc/mhd/runtime.yaml` path is no longer part of the install contract.
+- Normal installed defaults are:
+  - `mhd ...` -> `runtime.yaml`
+  - `mhd benchmark ...` -> `runtime.benchmark.yaml`
+  - `mhd doctor --benchmark` -> `runtime.benchmark.yaml`
+
+## Install Payload
+
+The Homebrew install intentionally stages a smaller runtime tree. It includes:
+
+- `adapters/`, `agents/`, `apps/cli/`, `core/`, `orchestrator/`, `workers/`
+- `config/`
+- `tool_registry.yaml`
+- the shipped Verilog RAG knowledge base under `adapters/rag/`
+- the benchmark assets needed by `mhd benchmark`
+
+It excludes repo-only material such as:
+
+- `docs/`
+- `tests/`
+- `infrastructure/`
+- `apps/ui_backend/`
+- `apps/vscode-extension/`
+- repo `.env` files and cache artifacts
+
+## Demo Workspace Helper
+
+To create a clean demo workspace that looks like a real user directory:
+
+```bash
+bash scripts/setup_homebrew_demo_env.sh
+```
+
+That helper:
+
+- creates `~/Desktop/mhd-homebrew-demo` by default,
+- copies only the demo spec files needed for the live walkthrough,
+- seeds `artifacts/rag/memory.json` with a single curated `buf1_leaf` example for the multimodule demo,
+- prints shell export lines for `~/.zshrc`,
+- does not copy config into the workspace,
+- does not create a workspace `.env`,
+- relies on the installed config + shell environment the same way a real user would.
 
 ## macOS Note
 

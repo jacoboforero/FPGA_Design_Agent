@@ -13,7 +13,7 @@ class AgentOpsSink:
         self.tracker = tracker
 
     def send(self, event: Event) -> None:
-        # We only forward minimal metadata; detailed LLM cost tracking happens in the tracker.
         if not self.tracker:
             return
         self.tracker.log_event(event.event_type, event.payload)
+        self.tracker.record_runtime_event(event.runtime, event.event_type, event.payload)

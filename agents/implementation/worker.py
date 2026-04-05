@@ -8,12 +8,14 @@ import asyncio
 import json
 import re
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
+from adapters.rag.rag_service import retrieve_for_stage
+from agents.common.rag_queries import build_implementation_rag_query
 from core.schemas.contracts import AgentType, ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
 from agents.common.base import AgentWorkerBase
-from agents.common.llm_gateway import init_llm_gateway, Message, MessageRole, GenerationConfig
+from agents.common.llm_gateway import apply_reproducibility_settings, init_llm_gateway, Message, MessageRole, GenerationConfig
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
 from core.runtime.config import get_runtime_config
@@ -92,7 +94,9 @@ class ImplementationWorker(AgentWorkerBase):
                 log_output="LLM gateway unavailable; set USE_LLM=1 and configure provider credentials.",
             )
         try:
-            rtl_source, log_output = asyncio.run(self._llm_generate_impl(ctx, node_id, iface_signals))
+            rtl_source, log_output, runtime_metadata = asyncio.run(
+                self._llm_generate_impl(ctx, node_id, iface_signals)
+            )
         except Exception as exc:  # noqa: BLE001
             if is_transient_error(exc):
                 raise RetryableError(f"LLM generation transient error: {exc}")
@@ -137,6 +141,7 @@ class ImplementationWorker(AgentWorkerBase):
             status=TaskStatus.SUCCESS,
             artifacts_path=str(rtl_path),
             log_output=log_output,
+            runtime_metadata=runtime_metadata,
         )
 
     def _validate_integration_context(self, ctx: dict) -> str | None:
@@ -219,7 +224,7 @@ class ImplementationWorker(AgentWorkerBase):
 
         return None
 
-    async def _llm_generate_impl(self, ctx, node_id: str, iface) -> Tuple[str, str]:
+    async def _llm_generate_impl(self, ctx, node_id: str, iface) -> Tuple[str, str, dict[str, Any]]:
         rtl_language = _rtl_language_for_context(ctx)
         port_lines = []
         for sig in iface:
@@ -233,6 +238,21 @@ class ImplementationWorker(AgentWorkerBase):
         connections = ctx.get("connections") or []
         module_contract = ctx.get("module_contract") or {}
         contract_style = str(module_contract.get("style", "")).strip().lower()
+        rag_query = build_implementation_rag_query(
+            node_id=node_id,
+            iface=iface,
+            behavior=behavior,
+            verification=verification,
+            module_contract=module_contract,
+            children=children,
+            child_interfaces=child_interfaces,
+            connections=connections,
+        )
+        rag_context, rag_metadata = retrieve_for_stage(
+            "implementation",
+            rag_query,
+            execution_policy=ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else None,
+        )
         if rtl_language == "systemverilog":
             system = (
                 "You are an RTL Implementation Agent. Generate synthesizable RTL for a SystemVerilog-capable benchmark harness.\n"
@@ -275,6 +295,11 @@ class ImplementationWorker(AgentWorkerBase):
                 "If a child output has no connection, it may be left unconnected. "
                 "If a connection is between two child ports, introduce an internal wire with a clear name."
             )
+        if rag_context.strip():
+            system += (
+                "\nRelevant prior designs (optional guidance, reuse or adapt when appropriate to the contract and interface):\n"
+                f"{rag_context}\n"
+            )
         user = (
             f"Module name: {node_id}\n"
             f"Ports:\n" + "\n".join(f"- {p}" for p in port_lines) + "\n"
@@ -297,6 +322,7 @@ class ImplementationWorker(AgentWorkerBase):
         temperature = float(llm_cfg.temperature)
         top_p = llm_cfg.top_p
         cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
+        cfg = apply_reproducibility_settings(cfg, provider=getattr(self.gateway, "provider", None))
         resp = await self.gateway.generate(messages=msgs, config=cfg)  # type: ignore[arg-type]
         tracker = get_tracker()
         try:
@@ -309,11 +335,19 @@ class ImplementationWorker(AgentWorkerBase):
                 completion_tokens=getattr(resp, "output_tokens", 0),
                 total_tokens=getattr(resp, "total_tokens", 0),
                 estimated_cost_usd=getattr(resp, "estimated_cost_usd", None),
-                metadata={"stage": "implementation"},
+                metadata={
+                    "stage": "implementation",
+                    "rag_used": bool(rag_metadata.get("used")),
+                    "rag_hit_count": int(rag_metadata.get("hit_count", 0)),
+                },
             )
         except Exception:
             pass
-        return resp.content, f"LLM generation via {getattr(resp, 'provider', 'llm')}/{getattr(resp, 'model_name', 'unknown')}"
+        return (
+            resp.content,
+            f"LLM generation via {getattr(resp, 'provider', 'llm')}/{getattr(resp, 'model_name', 'unknown')}",
+            {"rag": rag_metadata},
+        )
 
     def _prompt_port_line(self, sig: dict, *, rtl_language: str) -> str:
         dir_kw = str(sig["direction"]).lower()

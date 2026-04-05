@@ -94,6 +94,7 @@ class TestAgentType:
             "DEBUG": "DebugAgent",
             "INTEGRATION": "IntegrationAgent",
             "REFLECTION": "ReflectionAgent",
+            "FINALIZE": "FinalizerAgent",
             "SPECIFICATION_HELPER": "SpecificationHelperAgent"
         }
         
@@ -103,7 +104,7 @@ class TestAgentType:
     
     def test_enum_members(self):
         """Test that all expected members exist."""
-        expected_members = {"PLANNER", "IMPLEMENTATION", "TESTBENCH", "DEBUG", "INTEGRATION", "REFLECTION", "SPECIFICATION_HELPER"}
+        expected_members = {"PLANNER", "IMPLEMENTATION", "TESTBENCH", "DEBUG", "INTEGRATION", "REFLECTION", "FINALIZE", "SPECIFICATION_HELPER"}
         actual_members = {member.name for member in AgentType}
         assert actual_members == expected_members
     
@@ -115,6 +116,7 @@ class TestAgentType:
         assert "Agent" in AgentType.DEBUG.value
         assert "Agent" in AgentType.INTEGRATION.value
         assert "Agent" in AgentType.REFLECTION.value
+        assert "Agent" in AgentType.FINALIZE.value
         assert "Agent" in AgentType.SPECIFICATION_HELPER.value
 
 

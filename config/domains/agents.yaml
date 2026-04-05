@@ -6,6 +6,7 @@ agents:
     debug: 2
     spec_helper: 1
     planner: 1
+    finalizer: 0
     lint: 1
     tb_lint: 1
     acceptance: 1
@@ -18,6 +19,8 @@ agents:
 
     defaults:
       model: gpt-4.1-mini
+      deterministic: false
+      seed: 7
       request_timeout_s: 120.0
       json_mode: true
       max_tokens: 10000

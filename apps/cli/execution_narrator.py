@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, init_llm_gateway
+from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, apply_reproducibility_settings, init_llm_gateway
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.config import get_runtime_config
 
@@ -31,6 +31,7 @@ _STATE_SENTENCE = {
     "DISTILLING": "I am condensing failure evidence to isolate the root cause.",
     "REFLECTING": "I am reasoning over the failure evidence before patching.",
     "DEBUGGING": "I am applying targeted fixes and preparing a re-check.",
+    "FINALIZING": "I am capturing this passing design so I can reuse the pattern later.",
     "ACCEPTING": "I am verifying the run against acceptance criteria.",
     "DONE": "I reached a passing result for this module.",
     "FAILED": "I could not converge on a passing result for this module.",
@@ -46,6 +47,7 @@ _STAGE_LABEL = {
     "reflect": "failure reflection",
     "debug": "debug patching",
     "acceptance": "acceptance validation",
+    "finalize": "completion archival",
 }
 
 _NEXT_ON_SUCCESS = {
@@ -57,7 +59,8 @@ _NEXT_ON_SUCCESS = {
     "distill": "I will reflect on this evidence before patching.",
     "reflect": "I will apply a focused debug patch.",
     "debug": "I will re-run verification on the updated code.",
-    "acceptance": "I will mark this module complete.",
+    "acceptance": "I will archive this passing design for future reuse.",
+    "finalize": "I will mark this module complete.",
 }
 
 _NEXT_ON_FAILURE = {
@@ -70,6 +73,7 @@ _NEXT_ON_FAILURE = {
     "reflect": "I will retry analysis with clearer failure evidence.",
     "debug": "I will reassess the failure signature and apply a different patch.",
     "acceptance": "I will address missing criteria and rerun verification.",
+    "finalize": "I will preserve the passing result and retry the archival step.",
 }
 
 
@@ -171,6 +175,80 @@ class ExecutionNarrator:
             self._handle_note(payload)
             return
 
+    def emit_rag_preview(self, previews: list[dict[str, Any]]) -> None:
+        self._emit_block(
+            "pipeline",
+            "pipeline | RAG preview",
+            [
+                "I am scanning the current knowledge base and design memory before execution so I can reuse nearby patterns when they truly fit.",
+                "\"RAG is enabled for this run, and I am checking the planned modules for likely matches.\"",
+                "Next I will enter execution with any strong matches ready as context.",
+            ],
+            tone="info",
+        )
+
+        hit_previews = [
+            item for item in previews
+            if isinstance(item, dict)
+            and isinstance(item.get("rag"), dict)
+            and bool(item["rag"].get("used"))
+        ]
+        degraded_preview = next(
+            (
+                item for item in previews
+                if isinstance(item, dict)
+                and isinstance(item.get("rag"), dict)
+                and bool(item["rag"].get("degraded"))
+            ),
+            None,
+        )
+
+        if hit_previews:
+            for item in hit_previews:
+                node_id = str(item.get("node_id", "")).strip() or "module"
+                rag = item["rag"]
+                modules = [str(name) for name in rag.get("retrieved_module_names", []) if str(name).strip()]
+                hit_count = int(rag.get("hit_count", 0) or 0)
+                strongest = modules[0] if modules else "a nearby design"
+                module_text = ", ".join(modules[:3]) if modules else strongest
+                self._emit_block(
+                    node_id,
+                    f"{node_id} | retrieval preview | hit",
+                    [
+                        f"I found {hit_count} relevant prior design example(s) for {node_id}. The strongest reusable match is {strongest}.",
+                        f"\"Similar design found: {module_text}\"",
+                        f"Next I will carry this example into {node_id} implementation as reusable context.",
+                    ],
+                    tone="success",
+                )
+            return
+
+        if degraded_preview is not None:
+            rag = degraded_preview["rag"]
+            reason = str(rag.get("skip_reason", "")).strip() or "retrieval unavailable"
+            self._emit_block(
+                "pipeline",
+                "pipeline | RAG preview unavailable",
+                [
+                    "I tried to scan the current knowledge base and design memory before execution, but retrieval is unavailable in this environment.",
+                    f"\"RAG preview skipped: {reason}\"",
+                    "Next I will continue from the locked spec without reusable prior-design context.",
+                ],
+                tone="warn",
+            )
+            return
+
+        self._emit_block(
+            "pipeline",
+            "pipeline | RAG preview | no strong matches",
+            [
+                "I searched the current knowledge base and design memory before execution, but I did not find close enough prior designs for the planned modules.",
+                "\"No relevant stored designs were returned during the preview scan.\"",
+                "Next I will proceed from the locked spec and let later stages search again if needed.",
+            ],
+            tone="warn",
+        )
+
     def _handle_state(self, payload: dict[str, Any]) -> None:
         node_id = str(payload.get("node_id", "")).strip()
         state = str(payload.get("state", "")).strip()
@@ -189,12 +267,18 @@ class ExecutionNarrator:
         node_id = str(payload.get("node_id", "")).strip() or "pipeline"
         reason = str(payload.get("reason", "")).strip()
         note = str(payload.get("note", "")).strip()
+        tone = "warn"
         if reason == "timeout":
             header = "pipeline | execution timeout"
             lines = ["I hit the configured timeout before all modules completed."]
         elif note == "non_top_module_skip":
             header = f"{node_id} | verification skipped"
             lines = ["I skipped testbench and simulation for this non-top module as planned."]
+            tone = "info"
+        elif reason == "finalizer_disabled":
+            header = f"{node_id} | complete"
+            lines = ["I finished this module and skipped archival because it is disabled for this run."]
+            tone = "success"
         elif reason == "no_code_changes":
             header = f"{node_id} | retries stopped"
             lines = ["I could not generate a meaningful code delta, so I stopped retries."]
@@ -204,7 +288,7 @@ class ExecutionNarrator:
         else:
             header = f"{node_id} | retries stopped"
             lines = ["I reached a retry guardrail and stopped this path."]
-        self._emit_block(node_id, header, lines, tone="warn")
+        self._emit_block(node_id, header, lines, tone=tone)
 
     def _handle_stage_result(self, payload: dict[str, Any]) -> None:
         node_id = str(payload.get("node_id", "")).strip()
@@ -236,6 +320,8 @@ class ExecutionNarrator:
         log_output = str(payload.get("log_output", "") or "")
         reflection_insights = _safe_json(payload.get("reflection_insights"))
         reflections = _safe_json(payload.get("reflections"))
+        runtime_metadata = _safe_json(payload.get("runtime_metadata"))
+        rag = runtime_metadata.get("rag") if isinstance(runtime_metadata, dict) else None
 
         context = {
             "node_id": str(payload.get("node_id", "")).strip(),
@@ -248,6 +334,7 @@ class ExecutionNarrator:
             "log_excerpt": _truncate(log_output, 1200),
             "reflection_insights": reflection_insights,
             "debug_reflections": reflections,
+            "rag": rag if isinstance(rag, dict) else None,
         }
 
         if self.mode == "llm" and self._llm_ready:
@@ -272,6 +359,9 @@ class ExecutionNarrator:
             "Do not expose hidden chain-of-thought.\n"
             "Do not output labels like 'Reasoning:' or 'Evidence:'.\n"
             "Output JSON only with keys: headline, narrative, evidence, next_step.\n"
+            "If rag.used is true, explicitly mention in first person that I consulted prior designs/examples or captured a passing design for reuse.\n"
+            "If rag.used is false, do not invent retrieval or memory activity.\n"
+            "Use rag.applied_guidance_summary when it is present, but paraphrase it naturally.\n"
             "Constraints:\n"
             "- headline: max 14 words.\n"
             "- narrative: 1-2 short sentences.\n"
@@ -294,6 +384,7 @@ class ExecutionNarrator:
             max_tokens=int(llm_cfg.narrative_max_tokens),
         )
         provider = str(getattr(self.gateway, "provider", "")).lower()
+        cfg = apply_reproducibility_settings(cfg, provider=provider)
         if provider in {"openai", "groq"}:
             cfg.provider_specific.setdefault("response_format", {"type": "json_object"})
         timeout_s = float(llm_cfg.narrative_timeout_s)
@@ -388,6 +479,19 @@ class ExecutionNarrator:
             summary = str(debug_reflections.get("summary", "")).strip()
             if summary:
                 narrative_parts.append(f"I patched based on: {summary[:180]}")
+        rag = context.get("rag")
+        if isinstance(rag, dict):
+            if bool(rag.get("used")):
+                guidance = str(rag.get("applied_guidance_summary", "")).strip()
+                if guidance:
+                    narrative_parts.append(guidance[:220])
+                stored = rag.get("stored_module_names")
+                if isinstance(stored, list) and stored:
+                    narrative_parts.append(
+                        f"I stored {', '.join(str(item) for item in stored[:2])} as a reusable passing design reference."
+                    )
+            elif bool(rag.get("degraded")):
+                narrative_parts.append("I continued without reusable prior-design context because retrieval was unavailable.")
 
         narrative = " ".join(part for part in narrative_parts if part).strip()
         if not narrative:

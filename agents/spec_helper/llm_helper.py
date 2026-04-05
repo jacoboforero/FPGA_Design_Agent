@@ -7,7 +7,7 @@ import asyncio
 import json
 from typing import Any, Dict, List, Optional
 
-from agents.common.llm_gateway import GenerationConfig, Message, MessageRole
+from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, apply_reproducibility_settings
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.config import get_runtime_config
 from agents.spec_helper.checklist import (
@@ -111,7 +111,8 @@ def _user_facing_field_path(path: str) -> str:
 
 def _default_cfg(max_tokens: int, temperature: float) -> GenerationConfig:
     top_p = get_runtime_config().llm.top_p
-    return GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
+    cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
+    return apply_reproducibility_settings(cfg, provider=get_runtime_config().llm.provider)
 
 
 def _resolve_cfg(stage: str) -> GenerationConfig:

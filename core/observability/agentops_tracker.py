@@ -11,6 +11,7 @@ If AgentOps is not available or not configured, all methods degrade to no-ops.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import threading
@@ -34,6 +35,34 @@ ARTIFACTS_DIR = Path(
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _clip_text(value: str, *, limit: int = 4000) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3] + "..."
+
+
+def _normalize_span_attribute(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    try:
+        return _clip_text(json.dumps(value, ensure_ascii=True, sort_keys=True, default=str))
+    except Exception:
+        return _clip_text(str(value))
+
+
+def _supports_agentops_openai_auto_instrumentation(llm_provider: str) -> bool:
+    provider = str(llm_provider or "").strip().lower()
+    if provider != "openai":
+        return True
+    # AgentOps 0.4.21 still tries to wrap legacy beta chat resources that are
+    # absent in current OpenAI SDK builds. Disable only that fragile auto-LLM
+    # wrapper path when the compatibility surface is missing so demo output stays
+    # clean while our manual cost/trace logging continues to work.
+    return importlib.util.find_spec("openai.resources.beta.chat") is not None
 
 
 class AgentOpsTracker:
@@ -128,10 +157,11 @@ class AgentOpsTracker:
             tags.append(f"model:{llm_model}")
 
         try:
+            instrument_llm_calls = _supports_agentops_openai_auto_instrumentation(llm_provider)
             agentops.init(
                 api_key=api_key,
                 default_tags=tags,
-                instrument_llm_calls=True,
+                instrument_llm_calls=instrument_llm_calls,
                 log_level="WARNING",
                 fail_safe=True,
                 log_session_replay_url=False,
@@ -181,6 +211,17 @@ class AgentOpsTracker:
                 with path.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(entry) + "\n")
             self._write_summary_locked()
+        self.record_llm_span(
+            agent=agent,
+            node_id=node_id,
+            model=model,
+            provider=provider,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            estimated_cost_usd=estimated_cost_usd,
+            metadata=metadata,
+        )
         if self.enabled:
             try:
                 agentops.update_trace_metadata(
@@ -195,6 +236,100 @@ class AgentOpsTracker:
                 )
             except Exception:
                 pass
+
+    def record_llm_span(
+        self,
+        *,
+        agent: str,
+        node_id: Optional[str],
+        model: str,
+        provider: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        estimated_cost_usd: Optional[float],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not self.enabled:
+            return
+        try:
+            from agentops.semconv import AgentAttributes, SpanAttributes, SpanKind
+        except Exception:
+            return
+
+        stage = None
+        if isinstance(metadata, dict):
+            stage = metadata.get("stage")
+        operation_name = f"{agent}.{stage}" if stage else str(agent or "llm")
+        attrs: Dict[str, Any] = {
+            AgentAttributes.AGENT_NAME: agent,
+            SpanAttributes.LLM_SYSTEM: provider,
+            SpanAttributes.LLM_REQUEST_MODEL: model,
+            SpanAttributes.LLM_RESPONSE_MODEL: model,
+            SpanAttributes.LLM_USAGE_PROMPT_TOKENS: prompt_tokens,
+            SpanAttributes.LLM_USAGE_COMPLETION_TOKENS: completion_tokens,
+            SpanAttributes.LLM_USAGE_TOTAL_TOKENS: total_tokens,
+            "mhd.node_id": node_id,
+            "mhd.run_id": self.run_id,
+            "mhd.llm_metadata": metadata or {},
+        }
+        if estimated_cost_usd is not None:
+            attrs[SpanAttributes.LLM_USAGE_TOOL_COST] = round(float(estimated_cost_usd), 6)
+        self._record_span(operation_name=operation_name, span_kind=SpanKind.LLM, attributes=attrs)
+
+    def record_runtime_event(self, runtime: str, event_type: str, payload: Dict[str, Any]) -> None:
+        if not self.enabled:
+            return
+        try:
+            from agentops.semconv import AgentAttributes, SpanKind
+        except Exception:
+            return
+
+        payload = payload or {}
+        attrs: Dict[str, Any] = {
+            "mhd.runtime": runtime,
+            "mhd.event_type": event_type,
+            "mhd.run_id": payload.get("run_id") or self.run_id,
+        }
+        for key in (
+            "task_id",
+            "node_id",
+            "task_type",
+            "agent",
+            "status",
+            "entity",
+            "state",
+            "queue_name",
+            "worker_instance_id",
+            "worker_thread_name",
+            "routing_key",
+            "reason",
+            "max_in_flight",
+        ):
+            if key in payload:
+                attrs[f"mhd.{key}"] = payload.get(key)
+        if payload:
+            attrs["mhd.payload"] = payload
+
+        span_kind = SpanKind.OPERATION
+        if event_type == "state_transition":
+            span_kind = SpanKind.WORKFLOW_STEP
+        elif event_type == "task_published":
+            span_kind = SpanKind.TASK
+        elif (
+            event_type in {"task_received", "task_result_published"}
+            or payload.get("agent")
+            or payload.get("task_type")
+            or str(runtime).startswith(("worker_", "agent_"))
+        ):
+            span_kind = SpanKind.AGENT
+            attrs[AgentAttributes.AGENT_NAME] = payload.get("agent") or payload.get("task_type") or runtime
+
+        self._record_span(
+            operation_name=f"{runtime}.{event_type}",
+            span_kind=span_kind,
+            attributes=attrs,
+        )
 
     def log_event(self, event_type: str, payload: Dict[str, Any]) -> None:
         if not self.enabled:
@@ -229,6 +364,41 @@ class AgentOpsTracker:
     def get_totals(self) -> Dict[str, Any]:
         with self._lock:
             return dict(self._totals)
+
+    def _record_span(self, *, operation_name: str, span_kind: str, attributes: Optional[Dict[str, Any]] = None) -> None:
+        if not self.enabled or agentops is None or self._trace_ctx is None:
+            return
+        root_span = getattr(self._trace_ctx, "span", None)
+        if root_span is None:
+            return
+        try:
+            from agentops.sdk.attributes import get_span_attributes
+            from agentops.sdk.core import tracer as sdk_tracer
+            from opentelemetry import trace as otel_trace
+        except Exception:
+            return
+
+        normalized_attrs = {
+            key: normalized
+            for key, value in (attributes or {}).items()
+            if (normalized := _normalize_span_attribute(value)) is not None
+        }
+        try:
+            span_attrs = get_span_attributes(
+                operation_name=operation_name,
+                span_kind=span_kind,
+                **normalized_attrs,
+            )
+            parent_context = otel_trace.set_span_in_context(root_span)
+            span_name = f"{operation_name}.{span_kind}"
+            span = sdk_tracer.get_tracer().start_span(
+                span_name,
+                context=parent_context,
+                attributes=span_attrs,
+            )
+            span.end()
+        except Exception:
+            return
 
 
 _tracker = AgentOpsTracker()

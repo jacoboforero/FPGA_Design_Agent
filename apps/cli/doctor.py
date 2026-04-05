@@ -15,8 +15,8 @@ from typing import List
 
 import pika
 
-from core.runtime.config import DEFAULT_CONFIG_PATH, RuntimeConfig, get_runtime_config
-from core.runtime.paths import resource_root
+from core.runtime.config import RuntimeConfig, get_runtime_config
+from core.runtime.paths import resolve_resource_path, resource_root
 
 PROBLEM_RE = re.compile(r"^(Prob\d+)", re.IGNORECASE)
 
@@ -47,6 +47,13 @@ def _resolve_tool(configured: str | None, default_name: str) -> str | None:
 def _has_langchain_schema() -> bool:
     try:
         return importlib.util.find_spec("langchain.schema") is not None
+    except ModuleNotFoundError:
+        return False
+
+
+def _has_module(module_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(module_name) is not None
     except ModuleNotFoundError:
         return False
 
@@ -163,6 +170,55 @@ def run_checks(config: RuntimeConfig, *, force_benchmark: bool = False) -> List[
     else:
         results.append(CheckResult("llm_credentials", "WARN", "LLM calls disabled (llm.enabled=false)."))
 
+    if config.rag.enabled:
+        kb_path = resolve_resource_path(config.rag.knowledge_base_path)
+        if kb_path.exists():
+            results.append(CheckResult("rag_knowledge_base", "PASS", f"knowledge base found at {kb_path}"))
+        else:
+            results.append(CheckResult("rag_knowledge_base", "FAIL", f"missing knowledge base {kb_path}"))
+
+        provider = str(config.rag.embedding_provider or "").strip().lower()
+        credential_missing_status = "WARN" if config.rag.fail_open else "FAIL"
+        dependency_missing_status = "WARN" if config.rag.fail_open else "FAIL"
+        if provider == "openai":
+            if os.getenv("OPENAI_API_KEY"):
+                results.append(CheckResult("rag_credentials", "PASS", "OPENAI_API_KEY present for OpenAI-backed RAG."))
+            else:
+                results.append(
+                    CheckResult(
+                        "rag_credentials",
+                        credential_missing_status,
+                        "OPENAI_API_KEY missing for OpenAI-backed RAG.",
+                    )
+                )
+
+            if _has_module("llama_index.core") and _has_module("llama_index.embeddings.openai"):
+                results.append(CheckResult("rag_dependencies", "PASS", "llama-index OpenAI embedding dependencies available."))
+            else:
+                results.append(
+                    CheckResult(
+                        "rag_dependencies",
+                        dependency_missing_status,
+                        "missing llama-index core and/or OpenAI embedding dependencies.",
+                    )
+                )
+        else:
+            results.append(
+                CheckResult(
+                    "rag_credentials",
+                    "WARN",
+                    f"RAG provider '{provider}' is not part of the supported demo path; doctor only verifies OpenAI-backed RAG.",
+                )
+            )
+
+        if force_benchmark and not config.rag.allow_benchmark:
+            results.append(CheckResult("rag_benchmark_policy", "WARN", "RAG disabled for benchmark runs by config."))
+    else:
+        if force_benchmark:
+            results.append(CheckResult("rag_enabled", "PASS", "RAG disabled for benchmark runs by default."))
+        else:
+            results.append(CheckResult("rag_enabled", "WARN", "RAG disabled (rag.enabled=false)."))
+
     verilator = _resolve_tool(config.tools.verilator_path, "verilator")
     iverilog = _resolve_tool(config.tools.iverilog_path, "iverilog")
     vvp = _resolve_tool(config.tools.vvp_path, "vvp")
@@ -274,7 +330,7 @@ def run_checks(config: RuntimeConfig, *, force_benchmark: bool = False) -> List[
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run preflight checks for local runtime readiness.")
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to runtime YAML config.")
+    parser.add_argument("--config", default=None, help="Path to runtime YAML config.")
     parser.add_argument(
         "--benchmark",
         action="store_true",

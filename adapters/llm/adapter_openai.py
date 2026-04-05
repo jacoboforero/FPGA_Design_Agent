@@ -5,6 +5,7 @@ Supports both Chat Completions and Responses APIs.
 
 from __future__ import annotations
 
+import inspect
 import os
 from typing import Any, Dict, List, Optional
 
@@ -46,11 +47,10 @@ class OpenAIGateway(LLMGateway):
             request_timeout_s = float(get_runtime_config().llm.request_timeout_s)
         except Exception:
             request_timeout_s = 120.0
-        self.client = AsyncOpenAI(
-            api_key=api_key,
-            organization=organization,
-            timeout=request_timeout_s,
-        )
+        self._api_key = api_key
+        self._organization = organization
+        self._request_timeout_s = request_timeout_s
+        self.client = self._make_client()
         self._model = model
         raw_mode = os.getenv("OPENAI_API_MODE", "auto").strip().lower() or "auto"
         if raw_mode == "response":
@@ -69,25 +69,27 @@ class OpenAIGateway(LLMGateway):
         try:
             config = config or GenerationConfig()
             config = self.validate_config(config)
+            client = self._ensure_client()
 
             mode = self._resolve_api_mode(config)
             if mode == "responses":
-                response = await self.client.responses.create(**self._build_responses_params(messages, config))
+                response = await client.responses.create(**self._build_responses_params(messages, config))
                 return self._convert_responses_response(response)
 
             # Chat mode, with fallback to Responses for model/API compatibility errors.
             try:
-                response = await self.client.chat.completions.create(**self._build_chat_params(messages, config))
+                response = await client.chat.completions.create(**self._build_chat_params(messages, config))
                 return self._convert_chat_response(response)
             except Exception as exc:  # noqa: BLE001
                 if not self._should_fallback_to_responses(exc):
                     raise
-                response = await self.client.responses.create(**self._build_responses_params(messages, config))
+                response = await client.responses.create(**self._build_responses_params(messages, config))
                 return self._convert_responses_response(response)
         except Exception as exc:  # noqa: BLE001
             error = exc
             raise
         finally:
+            await self.close()
             controller.release(ticket, error=error)
     
     @property
@@ -231,6 +233,7 @@ class OpenAIGateway(LLMGateway):
 
     def _build_responses_params(self, messages: List[Message], config: GenerationConfig) -> Dict[str, Any]:
         provider_specific = dict(config.provider_specific or {})
+        provider_specific.pop("seed", None)
         effort = provider_specific.pop("reasoning_effort", None)
         if "reasoning" not in provider_specific and effort is not None:
             provider_specific["reasoning"] = {"effort": effort}
@@ -382,3 +385,31 @@ class OpenAIGateway(LLMGateway):
             estimated_cost_usd=cost,
             raw_response=response.model_dump() if hasattr(response, "model_dump") else {},
         )
+
+    def _make_client(self) -> AsyncOpenAI:
+        return AsyncOpenAI(
+            api_key=self._api_key,
+            organization=self._organization,
+            timeout=self._request_timeout_s,
+        )
+
+    def _ensure_client(self) -> AsyncOpenAI:
+        if self.client is None:
+            self.client = self._make_client()
+        return self.client
+
+    async def close(self):
+        """Clean up the async client."""
+        client = self.client
+        self.client = None
+        if client is None:
+            return
+        close = getattr(client, "close", None)
+        if not callable(close):
+            return
+        try:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            pass

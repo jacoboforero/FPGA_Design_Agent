@@ -98,6 +98,83 @@ def test_execution_note_retry_reason_is_specific(tmp_path):
     assert any("retry guardrail for sim" in line.lower() for line in lines)
 
 
+def test_execution_note_finalizer_disabled_reads_as_completion(tmp_path):
+    lines: list[str] = []
+    narrator = ExecutionNarrator(
+        task_memory_root=tmp_path / "artifacts" / "task_memory",
+        mode="deterministic",
+        emit_line=lines.append,
+    )
+
+    narrator.handle_event(
+        "execution_note",
+        {"node_id": "top", "reason": "finalizer_disabled"},
+    )
+
+    assert any("top | complete" in line for line in lines)
+    assert any("skipped archival because it is disabled for this run" in line.lower() for line in lines)
+    assert not any("retries stopped" in line.lower() for line in lines)
+
+
+def test_deterministic_narrative_mentions_rag_usage(tmp_path):
+    lines: list[str] = []
+    narrator = ExecutionNarrator(
+        task_memory_root=tmp_path / "artifacts" / "task_memory",
+        mode="deterministic",
+        emit_line=lines.append,
+    )
+
+    narrator.handle_event(
+        "stage_result",
+        {
+            "node_id": "fifo",
+            "stage_kind": "impl",
+            "attempt": 1,
+            "status": "SUCCESS",
+            "log_output": "Generated RTL successfully.",
+            "runtime_metadata": {
+                "rag": {
+                    "used": True,
+                    "mode": "retrieve",
+                    "hit_count": 2,
+                    "retrieved_module_names": ["counter", "shift_register"],
+                    "applied_guidance_summary": "I consulted 2 prior design example(s), including counter and shift_register, to guide interface shape, reset handling, and RTL structure.",
+                }
+            },
+        },
+    )
+
+    assert any("consulted 2 prior design example" in line.lower() for line in lines)
+    public_log = tmp_path / "artifacts" / "task_memory" / "fifo" / "public" / "narrative.md"
+    assert "counter and shift_register" in public_log.read_text()
+
+
+def test_rag_preview_emits_intro_and_hit_blocks(tmp_path):
+    lines: list[str] = []
+    narrator = ExecutionNarrator(
+        task_memory_root=tmp_path / "artifacts" / "task_memory",
+        mode="deterministic",
+        emit_line=lines.append,
+    )
+
+    narrator.emit_rag_preview(
+        [
+            {
+                "node_id": "buf1_leaf",
+                "rag": {
+                    "used": True,
+                    "hit_count": 1,
+                    "retrieved_module_names": ["buf1_leaf"],
+                },
+            }
+        ]
+    )
+
+    assert any("pipeline | rag preview" in line.lower() for line in lines)
+    assert any("buf1_leaf | retrieval preview | hit" in line for line in lines)
+    assert any("similar design found: buf1_leaf" in line.lower() for line in lines)
+
+
 def test_llm_narrative_falls_back_when_card_conflicts_with_status(tmp_path, monkeypatch):
     class FakeGateway:
         provider = "openai"

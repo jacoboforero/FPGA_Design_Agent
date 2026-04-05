@@ -82,7 +82,8 @@ class TestJSONSerialization:
             artifacts_path="/path/to/artifacts",
             log_output="Task completed successfully",
             reflections="All good",
-            metrics=metrics
+            metrics=metrics,
+            runtime_metadata={"rag": {"used": True, "hit_count": 2}},
         )
         
         json_str = result.model_dump_json()
@@ -97,6 +98,7 @@ class TestJSONSerialization:
         assert data["metrics"]["input_tokens"] == 100
         assert data["metrics"]["output_tokens"] == 50
         assert data["metrics"]["cost_usd"] == 0.01
+        assert data["runtime_metadata"]["rag"]["used"] is True
         assert "completed_at" in data
     
     def test_analysis_metadata_serialization(self):
@@ -242,6 +244,7 @@ class TestJSONDeserialization:
             "artifacts_path": "/path/to/artifacts",
             "log_output": "Task completed",
             "reflections": "All good",
+            "runtime_metadata": {"rag": {"used": True, "mode": "retrieve"}},
             "metrics": {
                 "input_tokens": 100,
                 "output_tokens": 50,
@@ -256,6 +259,7 @@ class TestJSONDeserialization:
         assert result.artifacts_path == "/path/to/artifacts"
         assert result.log_output == "Task completed"
         assert result.reflections == "All good"
+        assert result.runtime_metadata == {"rag": {"used": True, "mode": "retrieve"}}
         assert result.metrics.input_tokens == 100
         assert result.metrics.output_tokens == 50
         assert result.metrics.cost_usd == 0.01

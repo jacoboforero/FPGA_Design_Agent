@@ -13,15 +13,18 @@ import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List
+from typing import Any, Iterable, List
 
 import pika
 
 # Agents
+from adapters.rag.rag_service import retrieve_for_stage
+from agents.common.rag_queries import build_implementation_rag_query
 from agents.implementation.worker import ImplementationWorker
 from agents.testbench.worker import TestbenchWorker
 from agents.reflection.worker import ReflectionWorker
 from agents.debug.worker import DebugWorker
+from agents.finalizer.worker import FinalizerWorker
 from agents.spec_helper.worker import SpecHelperWorker
 from agents.planner.worker import PlannerWorker
 
@@ -34,6 +37,7 @@ from workers.distill.worker import DistillWorker
 
 # Orchestrator
 from orchestrator.orchestrator_service import DemoOrchestrator
+from orchestrator.context_builder import DemoContextBuilder
 from apps.cli import spec_flow
 from apps.cli.execution_narrator import ExecutionNarrator, NarratorDispatcher
 
@@ -49,7 +53,7 @@ from core.runtime.broker import (
     declare_task_topology,
     resolve_task_routing,
 )
-from core.runtime.config import DEFAULT_CONFIG_PATH, get_runtime_config, initialize_runtime_config
+from core.runtime.config import get_runtime_config, initialize_runtime_config, resolve_runtime_config_path, set_runtime_config
 from core.runtime.paths import default_env_file, generated_root, task_memory_root
 
 
@@ -118,6 +122,7 @@ def _purge_broker_queues(params: pika.ConnectionParameters) -> None:
         "agent_tb_tasks",
         "agent_reflect_tasks",
         "agent_debug_tasks",
+        "agent_finalizer_tasks",
         "agent_spec_helper_tasks",
         "process_lint_tasks",
         "process_tb_lint_tasks",
@@ -146,6 +151,7 @@ def start_workers(params: pika.ConnectionParameters, stop_event: threading.Event
         (TestbenchWorker, int(pool.testbench)),
         (ReflectionWorker, int(pool.reflection)),
         (DebugWorker, int(pool.debug)),
+        (FinalizerWorker, int(pool.finalizer)),
         (SpecHelperWorker, int(pool.spec_helper)),
         (LintWorker, int(pool.lint)),
         (TestbenchLintWorker, int(pool.tb_lint)),
@@ -155,7 +161,9 @@ def start_workers(params: pika.ConnectionParameters, stop_event: threading.Event
     ]
     workers: List[threading.Thread] = []
     for worker_cls, count in worker_specs:
-        for _ in range(max(1, count)):
+        if count <= 0:
+            continue
+        for _ in range(int(count)):
             workers.append(worker_cls(params, stop_event))
 
     with pika.BlockingConnection(params) as conn:
@@ -227,6 +235,24 @@ def _run_planner_task(
     raise RuntimeError("Planner timed out waiting for results. Verify broker queues are clean and planner worker is running.")
 
 
+def _apply_runtime_cli_overrides(
+    *,
+    rag_override: str | None,
+    llm_deterministic: bool = False,
+    llm_seed: int | None = None,
+) -> None:
+    if rag_override is None and not llm_deterministic and llm_seed is None:
+        return
+    cfg = get_runtime_config().model_copy(deep=True)
+    if rag_override is not None:
+        cfg.rag.enabled = rag_override == "on"
+    if llm_deterministic or llm_seed is not None:
+        cfg.llm.deterministic = True
+    if llm_seed is not None:
+        cfg.llm.seed = int(llm_seed)
+    set_runtime_config(cfg)
+
+
 def _confirm(prompt: str, default: bool = True) -> bool:
     suffix = " [Y/n]" if default else " [y/N]"
     val = input(f"{prompt}{suffix} ").strip().lower()
@@ -290,6 +316,44 @@ def _execution_policy_for_run(*, run_name: str, run_kind: str) -> dict[str, obje
     }
 
 
+def _build_rag_preview_entries(
+    *,
+    design_context_path: Path,
+    rtl_root: Path,
+    dag: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not bool(get_runtime_config().rag.enabled):
+        return []
+
+    builder = DemoContextBuilder(design_context_path, rtl_root)
+    entries: list[dict[str, Any]] = []
+    for node in dag.get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id", "")).strip()
+        if not node_id:
+            continue
+        ctx = builder.build(node_id)
+        iface = ctx.get("interface") if isinstance(ctx.get("interface"), dict) else {}
+        rag_query = build_implementation_rag_query(
+            node_id=node_id,
+            iface=iface.get("signals", []) if isinstance(iface.get("signals"), list) else [],
+            behavior=str(ctx.get("demo_behavior", "") or "").strip(),
+            verification=ctx.get("verification") if isinstance(ctx.get("verification"), dict) else {},
+            module_contract=ctx.get("module_contract") if isinstance(ctx.get("module_contract"), dict) else {},
+            children=ctx.get("children") if isinstance(ctx.get("children"), list) else [],
+            child_interfaces=ctx.get("child_interfaces") if isinstance(ctx.get("child_interfaces"), dict) else {},
+            connections=ctx.get("connections") if isinstance(ctx.get("connections"), list) else [],
+        )
+        _, rag_metadata = retrieve_for_stage(
+            "implementation",
+            rag_query,
+            execution_policy=ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else None,
+        )
+        entries.append({"node_id": node_id, "rag": rag_metadata})
+    return entries
+
+
 def run_full(args: argparse.Namespace) -> None:
     cfg = get_runtime_config()
     _require_engineer_run_policy()
@@ -346,8 +410,7 @@ def run_full(args: argparse.Namespace) -> None:
         print("Aborted after planning.")
         return
 
-    # 3) Execute
-    _print_section("Execution")
+    # 3) Preview retrieval context and execute
     rtl_root = generated_root()
     task_memory_dir = task_memory_root()
     narrative_mode = args.narrative_mode or cfg.cli.default_narrative_mode
@@ -362,10 +425,21 @@ def run_full(args: argparse.Namespace) -> None:
             queue_max_events=int(cfg.cli.execution_narrator_queue_max_events),
         )
         print(f"Narrative output enabled ({narrative_mode}).")
+        if bool(get_runtime_config().rag.enabled):
+            preview_entries = _build_rag_preview_entries(
+                design_context_path=design_context,
+                rtl_root=rtl_root,
+                dag=dag,
+            )
+            _print_section("RAG Preview")
+            narrator.emit_rag_preview(preview_entries)
+
+    _print_section("Execution")
     stop_event = threading.Event()
     workers = start_workers(params, stop_event)
+    statuses: dict[str, str] = {}
     try:
-        DemoOrchestrator(
+        statuses = DemoOrchestrator(
             params,
             design_context,
             dag_path,
@@ -383,9 +457,11 @@ def run_full(args: argparse.Namespace) -> None:
             narrator_dispatcher.close()
         get_tracker().finalize()
 
-    # 4) Show RTL paths and contents
+    # 4) Show RTL paths and contents for nodes that actually completed.
     ctx = json.loads(design_context.read_text())
     for node_id, node in ctx.get("nodes", {}).items():
+        if statuses.get(node_id) != "DONE":
+            continue
         rtl_rel = node.get("rtl_file")
         if not rtl_rel:
             continue
@@ -399,11 +475,28 @@ def run_full(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Hardware agent system CLI")
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to runtime YAML config.")
+    parser.add_argument("--config", default=None, help="Path to runtime YAML config.")
     parser.add_argument("--timeout", type=float, default=0.0, help="Pipeline timeout in seconds (0 disables)")
     parser.add_argument("--run-name", help="Optional run name for observability/AgentOps")
     parser.add_argument("--spec-file", help="Path to a spec text file to run non-interactively.")
     parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt after planning.")
+    parser.add_argument(
+        "--rag",
+        choices=("on", "off"),
+        default=None,
+        help="Override rag.enabled for this run only.",
+    )
+    parser.add_argument(
+        "--llm-deterministic",
+        action="store_true",
+        help="Force best-effort reproducible LLM settings for this run only (zero temperature plus a stable seed where supported).",
+    )
+    parser.add_argument(
+        "--llm-seed",
+        type=int,
+        default=None,
+        help="Override the LLM reproducibility seed for this run only.",
+    )
     parser.add_argument(
         "--narrative-mode",
         choices=("llm", "deterministic", "off"),
@@ -418,7 +511,8 @@ def _run_benchmark_command(argv: list[str]) -> None:
 
     parser = build_benchmark_parser()
     args = parser.parse_args(argv)
-    initialize_runtime_config(Path(args.config))
+    args.config = str(resolve_runtime_config_path(args.config, default_name="runtime.benchmark.yaml"))
+    initialize_runtime_config(args.config, default_name="runtime.benchmark.yaml")
     run_from_args(args)
 
 
@@ -427,12 +521,16 @@ def _run_doctor_command(argv: list[str]) -> int:
 
     parser = build_doctor_parser()
     args = parser.parse_args(argv)
-    initialize_runtime_config(Path(args.config))
+    default_name = "runtime.benchmark.yaml" if bool(args.benchmark) else "runtime.yaml"
+    args.config = str(resolve_runtime_config_path(args.config, default_name=default_name))
+    initialize_runtime_config(args.config, default_name=default_name)
     return int(run_from_args(args))
 
 
 def main(argv: list[str] | None = None) -> None:
-    _load_env_file(default_env_file())
+    env_file = default_env_file()
+    if env_file is not None:
+        _load_env_file(env_file)
     argv = argv if argv is not None else sys.argv[1:]
     if argv and argv[0] == "doctor":
         try:
@@ -463,7 +561,13 @@ def main(argv: list[str] | None = None) -> None:
         argv = argv[1:]
     parser = build_parser()
     args = parser.parse_args(argv)
-    initialize_runtime_config(Path(args.config))
+    args.config = str(resolve_runtime_config_path(args.config, default_name="runtime.yaml"))
+    initialize_runtime_config(args.config, default_name="runtime.yaml")
+    _apply_runtime_cli_overrides(
+        rag_override=args.rag,
+        llm_deterministic=bool(args.llm_deterministic),
+        llm_seed=args.llm_seed,
+    )
     try:
         run_full(args)
     except KeyboardInterrupt:

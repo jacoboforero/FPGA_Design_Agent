@@ -11,7 +11,7 @@ from pathlib import Path
 from core.schemas.contracts import AgentType, ReflectionInsights, ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
 from agents.common.base import AgentWorkerBase
-from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, init_llm_gateway
+from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, apply_reproducibility_settings, init_llm_gateway
 from core.observability.agentops_tracker import get_tracker
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
 from core.runtime.config import get_runtime_config
@@ -88,6 +88,7 @@ class ReflectionWorker(AgentWorkerBase):
         temperature = float(llm_cfg.temperature_reflect)
         top_p = llm_cfg.top_p
         cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
+        cfg = apply_reproducibility_settings(cfg, provider=getattr(self.gateway, "provider", None))
 
         try:
             resp = asyncio.run(self.gateway.generate(messages=msgs, config=cfg))  # type: ignore[arg-type]

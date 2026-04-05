@@ -12,7 +12,7 @@ ownership. The public YAML shape is:
 - benchmark
 
 Internally, the loaded RuntimeConfig still exposes broker/workers/llm/tools/
-lint/sim/debug sections to minimize churn in the rest of the codebase.
+lint/sim/debug/rag sections to minimize churn in the rest of the codebase.
 """
 from __future__ import annotations
 
@@ -23,10 +23,12 @@ from typing import Any, Dict, Literal, Optional
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 
-from core.runtime.paths import default_config_path
+from core.runtime.paths import default_benchmark_config_path, default_config_path, set_active_config_root
 
 
-DEFAULT_CONFIG_PATH = default_config_path()
+# Backward-compatible constant for callers that still import it directly.
+# Runtime entrypoints should prefer resolve_runtime_config_path().
+DEFAULT_CONFIG_PATH = (Path(__file__).resolve().parents[2] / "config" / "runtime.yaml").resolve()
 
 SpecInteraction = Literal["interactive", "non_interactive"]
 RigorLevel = Literal["L0", "L1", "L2", "L3", "L4", "L5"]
@@ -72,6 +74,7 @@ class WorkerPoolSizesConfig(BaseModel):
     debug: int = 1
     spec_helper: int = 1
     planner: int = 1
+    finalizer: int = 0
     lint: int = 1
     tb_lint: int = 1
     acceptance: int = 1
@@ -100,6 +103,8 @@ class LlmConfig(BaseModel):
     enabled: bool = True
     provider: str = "openai"
     default_model: str = "gpt-4.1-mini"
+    deterministic: bool = False
+    seed: Optional[int] = None
     request_timeout_s: float = 120.0
     agent_overrides: Dict[str, LlmAgentOverrideConfig] = Field(default_factory=dict)
     spec_helper_model: Optional[str] = None
@@ -186,6 +191,42 @@ class BenchmarkConfig(BaseModel):
     )
 
 
+class RagStageConfig(BaseModel):
+    enabled: bool = True
+    top_k: int = 3
+    retrieve_multiple: int = 2
+    max_context_chars: int = 5000
+
+
+class RagFinalizerConfig(BaseModel):
+    enabled: bool = False
+    llm_summary_enabled: bool = True
+    summary_max_rtl_chars: int = 12000
+    summary_max_tb_chars: int = 12000
+
+
+class RagConfig(BaseModel):
+    enabled: bool = True
+    fail_open: bool = True
+    allow_benchmark: bool = False
+    knowledge_base_path: str = "adapters/rag/verilog_knowledge_base.txt"
+    memory_file: str = "memory.json"
+    archive_root: str = "runs"
+    embedding_provider: str = "openai"
+    openai_embedding_model: str = "text-embedding-3-small"
+    stored_rtl_embed_max_chars: int = 12000
+    implementation: RagStageConfig = Field(
+        default_factory=lambda: RagStageConfig(top_k=3, retrieve_multiple=2, max_context_chars=5000)
+    )
+    testbench: RagStageConfig = Field(
+        default_factory=lambda: RagStageConfig(top_k=2, retrieve_multiple=2, max_context_chars=4500)
+    )
+    debug: RagStageConfig = Field(
+        default_factory=lambda: RagStageConfig(top_k=2, retrieve_multiple=2, max_context_chars=4500)
+    )
+    finalizer: RagFinalizerConfig = Field(default_factory=RagFinalizerConfig)
+
+
 class RuntimeConfig(BaseModel):
     run: RunConfig = Field(default_factory=RunConfig)
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
@@ -197,6 +238,7 @@ class RuntimeConfig(BaseModel):
     sim: SimConfig = Field(default_factory=SimConfig)
     debug: DebugConfig = Field(default_factory=DebugConfig)
     benchmark: BenchmarkConfig = Field(default_factory=BenchmarkConfig)
+    rag: RagConfig = Field(default_factory=RagConfig)
 
 
 def _default_runtime_dict() -> Dict[str, Any]:
@@ -211,6 +253,7 @@ def _default_runtime_dict() -> Dict[str, Any]:
         "sim": {},
         "debug": {},
         "benchmark": {},
+        "rag": {},
     }
 
 
@@ -262,6 +305,8 @@ def _flatten_agent_llm(agent_llm: Dict[str, Any]) -> Dict[str, Any]:
         "enabled": agent_llm.get("enabled", True),
         "provider": agent_llm.get("provider", defaults.get("provider", "openai")),
         "default_model": defaults.get("model", "gpt-4.1-mini"),
+        "deterministic": defaults.get("deterministic", False),
+        "seed": defaults.get("seed"),
         "request_timeout_s": defaults.get("request_timeout_s", 120.0),
         "json_mode": defaults.get("json_mode", True),
         "max_tokens": defaults.get("max_tokens", 10000),
@@ -354,8 +399,24 @@ def _normalize_runtime_shape(raw: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def load_runtime_config(path: Optional[Path] = None) -> RuntimeConfig:
-    cfg_path = path or DEFAULT_CONFIG_PATH
+def resolve_runtime_config_path(
+    path: Optional[str | Path] = None,
+    *,
+    default_name: str = "runtime.yaml",
+) -> Path:
+    if path is None:
+        if default_name == "runtime.benchmark.yaml":
+            return default_benchmark_config_path()
+        return default_config_path(default_name)
+    return Path(path).expanduser().resolve()
+
+
+def load_runtime_config(
+    path: Optional[str | Path] = None,
+    *,
+    default_name: str = "runtime.yaml",
+) -> RuntimeConfig:
+    cfg_path = resolve_runtime_config_path(path, default_name=default_name)
     merged = _default_runtime_dict()
     if cfg_path.exists():
         raw = _load_yaml_mapping(cfg_path)
@@ -381,8 +442,14 @@ def get_runtime_config() -> RuntimeConfig:
     return _RUNTIME_CONFIG
 
 
-def initialize_runtime_config(path: Optional[Path] = None) -> RuntimeConfig:
-    config = load_runtime_config(path)
+def initialize_runtime_config(
+    path: Optional[str | Path] = None,
+    *,
+    default_name: str = "runtime.yaml",
+) -> RuntimeConfig:
+    resolved_path = resolve_runtime_config_path(path, default_name=default_name)
+    set_active_config_root(resolved_path.parent)
+    config = load_runtime_config(resolved_path, default_name=default_name)
     set_runtime_config(config)
     return config
 
@@ -404,7 +471,11 @@ __all__ = [
     "DebugConfig",
     "BenchmarkConfig",
     "BenchmarkSampleConfig",
+    "RagStageConfig",
+    "RagFinalizerConfig",
+    "RagConfig",
     "RuntimeConfig",
+    "resolve_runtime_config_path",
     "load_runtime_config",
     "set_runtime_config",
     "get_runtime_config",

@@ -5,6 +5,7 @@ This repository provides a planning-first hardware generation pipeline: freeze s
 ## What Works Today
 - End-to-end CLI pipeline for planning + execution.
 - LLM-backed agents: spec helper, planner, implementation, testbench, reflection, debug.
+- OpenAI-backed RAG retrieval for engineer runs, surfaced through execution narration.
 - Deterministic workers: RTL lint, TB lint, simulation, acceptance, distillation.
 - RabbitMQ-based orchestration with task memory artifacts per stage.
 - Multi-module spec support with top-level execution flow.
@@ -49,6 +50,17 @@ make deps
 make cli
 ```
 
+If you change Python dependencies, update the lockfile from the pinned Docker
+toolchain instead of editing `pyproject.toml` and stopping there:
+
+```bash
+make lock
+make lock-check
+```
+
+Use Poetry commands such as `poetry add ...` and `poetry remove ...` inside the
+`app` container so `pyproject.toml` and `poetry.lock` stay in sync.
+
 For custom benchmark commands, open the app container and use Poetry's environment:
 
 ```bash
@@ -69,8 +81,16 @@ PYTHONPATH=. poetry run python3 apps/cli/cli.py --timeout 120 --config config/ru
 ```
 
 ## Homebrew Demo Install
-The repo includes a locked Homebrew demo configuration for the installed CLI
-path under [packaging/homebrew](packaging/homebrew/README.md).
+The repo includes a Homebrew-installed CLI path under
+[packaging/homebrew](packaging/homebrew/README.md). Installed `mhd` now behaves
+like a standard macOS CLI:
+
+- credentials come from the shell environment,
+- user config lives under `$XDG_CONFIG_HOME/mhd` or `~/.config/mhd`,
+- first run seeds that config directory from the bundled templates,
+- OpenAI-backed RAG is part of the normal engineer/demo flow and is surfaced through narration,
+- use `--rag off` and `--rag on` to control retrieval per run without editing YAML,
+- the install payload is staged and trimmed instead of copying the whole repo.
 
 To smoke-test a real Homebrew-style install from the current working tree:
 
@@ -80,9 +100,11 @@ bash scripts/test_homebrew_install.sh
 
 Notes:
 - the installed command is `mhd`
-- the locked installed runtime uses the interactive spec helper
+- `mhd doctor` seeds `~/.config/mhd` on first run
 - RabbitMQ is a runtime prerequisite, not a formula dependency
 - source-based Homebrew installs on macOS require current Command Line Tools
+- `scripts/setup_homebrew_demo_env.sh` prepares a clean demo workspace without copied config or `.env`
+- that helper also seeds a single curated `buf1_leaf` RAG memory example for the multimodule demo
 
 ## Common Commands
 ```bash
@@ -107,7 +129,9 @@ PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark compare --left-dir <ru
 - Engineer default manifest: `config/runtime.yaml`
 - Benchmark default manifest: `config/runtime.benchmark.yaml`
 - Secrets and credentials: environment variables
-- Use `--config` to select the runtime manifest.
+- Dev runs use repo-local manifests by default.
+- Installed runs use `$XDG_CONFIG_HOME/mhd` or `~/.config/mhd` by default.
+- Use `--config` to select a different runtime manifest explicitly.
 
 ## Testing
 ```bash
