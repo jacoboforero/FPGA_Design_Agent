@@ -12,6 +12,7 @@ KEEP_TAP="${MHD_KEEP_TAP:-0}"
 SMOKE_SPEC="${MHD_SMOKE_SPEC:-$ROOT/tests/test_specs/01_counter3_basic.txt}"
 SMOKE_RABBITMQ_URL="${MHD_SMOKE_RABBITMQ_URL:-amqp://guest:guest@localhost:5672/}"
 XDG_CONFIG_HOME_ROOT="$TMPDIR/xdg-config"
+INSTALL_LOG="$TMPDIR/homebrew-install.log"
 
 export HOMEBREW_NO_AUTO_UPDATE="${HOMEBREW_NO_AUTO_UPDATE:-1}"
 export HOMEBREW_NO_INSTALL_CLEANUP="${HOMEBREW_NO_INSTALL_CLEANUP:-1}"
@@ -120,11 +121,13 @@ echo "[4/7] tap local formula repo"
 brew tap "$TAP_NAME" "$TAP_DIR"
 
 echo "[5/7] install mhd from local tap"
-if ! brew install "$TAP_NAME/mhd"; then
+if ! brew install "$TAP_NAME/mhd" >"$INSTALL_LOG" 2>&1; then
   brew link --overwrite mhd >/dev/null 2>&1 || true
   if command -v mhd >/dev/null 2>&1; then
-    echo "Homebrew reported a non-fatal formula install issue, but mhd is linked and runnable; continuing smoke test."
+    echo "Homebrew reported a non-fatal install warning, but mhd is linked and runnable; continuing smoke test."
+    echo "Install log: $INSTALL_LOG"
   else
+  cat "$INSTALL_LOG"
   cat <<'EOF'
 
 Homebrew install failed.
@@ -136,6 +139,8 @@ clean venv.
 EOF
     exit 1
   fi
+else
+  echo "Homebrew install completed."
 fi
 
 echo "[6/7] run installed help and doctor"
