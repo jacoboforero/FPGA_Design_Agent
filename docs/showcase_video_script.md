@@ -48,9 +48,12 @@ Visuals:
 
 Script:
 
-> Most AI-for-hardware-design demos stop at code generation.  
-> Ours goes further.  
-> It plans work, decomposes multi-module designs, supports different model backends, retrieves prior design knowledge, invokes EDA tools, benchmarks itself, and records cost and execution evidence.
+Hi, I’m Jacobo. I am proud to have been the PM for AutoRTL: a  computer hardware design automation system
+
+Most AI-for-hardware-design systems stop at code generation.
+Ours goes further.
+It plans work, decomposes multi-module designs, supports different model backends, retrieves prior design knowledge, invokes EDA tools, benchmarks itself, and records cost and execution evidence.
+.
 
 ### 0:25-1:05 - Jacobo Intro And Why This Matters
 
@@ -66,7 +69,7 @@ Visuals:
 
 Script:
 
-> Hi, I'm Jacobo Forero, and I led agent orchestration and user-facing interfaces for the project.  
+Besides my duties as PM, I led agent orchestration and user-facing interfaces for the project. But we'll come back to that  
 > Hardware design workflows are still full of manual translation, tool friction, and repeated iteration between intent, implementation, and verification.  
 > We wanted to reduce that friction with a planning-first multi-agent system for hardware design.  
 > For industry, the value is shorter iteration loops and better traceability.  
@@ -81,7 +84,7 @@ Visuals:
 
 Script:
 
-> Hi, I'm Dexter Pressley, and I worked on LLM interoperability across the platform.  
+> Hi, I'm Dexter, and I worked on LLM interoperability across major providers.  
 > That matters because a serious system cannot be locked to one model or provider if you want both vendor flexibility and research-grade comparisons.
 
 ### 1:20-1:35 - Andrew First Appearance
@@ -93,7 +96,7 @@ Visuals:
 
 Script:
 
-> Hi, I'm Andrew Chambers, and I led benchmarking and evaluation for the project.  
+> Hi, I'm Andrew, and I led benchmarking and evaluation for the project.  
 > That matters because a platform like this should be measurable on controlled workloads, not just shown through handpicked examples.
 
 ### 1:35-1:50 - Sammy First Appearance
@@ -105,7 +108,7 @@ Visuals:
 
 Script:
 
-> Hi, I'm Sammy Fares, and I built the retrieval-augmented generation component.  
+> Hi, I'm Sammy, and I built the retrieval-augmented generation component.  
 > That matters because real engineering benefits from reusable prior knowledge, especially when multi-module designs share familiar patterns.
 
 ### 1:50-2:05 - Caleb First Appearance
@@ -117,7 +120,7 @@ Visuals:
 
 Script:
 
-> Hi, I'm Caleb Elliott, and I worked on observability and cost accounting for the platform.  
+> Hi, I'm Caleb , and I worked on observability and cost accounting for the platform.  
 > That matters because engineering teams and researchers both need traceability, not just outputs.
 
 ### 2:05-2:20 - Matheus First Appearance
@@ -129,7 +132,7 @@ Visuals:
 
 Script:
 
-> Hi, I'm Mateus Verffel Mayer, and I worked on tooling, environment integration, and EDA tool connectivity.  
+> Hi, I'm Mateus, and I worked on tooling, environment integration, and EDA tool connectivity.  
 > That matters because an agent system is only useful if it can actually drive real EDA tools instead of stopping at text generation.
 
 ### 2:20-3:05 - Architecture And Novelty
