@@ -9,6 +9,7 @@ from adapters.observability.agentops import AgentOpsSink
 from adapters.observability.jsonl import JsonlFileSink
 from core.observability.agentops_tracker import get_tracker
 from core.observability.emitter import set_global_sinks
+from core.runtime.config import get_runtime_config
 
 
 def configure_observability(
@@ -18,12 +19,18 @@ def configure_observability(
     run_id: Optional[str] = None,
 ) -> None:
     tracker = get_tracker()
+    jsonl_sink = JsonlFileSink(run_name=tracker.run_name, run_id=tracker.run_id)
+    if not bool(get_runtime_config().observability.agentops_enabled):
+        tracker.disable(run_name=run_name, run_id=run_id)
+        jsonl_sink = JsonlFileSink(run_name=tracker.run_name, run_id=tracker.run_id)
+        set_global_sinks([jsonl_sink])
+        return
+
     tracker.init_from_env(
         run_name=run_name,
         run_id=run_id,
         default_tags=list(default_tags) if default_tags else [],
         force=True,
     )
-    # Even if not enabled, setting sinks to include a tracker-backed sink is safe (it will no-op).
     jsonl_sink = JsonlFileSink(run_name=tracker.run_name, run_id=tracker.run_id)
     set_global_sinks([AgentOpsSink(tracker), jsonl_sink])

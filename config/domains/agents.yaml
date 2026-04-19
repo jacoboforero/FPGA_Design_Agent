@@ -18,7 +18,7 @@ agents:
     provider: openai
 
     defaults:
-      model: gpt-4.1-mini
+      model: gpt-4.1
       deterministic: false
       seed: 7
       request_timeout_s: 120.0

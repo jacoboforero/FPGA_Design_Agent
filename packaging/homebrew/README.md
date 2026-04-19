@@ -54,9 +54,10 @@ Full-smoke notes:
 
 - Installed `mhd` mirrors the repo config tree under `$XDG_CONFIG_HOME/mhd` when `XDG_CONFIG_HOME` is set.
 - Otherwise it uses `~/.config/mhd`.
-- First run seeds that directory from the bundled `config/` templates.
+- First run seeds that directory from the bundled `config/` templates and also copies `tool_registry.yaml` into the same user config root.
 - Existing user config is never overwritten automatically.
 - The old `/opt/homebrew/etc/mhd/runtime.yaml` path is no longer part of the install contract.
+- Installed `mhd` reads the editable tool registry from `$XDG_CONFIG_HOME/mhd/tool_registry.yaml` or `~/.config/mhd/tool_registry.yaml`.
 - Normal installed defaults are:
   - `mhd ...` -> `runtime.yaml`
   - `mhd benchmark ...` -> `runtime.benchmark.yaml`
@@ -68,7 +69,7 @@ The Homebrew install intentionally stages a smaller runtime tree. It includes:
 
 - `adapters/`, `agents/`, `apps/cli/`, `core/`, `orchestrator/`, `workers/`
 - `config/`
-- `tool_registry.yaml`
+- `tool_registry.yaml` as the bundled template that seeds the editable user copy on first run
 - the shipped Verilog RAG knowledge base under `adapters/rag/`
 - the benchmark assets needed by `mhd benchmark`
 

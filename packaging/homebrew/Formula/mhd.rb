@@ -39,7 +39,6 @@ class Mhd < Formula
     (bin/"mhd").write <<~EOS
       #!/bin/bash
       export MHD_RESOURCE_ROOT="#{runtime_root}"
-      export MHD_TOOL_REGISTRY_PATH="#{runtime_root/"tool_registry.yaml"}"
       export MHD_INSTALL_CONTEXT="1"
       export USE_LLM="1"
       if [[ -n "\${PYTHONPATH:-}" ]]; then
@@ -56,9 +55,11 @@ class Mhd < Formula
     ENV["OPENAI_API_KEY"] = "dummy"
     ENV["XDG_CONFIG_HOME"] = testpath/".config"
     system bin/"mhd", "--help"
+    system bin/"mhd", "--llm-quasi-deterministic", "--llm-seed", "7", "--help"
     system bin/"mhd", "doctor"
     assert_predicate testpath/".config/mhd/runtime.yaml", :exist?
     assert_predicate testpath/".config/mhd/runtime.benchmark.yaml", :exist?
+    assert_predicate testpath/".config/mhd/tool_registry.yaml", :exist?
   end
 
   def caveats

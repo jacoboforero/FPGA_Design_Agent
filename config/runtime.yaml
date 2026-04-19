@@ -1,8 +1,16 @@
 includes:
-  - run/engineer.yaml
   - domains/agents.yaml
   - domains/cli.yaml
   - domains/infrastructure.yaml
   - domains/verification.yaml
   - domains/benchmark.yaml
   - domains/rag.yaml
+
+run:
+  spec_profile:
+    interaction: interactive
+    rigor_level: L3
+  verification_profile: testbench-agent
+
+observability:
+  agentops_enabled: false

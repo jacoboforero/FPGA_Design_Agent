@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Iterable, Set
 
 import pika
+from core.observability.agentops_tracker import get_tracker
 from core.schemas.contracts import AgentType, ResultMessage, TaskMessage, TaskStatus
 from core.observability.emitter import emit_runtime_event
 from core.runtime.retry import RetryableError, TaskInputError, get_max_retries, get_retry_count, next_retry_headers
@@ -99,7 +100,16 @@ class AgentWorkerBase(threading.Thread):
                             },
                         )
                         try:
-                            result = self.handle_task(task)
+                            tracker = get_tracker()
+                            with tracker.task_span(
+                                task_type=task.task_type.value,
+                                node_id=task.context.get("node_id"),
+                                run_id=task.run_id,
+                                task_id=str(task.task_id),
+                                attempt=task.context.get("attempt"),
+                                runtime=self.runtime_name,
+                            ):
+                                result = self.handle_task(task)
                         except TaskInputError:
                             ch.basic_nack(method.delivery_tag, requeue=False)
                             continue

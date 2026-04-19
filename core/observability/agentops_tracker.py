@@ -14,8 +14,10 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -26,11 +28,19 @@ try:  # Optional dependency
 except Exception:  # noqa: BLE001
     agentops = None  # type: ignore
 
+try:
+    from opentelemetry import context as otel_context
+    from opentelemetry import trace as otel_trace
+except Exception:  # noqa: BLE001
+    otel_context = None  # type: ignore[assignment]
+    otel_trace = None  # type: ignore[assignment]
+
 ARTIFACTS_DIR = Path(
     os.getenv("OBSERVABILITY_ARTIFACTS_DIR")
     or os.getenv("AGENTOPS_ARTIFACTS_DIR")
     or "artifacts/observability"
 )
+_CAMEL_TO_SNAKE_RE = re.compile(r"(?<!^)(?=[A-Z])")
 
 
 def _now_iso() -> str:
@@ -54,6 +64,16 @@ def _normalize_span_attribute(value: Any) -> Any:
         return _clip_text(str(value))
 
 
+def _normalize_operation_label(value: Any) -> str:
+    text = str(value or "").strip()
+    for suffix in ("Agent", "Worker"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+            break
+    text = _CAMEL_TO_SNAKE_RE.sub("_", text).strip("_").lower()
+    return text or "task"
+
+
 def _supports_agentops_openai_auto_instrumentation(llm_provider: str) -> bool:
     provider = str(llm_provider or "").strip().lower()
     if provider != "openai":
@@ -71,6 +91,8 @@ class AgentOpsTracker:
         self.run_id = str(uuid.uuid4())
         self.run_name = "session"
         self._trace_ctx = None
+        self._otel_context = None
+        self._openai_auto_llm_instrumentation = False
         self._lock = threading.Lock()
         self._totals: Dict[str, Any] = {
             "prompt_tokens": 0,
@@ -130,6 +152,8 @@ class AgentOpsTracker:
                 pass
             self.enabled = False
             self._trace_ctx = None
+            self._otel_context = None
+            self._openai_auto_llm_instrumentation = False
             self._totals = {
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
@@ -167,11 +191,21 @@ class AgentOpsTracker:
                 log_session_replay_url=False,
             )
             self._trace_ctx = agentops.start_trace(trace_name=self.run_name, tags=tags)
+            root_span = getattr(self._trace_ctx, "span", None)
+            if otel_context is not None and otel_trace is not None and root_span is not None:
+                self._otel_context = otel_trace.set_span_in_context(root_span, otel_context.get_current())
+            else:
+                self._otel_context = None
             # Attach basic metadata to the trace
             agentops.update_trace_metadata({"run_id": self.run_id, "run_name": self.run_name})
+            self._openai_auto_llm_instrumentation = bool(
+                instrument_llm_calls and str(llm_provider or "").strip().lower() == "openai"
+            )
             self.enabled = True
         except Exception:
             self.enabled = False
+            self._otel_context = None
+            self._openai_auto_llm_instrumentation = False
 
     def log_llm_call(
         self,
@@ -211,17 +245,21 @@ class AgentOpsTracker:
                 with path.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(entry) + "\n")
             self._write_summary_locked()
-        self.record_llm_span(
-            agent=agent,
-            node_id=node_id,
-            model=model,
-            provider=provider,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            estimated_cost_usd=estimated_cost_usd,
-            metadata=metadata,
-        )
+        if not (
+            self._openai_auto_llm_instrumentation
+            and str(provider or "").strip().lower() == "openai"
+        ):
+            self.record_llm_span(
+                agent=agent,
+                node_id=node_id,
+                model=model,
+                provider=provider,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                estimated_cost_usd=estimated_cost_usd,
+                metadata=metadata,
+            )
         if self.enabled:
             try:
                 agentops.update_trace_metadata(
@@ -348,6 +386,26 @@ class AgentOpsTracker:
             except Exception:
                 pass
 
+    def disable(
+        self,
+        *,
+        run_name: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> None:
+        if self.enabled and agentops is not None:
+            try:
+                agentops.end_trace()
+            except Exception:
+                pass
+        self.enabled = False
+        self._trace_ctx = None
+        self._otel_context = None
+        self._openai_auto_llm_instrumentation = False
+        if run_name is not None:
+            self.run_name = run_name
+        if run_id is not None:
+            self.run_id = str(run_id)
+
     def _write_summary_locked(self) -> None:
         summary = {
             "run_id": self.run_id,
@@ -364,6 +422,109 @@ class AgentOpsTracker:
     def get_totals(self) -> Dict[str, Any]:
         with self._lock:
             return dict(self._totals)
+
+    def get_otel_context(self) -> Any:
+        return self._otel_context if self.enabled else None
+
+    @contextmanager
+    def attach_run_context(self):
+        if not self.enabled or otel_context is None:
+            yield
+            return
+        ctx = self._otel_context
+        if ctx is None:
+            root_span = getattr(self._trace_ctx, "span", None)
+            if root_span is None or otel_trace is None:
+                yield
+                return
+            ctx = otel_trace.set_span_in_context(root_span)
+        token = otel_context.attach(ctx)
+        try:
+            yield
+        finally:
+            otel_context.detach(token)
+
+    @contextmanager
+    def start_current_span(
+        self,
+        *,
+        operation_name: str,
+        span_kind: str,
+        attributes: Optional[Dict[str, Any]] = None,
+    ):
+        if not self.enabled or agentops is None or self._trace_ctx is None:
+            yield
+            return
+        try:
+            from agentops.sdk.attributes import get_span_attributes
+            from agentops.sdk.core import tracer as sdk_tracer
+        except Exception:
+            with self.attach_run_context():
+                yield
+            return
+
+        normalized_attrs = {
+            key: normalized
+            for key, value in (attributes or {}).items()
+            if (normalized := _normalize_span_attribute(value)) is not None
+        }
+        try:
+            span_attrs = get_span_attributes(
+                operation_name=operation_name,
+                span_kind=span_kind,
+                **normalized_attrs,
+            )
+        except Exception:
+            span_attrs = normalized_attrs
+
+        with self.attach_run_context():
+            try:
+                with sdk_tracer.get_tracer().start_as_current_span(operation_name, attributes=span_attrs):
+                    yield
+            except Exception:
+                yield
+
+    @contextmanager
+    def task_span(
+        self,
+        *,
+        task_type: str,
+        node_id: Optional[str],
+        run_id: Optional[str],
+        task_id: Optional[str],
+        attempt: Any = None,
+        runtime: Optional[str] = None,
+    ):
+        try:
+            from agentops.semconv import AgentAttributes, SpanKind
+        except Exception:
+            with self.attach_run_context():
+                yield
+            return
+
+        agent_name = _normalize_operation_label(task_type)
+        parts = [agent_name]
+        if node_id:
+            parts.append(str(node_id))
+        if attempt not in (None, ""):
+            parts.append(f"attempt{attempt}")
+        operation_name = ".".join(parts)
+        attrs: Dict[str, Any] = {
+            AgentAttributes.AGENT_NAME: agent_name,
+            "mhd.node_id": node_id,
+            "mhd.run_id": run_id or self.run_id,
+            "mhd.task_id": task_id,
+            "mhd.task_type": task_type,
+            "mhd.runtime": runtime,
+        }
+        if attempt not in (None, ""):
+            attrs["mhd.attempt"] = attempt
+        with self.start_current_span(
+            operation_name=operation_name,
+            span_kind=SpanKind.AGENT,
+            attributes=attrs,
+        ):
+            yield
 
     def _record_span(self, *, operation_name: str, span_kind: str, attributes: Optional[Dict[str, Any]] = None) -> None:
         if not self.enabled or agentops is None or self._trace_ctx is None:

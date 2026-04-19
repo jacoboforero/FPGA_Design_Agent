@@ -17,8 +17,10 @@ from agents.common.base import AgentWorkerBase
 from agents.common.llm_gateway import apply_reproducibility_settings, init_llm_gateway, Message, MessageRole, GenerationConfig
 from agents.common.tb_sanitizer import sanitize_testbench
 from core.observability.agentops_tracker import get_tracker
+from core.prompting import apply_prompt_output_contract, build_prompt_metadata, render_prompt, write_prompt_trace
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
 from core.runtime.config import get_runtime_config
+from core.runtime.paths import task_memory_root
 from core.runtime.testbench_contract import extract_reset_semantics, normalize_testbench_contract
 
 
@@ -444,66 +446,38 @@ class TestbenchWorker(AgentWorkerBase):
             rag_query,
             execution_policy=ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else None,
         )
-        system = (
-            "You are a hardware RTL testbench generation agent.\n"
-            "Generate one complete self-checking Verilog-2001 testbench.\n\n"
-            "Priority order:\n"
-            "1) Race-free event ordering.\n"
-            "2) Correct checking logic against DUT behavior.\n"
-            "3) Verilog-2001 syntax compatibility.\n"
-            "4) Readable concise code.\n\n"
-            "Output contract:\n"
-            "- Output code only. No markdown, no prose, no code fences.\n"
-            f"- Module name must be exactly {tb_module}.\n"
-            "- Avoid SystemVerilog-only constructs (no logic, always_ff, always_comb, interfaces).\n"
-            "- Declare regs/wires/integers at module scope only.\n"
-            "- Do not use $stop. Use $finish(1) on failure and $finish(0) on pass.\n"
-            "- Failure print must include cycle=<cycle> and time=<time> and key DUT signals.\n\n"
-            "Signal-driving contract (strict):\n"
-            "- Drive only DUT input ports from the testbench.\n"
-            "- DUT output ports are observe-only; never drive them from testbench logic.\n"
-            "- Do not assign DUT output nets via continuous assign, procedural assignment, force/release, or task side-effects.\n"
-            "- For clocked or stateful protocol/reference modeling, use separate ref_* variables instead of driving DUT outputs.\n"
-            "- For combinational/no-reset benches, prefer direct expected-value comparisons and avoid persistent ref_* scoreboards.\n\n"
-            f"{_testbench_contract_guidance(tb_contract)}\n"
-            "Optional dumping:\n"
-            "- If +DUMP is present, enable VCD dump.\n"
-            "- +DUMP_FILE=<path> via $value$plusargs(\"DUMP_FILE=%s\", ...), default dump.vcd.\n"
-            "- Optional +DUMP_START/+DUMP_END window using %d.\n"
-            "- Do not treat DUMP_START=0 as disabled.\n"
-            "- Do not implement dump control with unconditional always-begin polling loops.\n"
-            "- Any always loop must have an unconditional timing or event control at the top of each iteration.\n"
-            "- For combinational_no_reset benches, prefer whole-run dumping and avoid DUMP_START/DUMP_END window logic entirely."
-        )
+        rag_guidance = ""
         if rag_context.strip():
-            system += (
-                "\nRelevant prior designs and verification patterns (optional guidance, reuse or adapt when appropriate to the contract and interface):\n"
-                f"{rag_context}\n"
+            rag_guidance = (
+                "Relevant prior designs and verification patterns (optional guidance, reuse or adapt when appropriate to the contract and interface):\n"
+                f"{rag_context}"
             )
-        user = (
-            f"Task:\n"
-            f"- DUT module: {node_id}\n"
-            f"- Required TB module: {tb_module}\n"
-            f"- Port list:\n" + "\n".join(f"  - {p}" for p in ports) + "\n\n"
-            f"- DUT input ports (TB may drive): {', '.join(dut_inputs) if dut_inputs else 'none'}\n"
-            f"- DUT output ports (observe-only, TB must never drive): {', '.join(dut_outputs) if dut_outputs else 'none'}\n"
-            f"- DUT inout ports (avoid driving unless explicitly required): {', '.join(dut_inouts) if dut_inouts else 'none'}\n\n"
-            f"Normalized testbench contract:\n{_format_testbench_contract(tb_contract)}\n\n"
-            f"Behavior summary:\n{behavior}\n\n"
-            f"Verification summary:\n{verification_summary}\n\n"
-            "Generate the full testbench now."
+        prompt = render_prompt(
+            "testbench.generate",
+            {
+                "tb_module": tb_module,
+                "tb_contract_guidance": _testbench_contract_guidance(tb_contract),
+                "rag_guidance": rag_guidance,
+                "node_id": node_id,
+                "port_lines": "\n".join(f"  - {p}" for p in ports),
+                "dut_inputs": ", ".join(dut_inputs) if dut_inputs else "none",
+                "dut_outputs": ", ".join(dut_outputs) if dut_outputs else "none",
+                "dut_inouts": ", ".join(dut_inouts) if dut_inouts else "none",
+                "tb_contract_summary": _format_testbench_contract(tb_contract),
+                "behavior": behavior,
+                "verification_summary": verification_summary,
+            },
         )
-        msgs: List[Message] = [
-            Message(role=MessageRole.SYSTEM, content=system),
-            Message(role=MessageRole.USER, content=user),
-        ]
+        trace_dir = task_memory_root() / node_id / "tb"
+        write_prompt_trace(prompt, trace_dir)
         llm_cfg = get_runtime_config().llm
         max_tokens = int(min(llm_cfg.max_tokens, llm_cfg.max_tokens_spec))
         temperature = float(llm_cfg.temperature)
         top_p = llm_cfg.top_p
         cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
         cfg = apply_reproducibility_settings(cfg, provider=getattr(self.gateway, "provider", None))
-        resp = await self.gateway.generate(messages=msgs, config=cfg)  # type: ignore[arg-type]
+        cfg = apply_prompt_output_contract(cfg, prompt)
+        resp = await self.gateway.generate(messages=prompt.messages, config=cfg)  # type: ignore[arg-type]
         tracker = get_tracker()
         try:
             tracker.log_llm_call(
@@ -519,6 +493,7 @@ class TestbenchWorker(AgentWorkerBase):
                     "stage": "testbench",
                     "rag_used": bool(rag_metadata.get("used")),
                     "rag_hit_count": int(rag_metadata.get("hit_count", 0)),
+                    **build_prompt_metadata(prompt),
                 },
             )
         except Exception:

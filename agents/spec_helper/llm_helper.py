@@ -5,10 +5,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, apply_reproducibility_settings
 from core.observability.agentops_tracker import get_tracker
+from core.prompting import (
+    apply_prompt_output_contract,
+    build_prompt_metadata,
+    parse_json_object,
+    RenderedPrompt,
+    render_prompt,
+    write_prompt_trace,
+)
 from core.runtime.config import get_runtime_config
 from agents.spec_helper.checklist import (
     CHECKLIST_SCHEMA,
@@ -20,21 +29,10 @@ from agents.spec_helper.checklist import (
 
 
 def _safe_json(text: str) -> Optional[Dict[str, Any]]:
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            return json.loads(text[start : end + 1])
-        except Exception:
-            return None
-    return None
+    return parse_json_object(text)
 
 
-def _log_llm_call(stage: str, spec: Dict[str, Any], resp: Any) -> None:
+def _log_llm_call(stage: str, spec: Dict[str, Any], resp: Any, prompt_meta: dict[str, Any]) -> None:
     tracker = get_tracker()
     try:
         tracker.log_llm_call(
@@ -46,7 +44,7 @@ def _log_llm_call(stage: str, spec: Dict[str, Any], resp: Any) -> None:
             completion_tokens=getattr(resp, "output_tokens", 0),
             total_tokens=getattr(resp, "total_tokens", 0),
             estimated_cost_usd=getattr(resp, "estimated_cost_usd", None),
-            metadata={"stage": stage},
+            metadata={**prompt_meta, "stage": stage},
         )
     except Exception:
         pass
@@ -129,20 +127,24 @@ def _resolve_cfg(stage: str) -> GenerationConfig:
     return _default_cfg(max_tokens, temperature)
 
 
-def _run_llm(gateway: object, messages: List[Message], stage: str) -> str:
+def _run_llm(
+    gateway: object,
+    prompt: RenderedPrompt,
+    stage: str,
+    *,
+    trace_dir: Optional[Path] = None,
+    spec: Optional[Dict[str, Any]] = None,
+) -> str:
     if not gateway or not Message or not MessageRole:
         raise RuntimeError("LLM gateway is not available; set USE_LLM=1 and provider keys.")
-    cfg = _resolve_cfg(stage)
-    provider = getattr(gateway, "provider", None)
-    json_mode = bool(get_runtime_config().llm.json_mode)
-    if json_mode and provider in ("openai", "groq"):
-        cfg.provider_specific.setdefault("response_format", {"type": "json_object"})
+    cfg = apply_prompt_output_contract(_resolve_cfg(stage), prompt)
+    write_prompt_trace(prompt, trace_dir)
 
     async def _generate() -> Any:
-        return await gateway.generate(messages=messages, config=cfg)  # type: ignore[arg-type]
+        return await gateway.generate(messages=prompt.messages, config=cfg)  # type: ignore[arg-type]
 
     resp = asyncio.run(_generate())
-    _log_llm_call(stage, {}, resp)
+    _log_llm_call(stage, spec or {}, resp, build_prompt_metadata(prompt))
     return resp.content.strip()
 
 
@@ -150,71 +152,28 @@ def update_checklist_from_spec(
     gateway: object,
     spec_text: str,
     current_checklist: Optional[Dict[str, Any]] = None,
+    *,
+    trace_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     checklist = json_like_copy(current_checklist or build_empty_checklist())
-    system = (
-        "You are Spec Helper, an assistant for hardware engineers and students. "
-        "Populate the L1-L5 checklist from the user's spec. "
-        "Only fill fields that are explicitly stated or clearly implied. "
-        "Do not invent missing details; leave them empty unless the spec says 'none' or 'n/a'. "
-        "The spec may already follow the L1-L5 template with headings like "
-        "'Role summary', 'Key rules', 'Performance intent', 'Reset semantics', "
-        "'Transaction unit', 'Reset constraints', 'Resource strategy', "
-        "'Latency budget', 'Assertion plan', and 'Acceptance metrics'. "
-        "Map those headings directly to the corresponding fields. "
-        "Other common headings map as follows: "
-        "'L1 Functional intent' -> role_summary + key_rules, "
-        "'Functional intent' or 'Behavior' -> role_summary + key_rules, "
-        "'Reset rules' -> reset_semantics, "
-        "'Edge cases' -> corner_cases, "
-        "'L2 Interface' -> signals, "
-        "'Interface details' -> signals + clocking + transaction_unit, "
-        "'Handshake semantics' -> handshake_semantics, "
-        "'Params/defaults' -> configuration_parameters, "
-        "'L3 Verification' -> test_goals, "
-        "'Verification plan' -> test_goals + oracle_strategy + stimulus_strategy + pass_fail_criteria, "
-        "'Oracle plan' -> oracle_strategy, "
-        "'Stimulus strategy' -> stimulus_strategy, "
-        "'Pass/fail criteria' -> pass_fail_criteria, "
-        "'Coverage goals' -> coverage_targets, "
-        "'L4 Architecture' -> block_diagram/dependencies/connections/resource_strategy/latency_budget, "
-        "'Architecture plan' -> block_diagram/dependencies/connections/resource_strategy/latency_budget, "
-        "'L5 Acceptance' -> required_artifacts/acceptance_metrics/exclusions. "
-        "'Acceptance criteria' -> required_artifacts/acceptance_metrics/exclusions. "
-        "Treat headings ending with ':' as field labels. "
-        "For list sections, collect subsequent bullet lines ('- ') until the next heading. "
-        "For single-line fields like 'Role summary: ...' copy the value text directly. "
-        "Do not leave required fields empty if the spec text provides values. "
-        "If a field is explicitly not applicable, only use a 'none' sentinel for optional fields. "
-        "For required fields, leave unresolved unless the spec provides a concrete value. "
-        "Use proper JSON types for values: numbers as numbers (e.g., min_cycles_after_reset is an integer). "
-        "Return JSON only, no prose, no code fences."
+    prompt = render_prompt(
+        "spec_helper.extract",
+        {
+            "checklist_schema_json": _schema_json(),
+            "spec_text": spec_text,
+        },
     )
-    user = (
-        "Checklist schema (types + descriptions):\n"
-        f"{_schema_json()}\n\n"
-        "Spec text:\n"
-        f"{spec_text}\n\n"
-        "Return JSON with a single key 'checklist'. "
-        "Include only fields you can confidently populate; omit missing fields. "
-        "For list fields, return arrays; for list_of_objects, return arrays of objects with the required keys."
-    )
-    messages = [
-        Message(role=MessageRole.SYSTEM, content=system),
-        Message(role=MessageRole.USER, content=user),
-    ]
-    content = _run_llm(gateway, messages, stage="extract")
+    content = _run_llm(gateway, prompt, stage="extract", trace_dir=trace_dir, spec=checklist)
     parsed = _safe_json(content)
     if not parsed:
-        retry_system = (
-            "Return only a single valid JSON object. "
-            "No explanations, no markdown, no extra text."
+        retry_prompt = render_prompt(
+            "spec_helper.extract_retry",
+            {
+                "checklist_schema_json": _schema_json(),
+                "spec_text": spec_text,
+            },
         )
-        retry_messages = [
-            Message(role=MessageRole.SYSTEM, content=retry_system),
-            Message(role=MessageRole.USER, content=user),
-        ]
-        content = _run_llm(gateway, retry_messages, stage="extract")
+        content = _run_llm(gateway, retry_prompt, stage="extract", trace_dir=trace_dir, spec=checklist)
         parsed = _safe_json(content)
     if not parsed:
         return checklist
@@ -233,18 +192,8 @@ def generate_followup_question(
     area_label: str | None = None,
     display_label: str | None = None,
     planning_goal: str | None = None,
+    trace_dir: Optional[Path] = None,
 ) -> str:
-    system = (
-        "You are Spec Helper, a concise hardware spec assistant. "
-        "Ask one clear question to fill the missing field. "
-        "Ask only for the minimum concrete detail needed right now so planning can continue. "
-        "Keep the question short and natural. "
-        "If the field expects structured data, ask for the required keys by name. "
-        "If the spec already mentions the answer, ask the user to paste or restate the exact content. "
-        "Avoid mentioning JSON or data types. "
-        "Do not mention any internal level labels, rigor levels, checklist sections, internal field paths, or schema names. "
-        "Address a hardware engineer or student without assuming expertise."
-    )
     field_context = {
         "detail": display_label or _user_facing_field_path(field.path),
         "description": field.description,
@@ -253,19 +202,21 @@ def generate_followup_question(
         field_context["area"] = area_label
     if planning_goal:
         field_context["goal"] = planning_goal
-    user = (
-        "Missing detail to clarify:\n"
-        f"{json.dumps(field_context, indent=2)}\n\n"
-        f"Field shape hint: {_field_shape_hint(field, user_facing=True)}\n\n"
-        "Spec text (source of truth):\n"
-        f"{_truncate_text(spec_text)}\n\n"
-        "Return JSON with key 'question'."
+    prompt = render_prompt(
+        "spec_helper.followup",
+        {
+            "field_context_json": json.dumps(field_context, indent=2),
+            "field_shape_hint": _field_shape_hint(field, user_facing=True),
+            "spec_text": _truncate_text(spec_text),
+        },
     )
-    messages = [
-        Message(role=MessageRole.SYSTEM, content=system),
-        Message(role=MessageRole.USER, content=user),
-    ]
-    content = _run_llm(gateway, messages, stage="question")
+    content = _run_llm(
+        gateway,
+        prompt,
+        stage="question",
+        trace_dir=trace_dir,
+        spec={"module_name": checklist.get("module_name")},
+    )
     parsed = _safe_json(content)
     if parsed and isinstance(parsed.get("question"), str):
         return parsed["question"].strip()
@@ -278,20 +229,9 @@ def generate_field_draft(
     field: FieldInfo,
     checklist: Dict[str, Any],
     spec_text: str,
+    *,
+    trace_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    system = (
-        "You are Spec Helper, drafting missing checklist details for a hardware spec. "
-        "Generate a proposal based on the spec and the current checklist. "
-        "Your proposal must be faithful to what is already stated; do not introduce new ports, signals, flags, "
-        "protocols, or behaviors unless they are explicitly present in the spec/checklist. "
-        "Avoid adding 'error' behaviors/flags unless the spec explicitly defines them. "
-        "If the spec is silent, make the smallest reasonable assumption and clearly label it as an 'Assumption:' "
-        "in draft_text. Keep draft_text concrete and short (no marketing language). "
-        "Return JSON only with keys: draft_text (human-readable) and value (matches the field type). "
-        "Use proper JSON types for values; numeric fields must be numbers, not prose. "
-        "If the correct answer is not applicable, only use a 'none' sentinel when the field is optional. "
-        "Do not use 'none' for required fields."
-    )
     field_context = {
         "path": field.path,
         "description": field.description,
@@ -302,21 +242,16 @@ def generate_field_draft(
     relevant_checklist: Dict[str, Any] = {"module_name": checklist.get("module_name")}
     if parent_key and isinstance(checklist.get(parent_key), dict):
         relevant_checklist[parent_key] = checklist.get(parent_key)
-    user = (
-        "Field info:\n"
-        f"{json.dumps(field_context, indent=2)}\n\n"
-        f"Field shape hint: {_field_shape_hint(field, user_facing=False)}\n\n"
-        "Current checklist context (partial):\n"
-        f"{json.dumps(relevant_checklist, indent=2)}\n\n"
-        "Spec text:\n"
-        f"{_truncate_text(spec_text)}\n\n"
-        "Return JSON with draft_text and value."
+    prompt = render_prompt(
+        "spec_helper.draft",
+        {
+            "field_context_json": json.dumps(field_context, indent=2),
+            "field_shape_hint": _field_shape_hint(field, user_facing=False),
+            "relevant_checklist_json": json.dumps(relevant_checklist, indent=2),
+            "spec_text": _truncate_text(spec_text),
+        },
     )
-    messages = [
-        Message(role=MessageRole.SYSTEM, content=system),
-        Message(role=MessageRole.USER, content=user),
-    ]
-    content = _run_llm(gateway, messages, stage="draft")
+    content = _run_llm(gateway, prompt, stage="draft", trace_dir=trace_dir, spec=checklist)
     parsed = _safe_json(content) or {}
     return {
         "draft_text": parsed.get("draft_text", "").strip() if isinstance(parsed, dict) else "",
@@ -331,6 +266,7 @@ def generate_field_draft_options(
     spec_text: str,
     *,
     n_options: int = 3,
+    trace_dir: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """
     Generate multiple candidate drafts for a single missing field.
@@ -338,24 +274,6 @@ def generate_field_draft_options(
     Returns a list of objects with keys: draft_text (human-readable) and value (typed for the field).
     """
     n_options = max(1, min(int(n_options), 5))
-    system = (
-        "You are Spec Helper, drafting missing checklist details for a hardware spec. "
-        f"Generate {n_options} distinct candidate proposals for the missing field. "
-        "Return JSON only with a single key 'options'. "
-        "options must be a JSON array of objects. Each object must have keys: draft_text and value. "
-        "draft_text should be concise and readable by a human. "
-        "value must match the field type exactly.\n\n"
-        "Rules:\n"
-        "- Do not output markdown.\n"
-        "- Do not repeat identical options.\n"
-        "- Be faithful to the spec/checklist. Do not introduce new ports, signals, flags, protocols, or behaviors "
-        "unless they are explicitly present in the spec/checklist.\n"
-        "- Avoid adding 'error' behaviors/flags unless the spec explicitly defines them.\n"
-        "- If you must make assumptions, state them clearly as 'Assumption:' in draft_text, and keep them minimal.\n"
-        "- Avoid vague marketing language; prefer concrete, testable statements.\n"
-        "- Use proper JSON types; numeric fields must be numbers.\n"
-        "- Do not use 'none' for required fields unless the spec explicitly says it is not applicable.\n"
-    )
     field_context = {
         "path": field.path,
         "description": field.description,
@@ -366,21 +284,17 @@ def generate_field_draft_options(
     relevant_checklist: Dict[str, Any] = {"module_name": checklist.get("module_name")}
     if parent_key and isinstance(checklist.get(parent_key), dict):
         relevant_checklist[parent_key] = checklist.get(parent_key)
-    user = (
-        "Field info:\n"
-        f"{json.dumps(field_context, indent=2)}\n\n"
-        f"Field shape hint: {_field_shape_hint(field, user_facing=False)}\n\n"
-        "Current checklist context (partial):\n"
-        f"{json.dumps(relevant_checklist, indent=2)}\n\n"
-        "Spec text:\n"
-        f"{_truncate_text(spec_text)}\n\n"
-        f"Return JSON: {{\"options\": [ ... {n_options} items ... ]}}"
+    prompt = render_prompt(
+        "spec_helper.draft_options",
+        {
+            "n_options": n_options,
+            "field_context_json": json.dumps(field_context, indent=2),
+            "field_shape_hint": _field_shape_hint(field, user_facing=False),
+            "relevant_checklist_json": json.dumps(relevant_checklist, indent=2),
+            "spec_text": _truncate_text(spec_text),
+        },
     )
-    messages = [
-        Message(role=MessageRole.SYSTEM, content=system),
-        Message(role=MessageRole.USER, content=user),
-    ]
-    content = _run_llm(gateway, messages, stage="draft")
+    content = _run_llm(gateway, prompt, stage="draft", trace_dir=trace_dir, spec=checklist)
     parsed = _safe_json(content) or {}
     options = parsed.get("options") if isinstance(parsed, dict) else None
     if isinstance(options, list):
@@ -398,5 +312,5 @@ def generate_field_draft_options(
             return normalized[:n_options]
 
     # Fallback: single draft
-    one = generate_field_draft(gateway, field, checklist, spec_text)
+    one = generate_field_draft(gateway, field, checklist, spec_text, trace_dir=trace_dir)
     return [one]

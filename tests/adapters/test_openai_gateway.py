@@ -224,3 +224,48 @@ def test_responses_maps_response_format_into_text_format(monkeypatch):
     assert isinstance(captured.get("text"), dict)
     assert captured["text"]["format"] == {"type": "json_object"}
     assert response.content == "responses ok"
+
+
+def test_chat_maps_output_mode_json_object_to_response_format(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_MODE", "chat")
+    gateway = OpenAIGateway(api_key="test-key", model="gpt-4.1-mini")
+
+    captured: dict = {}
+
+    async def fake_chat_create(**kwargs):
+        captured.update(kwargs)
+        return _fake_chat_response(model="gpt-4.1-mini-2025-04-14")
+
+    monkeypatch.setattr(gateway.client.chat.completions, "create", fake_chat_create)
+
+    asyncio.run(
+        gateway.generate(
+            _messages(),
+            GenerationConfig(output_mode="json_object"),
+        )
+    )
+
+    assert captured["response_format"] == {"type": "json_object"}
+
+
+def test_responses_maps_output_mode_json_object_to_text_format(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_MODE", "responses")
+    gateway = OpenAIGateway(api_key="test-key", model="gpt-5-mini")
+
+    captured: dict = {}
+
+    async def fake_responses_create(**kwargs):
+        captured.update(kwargs)
+        return _fake_responses_response(model="gpt-5-mini-2025-08-07")
+
+    monkeypatch.setattr(gateway.client.responses, "create", fake_responses_create)
+
+    asyncio.run(
+        gateway.generate(
+            _messages(),
+            GenerationConfig(output_mode="json_object"),
+        )
+    )
+
+    assert isinstance(captured.get("text"), dict)
+    assert captured["text"]["format"] == {"type": "json_object"}

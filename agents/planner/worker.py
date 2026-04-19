@@ -1,5 +1,8 @@
 """
 Planner agent runtime. Consumes PlannerAgent tasks and emits design_context.json + dag.json.
+
+The planner is deterministic today. If it ever gains an LLM-backed path, it must use the
+repo-native prompt framework under ``core.prompting`` and ``prompts/`` from the first change.
 """
 from __future__ import annotations
 

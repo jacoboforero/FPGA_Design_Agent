@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any, Dict
 
 from core.schemas.contracts import AgentType, ResultMessage, TaskMessage, TaskStatus
@@ -41,7 +42,8 @@ class SpecHelperWorker(AgentWorkerBase):
                 reflections=json.dumps({"status": "failed", "reason": "llm_unavailable"}),
             )
 
-        structured = update_checklist_from_spec(self.gateway, spec_text, checklist)
+        trace_dir = Path("artifacts/task_memory") / "spec_helper"
+        structured = update_checklist_from_spec(self.gateway, spec_text, checklist, trace_dir=trace_dir)
         missing = list_missing_fields(structured)
         clarifications = [field.path for field in missing]
         extra_clarifications = _detect_block_diagram_module_gaps(structured, spec_text)

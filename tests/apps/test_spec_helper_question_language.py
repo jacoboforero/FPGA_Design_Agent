@@ -5,10 +5,10 @@ from agents.spec_helper import llm_helper
 def test_generate_followup_question_uses_human_language_context(monkeypatch):
     captured = {}
 
-    def _fake_run_llm(gateway, messages, stage):
+    def _fake_run_llm(gateway, prompt, stage, **kwargs):
         captured["stage"] = stage
-        captured["system"] = messages[0].content
-        captured["user"] = messages[1].content
+        captured["system"] = prompt.messages[0].content
+        captured["user"] = prompt.messages[1].content
         return '{"question": "What should the module do immediately after reset?"}'
 
     field = {item.path: item for item in list_field_info()}["L1.reset_semantics"]
@@ -36,4 +36,3 @@ def test_generate_followup_question_uses_human_language_context(monkeypatch):
     assert "L2" not in captured["user"]
     assert "functional_intent" not in captured["system"]
     assert "functional_intent" not in captured["user"]
-

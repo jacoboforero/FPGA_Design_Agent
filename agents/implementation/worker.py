@@ -17,14 +17,23 @@ from core.observability.emitter import emit_runtime_event
 from agents.common.base import AgentWorkerBase
 from agents.common.llm_gateway import apply_reproducibility_settings, init_llm_gateway, Message, MessageRole, GenerationConfig
 from core.observability.agentops_tracker import get_tracker
+from core.prompting import (
+    PromptRegistry,
+    apply_prompt_output_contract,
+    build_prompt_metadata,
+    render_prompt,
+    write_prompt_trace,
+)
 from core.runtime.retry import RetryableError, TaskInputError, is_transient_error
 from core.runtime.config import get_runtime_config
+from core.runtime.paths import task_memory_root
 
 _NO_FENCE_PREFIXES = ("`systemverilog", "```")
 _ALWAYS_FF_RE = re.compile(r"\balways_ff\b")
 _ALWAYS_COMB_RE = re.compile(r"\balways_comb\b")
 _OUTPUT_LOGIC_RE = re.compile(r"\boutput\s+logic\b")
 _LOGIC_RE = re.compile(r"\blogic\b")
+_PROMPT_REGISTRY = PromptRegistry()
 
 
 class ImplementationWorker(AgentWorkerBase):
@@ -253,77 +262,64 @@ class ImplementationWorker(AgentWorkerBase):
             rag_query,
             execution_policy=ctx.get("execution_policy") if isinstance(ctx.get("execution_policy"), dict) else None,
         )
-        if rtl_language == "systemverilog":
-            system = (
-                "You are an RTL Implementation Agent. Generate synthesizable RTL for a SystemVerilog-capable benchmark harness.\n"
-                "Rules: no code fences. SystemVerilog is allowed when it improves clarity "
-                "(including logic/always_ff/always_comb), but do not use interfaces, classes, packages, or multiple top modules. "
-                "If no clock is provided, emit pure combinational logic with continuous assigns and/or always_comb only. "
-                "Implement the behavior exactly as described by the prompt; do not invent features not stated. "
-                "Prefer lint-clean RTL under Verilator: avoid constant comparisons due to bit-width (e.g., don't compare a 3-bit signal to > 7), "
-                "avoid unused signals, and avoid self-assignments like `x <= x`."
-            )
-        else:
-            system = (
-                "You are an RTL Implementation Agent. Generate synthesizable Verilog-2001.\n"
-                "Rules: no code fences, no `systemverilog` directive, avoid SystemVerilog-only keywords (no always_ff/always_comb/logic/interfaces). "
-                "If no clock is provided, emit pure combinational logic with continuous assigns only. "
-                "If sequential logic is used, declare outputs as reg and drive them in always blocks; no delays inside sequential logic. "
-                "Implement the behavior described by the spec summary; do not invent features not stated. "
-                "Prefer lint-clean RTL under Verilator: avoid constant comparisons due to bit-width (e.g., don't compare a 3-bit signal to > 7), "
-                "avoid unused signals, and avoid self-assignments like `x <= x`."
-            )
+        rtl_language_rules = _PROMPT_REGISTRY.render_fragment(
+            f"implementation/rtl_language/{'systemverilog' if rtl_language == 'systemverilog' else 'verilog2001'}.md"
+        )
+        contract_parts: list[str] = []
         if contract_style == "combinational":
-            system += (
-                "\nCombinational contract: do not use edge-triggered always blocks (no posedge/negedge). "
-                "Implement with continuous assign and/or "
-                + ("always_comb" if rtl_language == "systemverilog" else "always @*")
-                + " only, with zero internal cycle-to-cycle state."
+            contract_parts.append(
+                _PROMPT_REGISTRY.render_fragment(
+                    "implementation/contract/combinational.md",
+                    {
+                        "always_keyword": "always_comb" if rtl_language == "systemverilog" else "always @*",
+                    },
+                )
             )
         if contract_style == "integration" and bool(module_contract.get("prefer_debug_passthrough")):
-            system += (
-                "\nIntegration contract: preserve child observability. For debug outputs (e.g., *_dbg), "
-                "prefer direct combinational passthrough from child outputs instead of adding extra output pipeline registers "
-                "unless the spec explicitly requires registered debug outputs."
+            contract_parts.append(
+                _PROMPT_REGISTRY.render_fragment("implementation/contract/integration_debug_passthrough.md")
             )
-        if children:
-            system += (
-                "\nIntegration rules: If child modules are provided, you MUST instantiate them and wire their ports "
-                "exactly as specified by the connections list. Do not invent ports or rename them. "
-                "Use the top-level module ports when a connection endpoint references the current node. "
-                "If a child input has no connection, tie it to 0 (width-safe). "
-                "If a child output has no connection, it may be left unconnected. "
-                "If a connection is between two child ports, introduce an internal wire with a clear name."
-            )
-        if rag_context.strip():
-            system += (
-                "\nRelevant prior designs (optional guidance, reuse or adapt when appropriate to the contract and interface):\n"
-                f"{rag_context}\n"
-            )
-        user = (
-            f"Module name: {node_id}\n"
-            f"Ports:\n" + "\n".join(f"- {p}" for p in port_lines) + "\n"
-            f"{behavior_label}:\n{behavior or 'None provided.'}\n"
-            f"Clocking:\n{json.dumps(clocking, indent=2)}\n"
-            f"Verification hints:\n{json.dumps(verification, indent=2)}\n"
-            f"Acceptance:\n{json.dumps(acceptance, indent=2)}\n"
-            f"Module contract:\n{json.dumps(module_contract, indent=2)}\n"
-            f"Children:\n{json.dumps(children, indent=2)}\n"
-            f"Child interfaces:\n{json.dumps(child_interfaces, indent=2)}\n"
-            f"Connections:\n{json.dumps(connections, indent=2)}\n"
-            "Implement the described RTL."
+        integration_rules = (
+            _PROMPT_REGISTRY.render_fragment("implementation/integration_rules.md")
+            if children
+            else ""
         )
-        msgs: List[Message] = [
-            Message(role=MessageRole.SYSTEM, content=system),
-            Message(role=MessageRole.USER, content=user),
-        ]
+        rag_guidance = ""
+        if rag_context.strip():
+            rag_guidance = (
+                "Relevant prior designs (optional guidance, reuse or adapt when appropriate to the contract and interface):\n"
+                f"{rag_context}"
+            )
+        prompt = render_prompt(
+            "implementation.generate",
+            {
+                "rtl_language_rules": rtl_language_rules,
+                "contract_rules": "\n".join(contract_parts),
+                "integration_rules": integration_rules,
+                "rag_guidance": rag_guidance,
+                "node_id": node_id,
+                "port_lines": "\n".join(f"- {p}" for p in port_lines),
+                "behavior_label": behavior_label,
+                "behavior": behavior or "None provided.",
+                "clocking_json": json.dumps(clocking, indent=2),
+                "verification_json": json.dumps(verification, indent=2),
+                "acceptance_json": json.dumps(acceptance, indent=2),
+                "module_contract_json": json.dumps(module_contract, indent=2),
+                "children_json": json.dumps(children, indent=2),
+                "child_interfaces_json": json.dumps(child_interfaces, indent=2),
+                "connections_json": json.dumps(connections, indent=2),
+            },
+        )
+        trace_dir = task_memory_root() / node_id / "impl"
+        write_prompt_trace(prompt, trace_dir)
         llm_cfg = get_runtime_config().llm
         max_tokens = int(llm_cfg.max_tokens)
         temperature = float(llm_cfg.temperature)
         top_p = llm_cfg.top_p
         cfg = GenerationConfig(temperature=temperature, top_p=top_p, max_tokens=max_tokens)
         cfg = apply_reproducibility_settings(cfg, provider=getattr(self.gateway, "provider", None))
-        resp = await self.gateway.generate(messages=msgs, config=cfg)  # type: ignore[arg-type]
+        cfg = apply_prompt_output_contract(cfg, prompt)
+        resp = await self.gateway.generate(messages=prompt.messages, config=cfg)  # type: ignore[arg-type]
         tracker = get_tracker()
         try:
             tracker.log_llm_call(
@@ -339,6 +335,7 @@ class ImplementationWorker(AgentWorkerBase):
                     "stage": "implementation",
                     "rag_used": bool(rag_metadata.get("used")),
                     "rag_hit_count": int(rag_metadata.get("hit_count", 0)),
+                    **build_prompt_metadata(prompt),
                 },
             )
         except Exception:

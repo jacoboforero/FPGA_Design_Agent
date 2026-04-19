@@ -86,7 +86,7 @@ unless you override it with
 Runtime notes:
 - `mhd doctor` verifies the installed config, credentials, and tools.
 - `mhd doctor` also verifies OpenAI-backed RAG readiness when `rag.enabled=true`.
-- first installed run seeds `runtime.yaml` and `runtime.benchmark.yaml` into the user config home.
+- first installed run seeds `runtime.yaml`, `runtime.benchmark.yaml`, and `tool_registry.yaml` into the user config home.
 - RabbitMQ must already be installed and running.
 - add `OPENAI_API_KEY` and optional `RABBITMQ_URL` to `~/.zshrc`, then open a new shell.
 - `MHD_ENV_FILE=/absolute/path/to/.env` remains available as an explicit advanced override.
@@ -133,6 +133,7 @@ Benchmark flow flags:
 - Dev benchmark runs default to `config/runtime.benchmark.yaml`.
 - Installed engineer runs default to `$XDG_CONFIG_HOME/mhd/runtime.yaml` or `~/.config/mhd/runtime.yaml`.
 - Installed benchmark runs default to `$XDG_CONFIG_HOME/mhd/runtime.benchmark.yaml` or `~/.config/mhd/runtime.benchmark.yaml`.
+- Installed tool-command overrides live at `$XDG_CONFIG_HOME/mhd/tool_registry.yaml` or `~/.config/mhd/tool_registry.yaml`.
 - `run.spec_profile` and `run.verification_profile` are selected inside the YAML, not by CLI preset flags.
 - API keys and secrets remain environment-driven.
 - `rag.allow_benchmark=false` keeps benchmark runs reproducible by default.

@@ -26,10 +26,13 @@ def test_stage_runtime_copies_only_required_payload(tmp_path):
     assert (dest_root / "agents").is_dir()
     assert (dest_root / "apps" / "cli").is_dir()
     assert (dest_root / "config" / "runtime.yaml").exists()
+    assert (dest_root / "prompts" / "implementation" / "generate" / "meta.yaml").exists()
     assert (dest_root / "tool_registry.yaml").exists()
     assert (dest_root / "third_party" / "verilog-eval" / "scripts" / "sv-iv-analyze").exists()
     assert (dest_root / "third_party" / "verilog-eval" / "dataset_spec-to-rtl").is_dir()
     assert (dest_root / module.INSTALL_MARKER).exists()
+    assert not (dest_root / "config" / "run").exists()
+    assert not (dest_root / "config" / "scenarios").exists()
 
     assert not (dest_root / "apps" / "ui_backend").exists()
     assert not (dest_root / "apps" / "vscode-extension").exists()
@@ -46,4 +49,5 @@ def test_formula_no_longer_pins_opt_homebrew_etc_runtime():
 
     assert "/opt/homebrew/etc/mhd/runtime.yaml" not in text
     assert "MHD_CONFIG_PATH" not in text
+    assert "MHD_TOOL_REGISTRY_PATH" not in text
     assert "stage_runtime.py" in text

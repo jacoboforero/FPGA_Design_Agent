@@ -1,0 +1,5 @@
+id: implementation.generate
+version: v1
+description: Generate RTL implementation code for a design node.
+output:
+  mode: text

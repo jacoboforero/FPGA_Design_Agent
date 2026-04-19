@@ -47,6 +47,7 @@ Start here:
 
 ## Reference
 - [reference/runtime-config.md](./reference/runtime-config.md): high-impact runtime config keys.
+- [reference/codex-agentic-coding.md](./reference/codex-agentic-coding.md): how this repo is structured for Codex and other agentic workflows.
 - [reference/test-commands.md](./reference/test-commands.md): quick test command list.
 - [test-plan.md](./test-plan.md): test strategy and suite coverage.
 - [config-migration.md](./config-migration.md): YAML vs environment ownership.

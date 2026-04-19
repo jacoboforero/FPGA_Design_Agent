@@ -1,0 +1,1 @@
+Integration contract: preserve child observability. For debug outputs (e.g., *_dbg), prefer direct combinational passthrough from child outputs instead of adding extra output pipeline registers unless the spec explicitly requires registered debug outputs.

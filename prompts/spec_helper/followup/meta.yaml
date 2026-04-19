@@ -1,0 +1,13 @@
+id: spec_helper.followup
+version: v1
+description: Ask one concise follow-up question for a missing checklist field.
+output:
+  mode: json_object
+  schema_name: spec_helper_followup
+  schema:
+    type: object
+    required:
+      - question
+    properties:
+      question:
+        type: string

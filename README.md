@@ -152,3 +152,8 @@ pytest tests/apps/test_index_runs.py -q
 - [docs/architecture.md](docs/architecture.md)
 - [docs/workflows/interactive-run.md](docs/workflows/interactive-run.md)
 - [docs/workflows/benchmark-run.md](docs/workflows/benchmark-run.md)
+
+## Codex / Agentic Coding
+- [AGENTS.md](AGENTS.md)
+- [PLANS.md](PLANS.md)
+- [docs/reference/codex-agentic-coding.md](docs/reference/codex-agentic-coding.md)

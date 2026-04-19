@@ -26,6 +26,8 @@ ENV_ACTIVE_CONFIG_ROOT = "MHD_ACTIVE_CONFIG_ROOT"
 
 _INSTALL_MARKER = ".mhd-installed-runtime"
 _REQUIRED_CONFIG_ENTRYPOINTS = ("runtime.yaml", "runtime.benchmark.yaml")
+_USER_EDITABLE_RUNTIME_FILES = ("tool_registry.yaml",)
+_OPTIONAL_CONFIG_TEMPLATES: tuple[str, ...] = ()
 
 
 def resource_root() -> Path:
@@ -69,6 +71,10 @@ def bundled_config_root() -> Path:
     return (resource_root() / "config").resolve()
 
 
+def bundled_tool_registry_path() -> Path:
+    return (resource_root() / "tool_registry.yaml").resolve()
+
+
 def user_config_root() -> Path:
     xdg = os.getenv(ENV_XDG_CONFIG_HOME, "").strip()
     base = Path(xdg).expanduser() if xdg else (Path.home() / ".config")
@@ -87,6 +93,11 @@ def ensure_user_config_root() -> Path:
     if not target_root.exists():
         target_root.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source_root, target_root)
+        for filename in _USER_EDITABLE_RUNTIME_FILES:
+            bundled_path = resource_root() / filename
+            target_path = target_root / filename
+            if bundled_path.exists():
+                shutil.copy2(bundled_path, target_path)
         return target_root
 
     if not target_root.is_dir():
@@ -102,6 +113,17 @@ def ensure_user_config_root() -> Path:
             f"Installed config home is incomplete: missing {joined}. "
             "Restore the missing files or remove the directory so mhd can seed a fresh config tree."
         )
+    for filename in _USER_EDITABLE_RUNTIME_FILES:
+        bundled_path = resource_root() / filename
+        target_path = target_root / filename
+        if not target_path.exists() and bundled_path.exists():
+            shutil.copy2(bundled_path, target_path)
+    for rel_path in _OPTIONAL_CONFIG_TEMPLATES:
+        bundled_path = source_root / rel_path
+        target_path = target_root / rel_path
+        if not target_path.exists() and bundled_path.exists():
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(bundled_path, target_path)
     return target_root
 
 
@@ -126,7 +148,9 @@ def default_tool_registry_path() -> Path:
     value = os.getenv(ENV_TOOL_REGISTRY_PATH)
     if value:
         return Path(value).expanduser().resolve()
-    return (resource_root() / "tool_registry.yaml").resolve()
+    if is_installed_runtime():
+        return (ensure_user_config_root() / "tool_registry.yaml").resolve()
+    return bundled_tool_registry_path()
 
 
 def active_config_root() -> Optional[Path]:

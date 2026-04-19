@@ -1,0 +1,13 @@
+id: spec_helper.extract
+version: v1
+description: Populate the L1-L5 checklist from free-form RTL spec text.
+output:
+  mode: json_object
+  schema_name: spec_helper_extract
+  schema:
+    type: object
+    required:
+      - checklist
+    properties:
+      checklist:
+        type: object

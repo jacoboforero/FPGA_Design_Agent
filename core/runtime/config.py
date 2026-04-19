@@ -161,6 +161,10 @@ class DebugConfig(BaseModel):
     local_lint_max_lines: int = 20
 
 
+class ObservabilityConfig(BaseModel):
+    agentops_enabled: bool = True
+
+
 class BenchmarkSampleConfig(BaseModel):
     n: int
     temperature: float
@@ -231,6 +235,7 @@ class RuntimeConfig(BaseModel):
     run: RunConfig = Field(default_factory=RunConfig)
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
     cli: CliConfig = Field(default_factory=CliConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     workers: WorkersConfig = Field(default_factory=WorkersConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
     tools: ToolConfig = Field(default_factory=ToolConfig)
@@ -246,6 +251,7 @@ def _default_runtime_dict() -> Dict[str, Any]:
         "run": {},
         "broker": {},
         "cli": {},
+        "observability": {},
         "workers": {},
         "llm": {},
         "tools": {},
@@ -460,6 +466,7 @@ __all__ = [
     "RunConfig",
     "BrokerConfig",
     "CliConfig",
+    "ObservabilityConfig",
     "WorkersConfig",
     "WorkerPoolSizesConfig",
     "LlmConfig",

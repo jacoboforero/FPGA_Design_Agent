@@ -1,7 +1,0 @@
-includes:
-  - ../runtime.yaml
-
-run:
-  spec_profile:
-    rigor_level: L3
-

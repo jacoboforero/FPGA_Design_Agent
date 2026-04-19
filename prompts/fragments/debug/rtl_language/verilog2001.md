@@ -1,0 +1,2 @@
+- If you touch RTL, rtl_lines MUST be a complete synthesizable Verilog-2001 module named exactly as the DUT.
+- Avoid SystemVerilog-only keywords (no always_ff/always_comb/logic/interfaces).

@@ -19,6 +19,7 @@ from agents.common.base import AgentWorkerBase
 from agents.common.llm_gateway import GenerationConfig, Message, MessageRole, apply_reproducibility_settings, init_llm_gateway
 from core.observability.agentops_tracker import get_tracker
 from core.observability.emitter import emit_runtime_event
+from core.prompting import apply_prompt_output_contract, build_prompt_metadata, render_prompt, write_prompt_trace
 from core.runtime.config import get_runtime_config
 from core.runtime.paths import task_memory_root
 from core.runtime.retry import TaskInputError
@@ -263,25 +264,18 @@ class FinalizerWorker(AgentWorkerBase):
 
         rtl_excerpt = rtl_text[: int(rag_cfg.summary_max_rtl_chars)]
         tb_excerpt = tb_text[: int(rag_cfg.summary_max_tb_chars)]
-        system = (
-            "You are summarizing a passing RTL design for future retrieval.\n"
-            "Write one compact paragraph in first person plural neutral engineering voice.\n"
-            "Focus on interface shape, behavior, verification posture, and reuse value.\n"
-            "Do not mention file paths, model names, or hidden reasoning."
+        prompt = render_prompt(
+            "finalizer.summary",
+            {
+                "node_id": node_id,
+                "behavior_summary": str(ctx.get("demo_behavior", "") or "").strip(),
+                "verification_json": json.dumps(ctx.get("verification", {}), indent=2),
+                "acceptance_log": acceptance_log or "No explicit acceptance log.",
+                "reflection_text": reflection_text or "None",
+                "rtl_excerpt": rtl_excerpt,
+                "tb_excerpt": tb_excerpt or "No testbench text provided.",
+            },
         )
-        user = (
-            f"Node: {node_id}\n"
-            f"Behavior summary: {str(ctx.get('demo_behavior', '') or '').strip()}\n"
-            f"Verification: {json.dumps(ctx.get('verification', {}), indent=2)}\n"
-            f"Acceptance log:\n{acceptance_log or 'No explicit acceptance log.'}\n\n"
-            f"Reflection insights:\n{reflection_text or 'None'}\n\n"
-            f"RTL excerpt:\n{rtl_excerpt}\n\n"
-            f"TB excerpt:\n{tb_excerpt or 'No testbench text provided.'}\n"
-        )
-        msgs = [
-            Message(role=MessageRole.SYSTEM, content=system),
-            Message(role=MessageRole.USER, content=user),
-        ]
         llm_cfg = get_runtime_config().llm
         cfg = GenerationConfig(
             temperature=min(0.3, float(llm_cfg.temperature)),
@@ -289,8 +283,14 @@ class FinalizerWorker(AgentWorkerBase):
             max_tokens=220,
         )
         cfg = apply_reproducibility_settings(cfg, provider=getattr(self.gateway, "provider", None))
+        cfg = apply_prompt_output_contract(cfg, prompt)
+        trace_dir = task_memory_root() / node_id / _stage_dir("finalize", _parse_attempt(ctx.get("attempt")))
         try:
-            resp = asyncio.run(self.gateway.generate(messages=msgs, config=cfg))  # type: ignore[arg-type]
+            write_prompt_trace(prompt, trace_dir)
+        except Exception:
+            pass
+        try:
+            resp = asyncio.run(self.gateway.generate(messages=prompt.messages, config=cfg))  # type: ignore[arg-type]
         except Exception:
             return _heuristic_summary(node_id, ctx, rtl_text, tb_text)
 
@@ -304,7 +304,7 @@ class FinalizerWorker(AgentWorkerBase):
                 completion_tokens=getattr(resp, "output_tokens", 0),
                 total_tokens=getattr(resp, "total_tokens", 0),
                 estimated_cost_usd=getattr(resp, "estimated_cost_usd", None),
-                metadata={"stage": "finalizer_summary"},
+                metadata=build_prompt_metadata(prompt, extra={"stage": "finalizer_summary"}),
             )
         except Exception:
             pass

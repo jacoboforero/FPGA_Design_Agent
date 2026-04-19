@@ -17,6 +17,7 @@ COPY_DIRS = (
     "workers",
     "apps/cli",
     "config",
+    "prompts",
     "third_party/verilog-eval/scripts",
     "third_party/verilog-eval/dataset_spec-to-rtl",
 )

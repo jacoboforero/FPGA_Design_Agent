@@ -187,7 +187,7 @@ def _import_llama_index(embedding_provider: str) -> tuple[Any, Any, Any, Any]:
         from llama_index.core.schema import NodeWithScore
     except Exception as exc:  # noqa: BLE001
         raise RagUnavailableError(
-            "RAG dependencies missing. Install llama-index and the embedding packages before enabling RAG."
+            "RAG dependencies missing. Install llama-index-core and the embedding packages before enabling RAG."
         ) from exc
 
     if embedding_provider == "openai":

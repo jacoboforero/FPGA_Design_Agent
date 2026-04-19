@@ -1,0 +1,15 @@
+id: spec_helper.draft
+version: v1
+description: Draft a single missing checklist field value from the existing spec.
+output:
+  mode: json_object
+  schema_name: spec_helper_draft
+  schema:
+    type: object
+    required:
+      - draft_text
+      - value
+    properties:
+      draft_text:
+        type: string
+      value: {}

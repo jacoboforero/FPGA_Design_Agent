@@ -210,6 +210,7 @@ class OpenAIGateway(LLMGateway):
             "model": self._model,
             "messages": self._convert_messages(messages),
         }
+        response_format = self._resolve_response_format(config, provider_specific)
 
         sampling_allowed = self._sampling_allowed_for_model(provider_specific)
         if sampling_allowed:
@@ -227,6 +228,8 @@ class OpenAIGateway(LLMGateway):
             params["max_completion_tokens"] = config.max_tokens
         if config.stop_sequences:
             params["stop"] = config.stop_sequences
+        if isinstance(response_format, dict):
+            params["response_format"] = response_format
 
         params.update(provider_specific)
         return params
@@ -237,7 +240,7 @@ class OpenAIGateway(LLMGateway):
         effort = provider_specific.pop("reasoning_effort", None)
         if "reasoning" not in provider_specific and effort is not None:
             provider_specific["reasoning"] = {"effort": effort}
-        response_format = provider_specific.pop("response_format", None)
+        response_format = self._resolve_response_format(config, provider_specific)
         if isinstance(response_format, dict):
             text_cfg = provider_specific.get("text")
             if not isinstance(text_cfg, dict):
@@ -268,6 +271,29 @@ class OpenAIGateway(LLMGateway):
 
         params.update(provider_specific)
         return params
+
+    def _resolve_response_format(
+        self,
+        config: GenerationConfig,
+        provider_specific: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        response_format = provider_specific.pop("response_format", None)
+        if isinstance(response_format, dict):
+            return response_format
+
+        output_mode = str(getattr(config, "output_mode", "") or "").strip().lower()
+        if output_mode == "json_object":
+            return {"type": "json_object"}
+        if output_mode == "json_schema" and isinstance(getattr(config, "output_schema", None), dict):
+            schema_name = str(getattr(config, "output_schema_name", "") or "response").strip() or "response"
+            return {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "schema": config.output_schema,
+                },
+            }
+        return None
 
     def _should_fallback_to_responses(self, exc: Exception) -> bool:
         msg = str(exc).lower()
@@ -387,11 +413,20 @@ class OpenAIGateway(LLMGateway):
         )
 
     def _make_client(self) -> AsyncOpenAI:
-        return AsyncOpenAI(
+        client = AsyncOpenAI(
             api_key=self._api_key,
             organization=self._organization,
             timeout=self._request_timeout_s,
         )
+        if not hasattr(client, "responses"):
+            class _ResponsesShim:
+                async def create(self, **kwargs):
+                    raise RuntimeError(
+                        "OpenAI SDK does not expose the Responses API. Upgrade the openai package to use response-mode models."
+                    )
+
+            setattr(client, "responses", _ResponsesShim())
+        return client
 
     def _ensure_client(self) -> AsyncOpenAI:
         if self.client is None:

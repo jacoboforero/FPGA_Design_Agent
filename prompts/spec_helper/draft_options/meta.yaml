@@ -1,0 +1,22 @@
+id: spec_helper.draft_options
+version: v1
+description: Draft multiple candidate values for a missing checklist field.
+output:
+  mode: json_object
+  schema_name: spec_helper_draft_options
+  schema:
+    type: object
+    required:
+      - options
+    properties:
+      options:
+        type: array
+        items:
+          type: object
+          required:
+            - draft_text
+            - value
+          properties:
+            draft_text:
+              type: string
+            value: {}

@@ -25,7 +25,7 @@ def test_apply_runtime_cli_overrides_enables_deterministic_llm_and_seed():
     cfg.llm.seed = None
     set_runtime_config(cfg)
     try:
-        _apply_runtime_cli_overrides(rag_override=None, llm_deterministic=True, llm_seed=17)
+        _apply_runtime_cli_overrides(rag_override=None, llm_quasi_deterministic=True, llm_seed=17)
         assert get_runtime_config().llm.deterministic is True
         assert get_runtime_config().llm.seed == 17
     finally:
@@ -38,8 +38,8 @@ def test_build_parser_accepts_rag_toggle():
     assert args.rag == "off"
 
 
-def test_build_parser_accepts_llm_deterministic_flags():
+def test_build_parser_accepts_llm_quasi_deterministic_flags():
     parser = build_parser()
-    args = parser.parse_args(["--llm-deterministic", "--llm-seed", "11"])
-    assert args.llm_deterministic is True
+    args = parser.parse_args(["--llm-quasi-deterministic", "--llm-seed", "11"])
+    assert args.llm_quasi_deterministic is True
     assert args.llm_seed == 11

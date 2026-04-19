@@ -1,0 +1,22 @@
+id: narrator.card
+version: v1
+description: Generate a public-facing execution progress card.
+output:
+  mode: json_object
+  schema_name: narrator_card
+  schema:
+    type: object
+    required:
+      - headline
+      - narrative
+      - evidence
+      - next_step
+    properties:
+      headline:
+        type: string
+      narrative:
+        type: string
+      evidence:
+        type: string
+      next_step:
+        type: string

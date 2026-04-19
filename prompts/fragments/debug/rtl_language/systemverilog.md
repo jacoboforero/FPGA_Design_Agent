@@ -1,0 +1,3 @@
+- If you touch RTL, rtl_lines MUST be a complete synthesizable module named exactly as the DUT.
+- SystemVerilog is allowed for RTL patches when it improves clarity, including logic/always_ff/always_comb.
+- Do not use interfaces, classes, packages, or multiple top modules.

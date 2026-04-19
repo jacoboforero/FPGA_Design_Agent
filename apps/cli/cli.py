@@ -240,15 +240,15 @@ def _run_planner_task(
 def _apply_runtime_cli_overrides(
     *,
     rag_override: str | None,
-    llm_deterministic: bool = False,
+    llm_quasi_deterministic: bool = False,
     llm_seed: int | None = None,
 ) -> None:
-    if rag_override is None and not llm_deterministic and llm_seed is None:
+    if rag_override is None and not llm_quasi_deterministic and llm_seed is None:
         return
     cfg = get_runtime_config().model_copy(deep=True)
     if rag_override is not None:
         cfg.rag.enabled = rag_override == "on"
-    if llm_deterministic or llm_seed is not None:
+    if llm_quasi_deterministic or llm_seed is not None:
         cfg.llm.deterministic = True
     if llm_seed is not None:
         cfg.llm.seed = int(llm_seed)
@@ -534,7 +534,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override rag.enabled for this run only.",
     )
     parser.add_argument(
-        "--llm-deterministic",
+        "--llm-quasi-deterministic",
+        dest="llm_quasi_deterministic",
         action="store_true",
         help="Force best-effort reproducible LLM settings for this run only (zero temperature plus a stable seed where supported).",
     )
@@ -612,7 +613,7 @@ def main(argv: list[str] | None = None) -> None:
     initialize_runtime_config(args.config, default_name="runtime.yaml")
     _apply_runtime_cli_overrides(
         rag_override=args.rag,
-        llm_deterministic=bool(args.llm_deterministic),
+        llm_quasi_deterministic=bool(args.llm_quasi_deterministic),
         llm_seed=args.llm_seed,
     )
     try:

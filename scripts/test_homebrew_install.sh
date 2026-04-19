@@ -67,7 +67,6 @@ class Mhd < Formula
     (bin/"mhd").write <<~EOS
       #!/bin/bash
       export MHD_RESOURCE_ROOT="#{runtime_root}"
-      export MHD_TOOL_REGISTRY_PATH="#{runtime_root/"tool_registry.yaml"}"
       export MHD_INSTALL_CONTEXT="1"
       export USE_LLM="1"
       if [[ -n "\${PYTHONPATH:-}" ]]; then
@@ -84,9 +83,11 @@ class Mhd < Formula
     ENV["OPENAI_API_KEY"] = "dummy"
     ENV["XDG_CONFIG_HOME"] = testpath/".config"
     system bin/"mhd", "--help"
+    system bin/"mhd", "--llm-quasi-deterministic", "--llm-seed", "7", "--help"
     system bin/"mhd", "doctor"
     assert_predicate testpath/".config/mhd/runtime.yaml", :exist?
     assert_predicate testpath/".config/mhd/runtime.benchmark.yaml", :exist?
+    assert_predicate testpath/".config/mhd/tool_registry.yaml", :exist?
   end
 
   def caveats
@@ -145,6 +146,7 @@ fi
 
 echo "[6/7] run installed help and doctor"
 XDG_CONFIG_HOME="$XDG_CONFIG_HOME_ROOT" mhd --help >/dev/null
+XDG_CONFIG_HOME="$XDG_CONFIG_HOME_ROOT" mhd --llm-quasi-deterministic --llm-seed 7 --help >/dev/null
 XDG_CONFIG_HOME="$XDG_CONFIG_HOME_ROOT" USE_LLM=1 OPENAI_API_KEY="${OPENAI_API_KEY:-dummy}" mhd doctor
 test -f "$XDG_CONFIG_HOME_ROOT/mhd/runtime.yaml"
 test -f "$XDG_CONFIG_HOME_ROOT/mhd/runtime.benchmark.yaml"
@@ -173,6 +175,8 @@ if [[ "${MHD_RUN_FULL_SMOKE:-0}" == "1" ]]; then
     timeout 420s mhd \
       --spec-file "$SMOKE_SPEC" \
       --rag off \
+      --llm-quasi-deterministic \
+      --llm-seed 7 \
       --yes \
       --narrative-mode off \
       --run-name homebrew_install_smoke

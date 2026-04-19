@@ -1,9 +1,15 @@
 includes:
-  - run/benchmark.yaml
-  - domains/agents.yaml
-  - domains/cli.yaml
-  - domains/infrastructure.yaml
-  - domains/verification.yaml
-  - domains/benchmark.yaml
-  - domains/rag.yaml
-  - domains/rag.benchmark.yaml
+  - runtime.yaml
+
+run:
+  spec_profile:
+    interaction: non_interactive
+    rigor_level: L0
+  verification_profile: verilog-eval
+
+rag:
+  enabled: false
+  allow_benchmark: false
+
+observability:
+  agentops_enabled: false

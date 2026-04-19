@@ -1,0 +1,5 @@
+id: testbench.generate
+version: v1
+description: Generate a self-checking Verilog-2001 testbench.
+output:
+  mode: text

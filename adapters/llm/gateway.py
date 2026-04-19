@@ -90,6 +90,11 @@ class GenerationConfig(BaseModel):
     # Provider-specific overrides.
     provider_specific: Dict[str, Any] = Field(default_factory=dict)
 
+    # Structured output contract.
+    output_mode: Optional[str] = None  # text, json_object, json_schema
+    output_schema_name: Optional[str] = None
+    output_schema: Optional[Dict[str, Any]] = None
+
 
 class LLMGateway(ABC): # Abstract gateway for calling LLM APIs.
     

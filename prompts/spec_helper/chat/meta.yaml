@@ -1,0 +1,5 @@
+id: spec_helper.chat
+version: v1
+description: UI chat prompt for the specification helper assistant.
+output:
+  mode: text

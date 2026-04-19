@@ -1,0 +1,5 @@
+id: finalizer.summary
+version: v1
+description: Summarize a passing RTL design for future retrieval.
+output:
+  mode: text

@@ -40,6 +40,8 @@ from workers.lint.worker import LintWorker
 from workers.sim.worker import SimulationWorker
 from workers.distill.worker import DistillWorker
 from agents.common.llm_gateway import init_llm_gateway, Message, MessageRole, GenerationConfig
+from core.observability.agentops_tracker import get_tracker
+from core.prompting import apply_prompt_output_contract, build_prompt_metadata, render_prompt, write_prompt_trace
 
 ARTIFACTS = REPO_ROOT / "artifacts" / "generated"
 TASK_MEMORY = REPO_ROOT / "artifacts" / "task_memory"
@@ -249,20 +251,36 @@ async def generate_spec_helper_reply(user_msg: str) -> str:
     """
     if os.getenv("USE_LLM") != "1" or not spec_helper_gateway or not Message or not MessageRole or not GenerationConfig:
         raise HTTPException(status_code=503, detail="LLM unavailable; enable USE_LLM=1 and configure provider credentials.")
-    system = (
-        "You are the Specification Helper Agent for RTL designs. "
-        "You extract and refine L1-L5: intent, interface, verification goals/coverage, architecture/clocking, acceptance. "
-        "Return a short structured summary and 2-3 clarifying questions if needed. "
-        "Be concise; prefer bullet lists."
-    )
-    msgs: List[Message] = [Message(role=MessageRole.SYSTEM, content=system)]
+    rendered = render_prompt("spec_helper.chat", {"user_message": user_msg})
+    msgs: List[Message] = []
+    for item in rendered.messages:
+        if item.role == MessageRole.SYSTEM:
+            msgs.append(item)
     for m in chat_history[-6:]:
         role = m.get("role", "user")
         if role == "agent":
             msgs.append(Message(role=MessageRole.ASSISTANT, content=m["content"]))
         else:
             msgs.append(Message(role=MessageRole.USER, content=m["content"]))
-    msgs.append(Message(role=MessageRole.USER, content=user_msg))
-    cfg = GenerationConfig(temperature=0.2, max_tokens=500)
+    for item in rendered.messages:
+        if item.role == MessageRole.USER:
+            msgs.append(item)
+    rendered = rendered.model_copy(update={"messages": msgs})
+    write_prompt_trace(rendered)
+    cfg = apply_prompt_output_contract(GenerationConfig(temperature=0.2, max_tokens=500), rendered)
     resp = await spec_helper_gateway.generate(messages=msgs, config=cfg)  # type: ignore
+    try:
+        get_tracker().log_llm_call(
+            agent="ui_spec_helper_chat",
+            node_id=None,
+            model=getattr(resp, "model_name", "unknown"),
+            provider=getattr(resp, "provider", "unknown"),
+            prompt_tokens=getattr(resp, "input_tokens", 0),
+            completion_tokens=getattr(resp, "output_tokens", 0),
+            total_tokens=getattr(resp, "total_tokens", 0),
+            estimated_cost_usd=getattr(resp, "estimated_cost_usd", None),
+            metadata=build_prompt_metadata(rendered, extra={"stage": "spec_helper_chat"}),
+        )
+    except Exception:
+        pass
     return resp.content

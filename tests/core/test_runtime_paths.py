@@ -16,6 +16,7 @@ from core.runtime.paths import (
     default_benchmark_config_path,
     default_config_path,
     default_env_file,
+    default_tool_registry_path,
     resolve_resource_path,
 )
 
@@ -36,32 +37,12 @@ def _clear_runtime_env(monkeypatch) -> None:
 def _write_config_tree(root: Path) -> None:
     config_root = root / "config"
     domains = config_root / "domains"
-    run_dir = config_root / "run"
     domains.mkdir(parents=True)
-    run_dir.mkdir(parents=True)
     (config_root / "runtime.yaml").write_text(
         "\n".join(
             [
                 "includes:",
-                "  - run/engineer.yaml",
                 "  - domains/infrastructure.yaml",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    (config_root / "runtime.benchmark.yaml").write_text(
-        "\n".join(
-            [
-                "includes:",
-                "  - run/benchmark.yaml",
-                "  - domains/infrastructure.yaml",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    (run_dir / "engineer.yaml").write_text(
-        "\n".join(
-            [
                 "run:",
                 "  spec_profile:",
                 "    interaction: interactive",
@@ -71,9 +52,11 @@ def _write_config_tree(root: Path) -> None:
         ),
         encoding="utf-8",
     )
-    (run_dir / "benchmark.yaml").write_text(
+    (config_root / "runtime.benchmark.yaml").write_text(
         "\n".join(
             [
+                "includes:",
+                "  - runtime.yaml",
                 "run:",
                 "  spec_profile:",
                 "    interaction: non_interactive",
@@ -93,6 +76,18 @@ def _write_config_tree(root: Path) -> None:
         ),
         encoding="utf-8",
     )
+    (root / "tool_registry.yaml").write_text(
+        "\n".join(
+            [
+                "tools:",
+                "  verilator:",
+                "    commands:",
+                "      lint:",
+                "        template: \"{tool} --lint-only --sv {sources}\"",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_dev_default_paths_stay_repo_local(monkeypatch, tmp_path):
@@ -102,6 +97,7 @@ def test_dev_default_paths_stay_repo_local(monkeypatch, tmp_path):
     expected_root = Path(__file__).resolve().parents[2]
     assert default_config_path() == (expected_root / "config" / "runtime.yaml").resolve()
     assert default_benchmark_config_path() == (expected_root / "config" / "runtime.benchmark.yaml").resolve()
+    assert default_tool_registry_path() == (expected_root / "tool_registry.yaml").resolve()
     assert default_env_file() == (tmp_path / ".env").resolve()
 
 
@@ -121,9 +117,34 @@ def test_installed_config_seeds_xdg_home(monkeypatch, tmp_path):
     assert resolved == (seeded_root / "runtime.yaml").resolve()
     assert (seeded_root / "runtime.yaml").exists()
     assert (seeded_root / "runtime.benchmark.yaml").exists()
+    assert (seeded_root / "domains" / "infrastructure.yaml").exists()
+    assert default_tool_registry_path() == (seeded_root / "tool_registry.yaml").resolve()
+    assert (seeded_root / "tool_registry.yaml").exists()
 
 
 def test_existing_installed_user_config_is_not_overwritten(monkeypatch, tmp_path):
+    _clear_runtime_env(monkeypatch)
+    resource_root = tmp_path / "resource"
+    xdg_home = tmp_path / "xdg"
+    seeded_root = xdg_home / "mhd"
+    _write_config_tree(resource_root)
+    (resource_root / ".mhd-installed-runtime").write_text("homebrew\n", encoding="utf-8")
+    seeded_root.mkdir(parents=True)
+    (seeded_root / "runtime.yaml").write_text("run:\n  verification_profile: testbench-agent\n", encoding="utf-8")
+    (seeded_root / "runtime.benchmark.yaml").write_text("run:\n  verification_profile: verilog-eval\n", encoding="utf-8")
+    (seeded_root / "tool_registry.yaml").write_text("tools: {}\n", encoding="utf-8")
+
+    monkeypatch.setenv(ENV_INSTALL_CONTEXT, "1")
+    monkeypatch.setenv(ENV_RESOURCE_ROOT, str(resource_root))
+    monkeypatch.setenv(ENV_XDG_CONFIG_HOME, str(xdg_home))
+
+    resolved = default_config_path()
+    assert resolved == (seeded_root / "runtime.yaml").resolve()
+    assert "verification_profile: testbench-agent" in (seeded_root / "runtime.yaml").read_text(encoding="utf-8")
+    assert (seeded_root / "tool_registry.yaml").read_text(encoding="utf-8") == "tools: {}\n"
+
+
+def test_existing_installed_user_config_seeds_missing_tool_registry(monkeypatch, tmp_path):
     _clear_runtime_env(monkeypatch)
     resource_root = tmp_path / "resource"
     xdg_home = tmp_path / "xdg"
@@ -138,9 +159,8 @@ def test_existing_installed_user_config_is_not_overwritten(monkeypatch, tmp_path
     monkeypatch.setenv(ENV_RESOURCE_ROOT, str(resource_root))
     monkeypatch.setenv(ENV_XDG_CONFIG_HOME, str(xdg_home))
 
-    resolved = default_config_path()
-    assert resolved == (seeded_root / "runtime.yaml").resolve()
-    assert "verification_profile: testbench-agent" in (seeded_root / "runtime.yaml").read_text(encoding="utf-8")
+    assert default_tool_registry_path() == (seeded_root / "tool_registry.yaml").resolve()
+    assert (seeded_root / "tool_registry.yaml").exists()
 
 
 def test_installed_falls_back_to_home_config(monkeypatch, tmp_path):

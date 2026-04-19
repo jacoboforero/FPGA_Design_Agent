@@ -88,20 +88,20 @@ mhd doctor
 ## 4. Basic 3-Bit Counter Run
 
 ```bash
-mhd --spec-file 01_counter3_basic.txt --rag off --llm-deterministic --llm-seed 7 --yes --narrative-mode deterministic --run-name demo_counter_det
+mhd --spec-file 01_counter3_basic.txt --rag off --llm-quasi-deterministic --llm-seed 7 --yes --narrative-mode deterministic --run-name demo_counter_det
 ```
 
 ## 5. Show Different Narrative Modes
 
 ```bash
-mhd --spec-file 01_counter3_basic.txt --rag off --llm-deterministic --llm-seed 7 --yes --narrative-mode off --run-name demo_counter_off
-mhd --spec-file 01_counter3_basic.txt --rag off --llm-deterministic --llm-seed 7 --yes --narrative-mode llm --run-name demo_counter_llm
+mhd --spec-file 01_counter3_basic.txt --rag off --llm-quasi-deterministic --llm-seed 7 --yes --narrative-mode off --run-name demo_counter_off
+mhd --spec-file 01_counter3_basic.txt --rag off --llm-quasi-deterministic --llm-seed 7 --yes --narrative-mode llm --run-name demo_counter_llm
 ```
 
 ## 6. Basic Multimodule Run
 
 ```bash
-mhd --spec-file demo_inv1_wrapper_multimodule.txt --rag on --llm-deterministic --llm-seed 7 --yes --narrative-mode llm --run-name demo_multimodule_buf_llm
+mhd --spec-file demo_inv1_wrapper_multimodule.txt --rag on --llm-quasi-deterministic --llm-seed 7 --yes --narrative-mode llm --run-name demo_multimodule_buf_llm
 ```
 
 Point out during the run:
@@ -128,10 +128,16 @@ UI actions:
 
 - Open `artifacts/generated/dag.json`
 - Open `artifacts/generated/design_context.json`
-- Open `artifacts/task_memory/specs/planning_spec.json`
-- Open `artifacts/benchmarks/verilog_eval/demo_readiness/smoke10_demo/run_manifest.json`
-- Open `artifacts/benchmarks/verilog_eval/demo_readiness/smoke10_demo/canonical/summary.csv`
 - Open `artifacts/benchmarks/verilog_eval/demo_readiness/smoke10_demo/canonical/aggregate.json`
+
+What to say while showing them:
+
+- `artifacts/generated/dag.json`: this is the planner output that turns the spec into an executable dependency graph, so you can immediately see whether the run is single-module or decomposed into leaf and top-level work.
+- `artifacts/generated/dag.json`: for the multimodule example, call out that the top module depends on the leaf module, which is why the system builds and validates the leaf before the wrapper.
+- `artifacts/generated/design_context.json`: this is the normalized contract the downstream agents actually consume, with interface, behavior, verification, and acceptance expectations in one machine-readable file.
+- `artifacts/generated/design_context.json`: emphasize that this file is what makes the pipeline reproducible, because the later stages are no longer improvising off raw prose alone.
+- `artifacts/benchmarks/verilog_eval/demo_readiness/smoke10_demo/canonical/aggregate.json`: this is the structured benchmark rollup, so it is the fastest file to open when you want pass-rate, counts, and high-level outcome without digging through per-problem outputs.
+- `artifacts/benchmarks/verilog_eval/demo_readiness/smoke10_demo/canonical/aggregate.json`: frame it as the presentation-friendly benchmark artifact, because it condenses the official analyzer outputs into a cleaner JSON summary for inspection.
 
 ## 9. Show AgentOps Prettified Cost Elements
 
