@@ -146,6 +146,8 @@ class DebugWorker(AgentWorkerBase):
             "- For sim failures, do not assume the RTL is wrong: check for common testbench issues like stimulus timing races.\n"
             "  If the testbench drives inputs immediately after an @(posedge clk) (same timestep as the sampling edge),\n"
             "  it can race the DUT/reference model and cause deterministic mismatches. Prefer driving on negedge (or add a small #1 delay).\n"
+            "  If the DUT appears exactly one cycle ahead of ref_* and the testbench has separate sample-edge blocks for ref_* updates and checks,\n"
+            "  treat it as a stale-reference checker race. Patch the testbench so the checker compares against same-cycle expected_next after the DUT/reference updates, or delay the checker until the reference NBA commits.\n"
             "- For simulation timeouts, inspect the testbench for zero-time loops such as always-begin polling blocks without\n"
             "  an unconditional timing/event control at the top of each iteration, especially in dump/window helpers.\n"
             "- If attempt_history is provided, avoid repeating a previously attempted patch strategy for the same failure_signature.\n"
@@ -637,7 +639,7 @@ def _sanitize_verilog(source: str, *, kind: str, rtl_language: str) -> str:
             text = "`timescale 1ns/1ps\n\n" + text
         if "endmodule" not in text:
             text = text.rstrip() + "\nendmodule\n"
-        return sanitize_testbench(text)
+        return sanitize_testbench(text, align_split_ref_checker=True)
     return source
 
 

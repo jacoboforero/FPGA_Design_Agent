@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agents.debug.worker import DebugWorker
+from agents.common.tb_sanitizer import sanitize_testbench
 from agents.finalizer.worker import FinalizerWorker
 from agents.implementation.worker import ImplementationWorker
 from agents.reflection.worker import ReflectionWorker
@@ -932,6 +933,45 @@ def test_clocked_testbench_guidance_bans_prev_shadow_delayed_checker_patterns():
 
     assert "current expected state and current sampled inputs" in guidance
     assert "Do not create prev_* shadow copies" in guidance
+
+
+def test_debug_sanitizer_aligns_split_ref_checker_after_reference_nba():
+    tb = (
+        "module tb_counter3;\n"
+        "  reg clk;\n"
+        "  reg rst_n;\n"
+        "  reg en;\n"
+        "  reg [2:0] ref_count;\n"
+        "  reg ref_rollover;\n"
+        "  wire [2:0] count;\n"
+        "  wire rollover;\n"
+        "  counter3 dut(.clk(clk), .rst_n(rst_n), .en(en), .count(count), .rollover(rollover));\n"
+        "  always #5 clk = ~clk;\n"
+        "  always @(posedge clk or negedge rst_n) begin\n"
+        "    #1;\n"
+        "    if (!rst_n) begin\n"
+        "      ref_count <= 3'd0;\n"
+        "      ref_rollover <= 1'b0;\n"
+        "    end else begin\n"
+        "      ref_count <= ref_count + 3'd1;\n"
+        "      ref_rollover <= 1'b0;\n"
+        "    end\n"
+        "  end\n"
+        "  always @(posedge clk) begin\n"
+        "    #1;\n"
+        "    if (rst_n && count !== ref_count) begin\n"
+        "      $display(\"FAIL: cycle=0 count mismatch\");\n"
+        "      $finish(1);\n"
+        "    end\n"
+        "  end\n"
+        "endmodule\n"
+    )
+
+    regular = sanitize_testbench(tb)
+    debug_aligned = sanitize_testbench(tb, align_split_ref_checker=True)
+
+    assert "    #1;\n    if (rst_n && count !== ref_count)" in regular
+    assert "    #2;\n    if (rst_n && count !== ref_count)" in debug_aligned
 
 
 def test_acceptance_worker_no_requirements(sandbox):

@@ -39,10 +39,10 @@ evidence.
 
 ## Five-Minute Technical Review
 
-If you are reviewing the repo for fit rather than running the whole stack, start
+If you want a quick technical orientation before running the whole stack, start
 here:
 
-1. [docs/hiring-brief.md](docs/hiring-brief.md) for the one-page technical
+1. [docs/project-brief.md](docs/project-brief.md) for the one-page technical
    summary.
 2. [examples/counter3](examples/counter3) for a compact spec, planning
    contract, DAG, RTL, and testbench artifact pack.

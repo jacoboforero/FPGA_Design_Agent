@@ -12,7 +12,7 @@ When examples use `PYTHONPATH=. poetry run python3 ...`, use that exact form unl
 - [vision-and-ux.md](./vision-and-ux.md): goals, product intent, and intended user experience.
 - [overview.md](./overview.md): end-to-end lifecycle in plain language.
 - [cli.md](./cli.md): command surface and decision matrix.
-- [hiring-brief.md](./hiring-brief.md): one-page AI-for-EDA project brief for external technical reviewers.
+- [project-brief.md](./project-brief.md): one-page AI-for-EDA project brief for external technical reviewers.
 - [../examples/counter3](../examples/counter3): compact checked-in example artifacts.
 
 ## Quick Start by Role

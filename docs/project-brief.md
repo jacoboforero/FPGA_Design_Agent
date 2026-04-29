@@ -1,4 +1,4 @@
-# AI-for-EDA Project Brief: FPGA Design Agent
+# Project Brief: FPGA Design Agent
 
 FPGA Design Agent is a planning-first agentic AI prototype for RTL and FPGA
 design automation. It turns hardware specifications into structured planning
@@ -42,7 +42,7 @@ Python, Pydantic, RabbitMQ, Docker, Verilog/SystemVerilog, Verilator, Icarus
 Verilog, OpenAI-compatible LLM providers, RAG components, pytest, and local
 artifact/observability stores.
 
-## Five-Minute Review Path
+## Five-Minute Technical Review
 
 1. Read the README section
    [Relevance to AI-for-EDA / Chip Design Tools](../README.md#relevance-to-ai-for-eda--chip-design-tools).
@@ -59,10 +59,9 @@ artifact/observability stores.
 7. Review [../PERSONAL_CONTRIBUTIONS.md](../PERSONAL_CONTRIBUTIONS.md) for
    individual ownership.
 
-## Fit For Chip-Design AI Tooling Roles
+## Relevant Contexts
 
-The project is most relevant to roles that combine full-stack/product
-engineering with agentic AI workflows for EDA, RTL, simulation, verification,
-and developer tooling. It is not presented as proof of senior RTL or UVM
-expertise; it is proof of hands-on software ownership in the product category
-of agentic AI tools for chip-design workflows.
+The project is most relevant to readers interested in agentic AI workflows for
+EDA, RTL, simulation, verification, and developer tooling. It is not presented
+as proof of senior RTL or UVM expertise; it is a hands-on software prototype for
+planning-first, inspectable AI assistance around chip-design workflows.

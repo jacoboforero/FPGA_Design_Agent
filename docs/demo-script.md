@@ -47,12 +47,12 @@ one-shot Verilog chatbot.
 > or testbench code, and retry bounded validation. The same platform also runs
 > VerilogEval v2-backed benchmarks for repeatable AI/EDA experiments.
 
-1:55 - Close with role fit.
+1:55 - Close with project fit.
 
-> This is why ChipAgents is the role I am targeting. My strength is building
-> full-stack agentic workflow software for technical engineering domains, and
-> this project is directly in the category of agentic AI tooling for RTL,
-> simulation, and verification workflows.
+> This is the category of system I wanted to explore: full-stack agentic
+> workflow software for technical engineering domains. FPGA Design Agent applies
+> that idea to RTL, simulation, and verification workflows while keeping the
+> engineer in the loop and preserving inspectable artifacts.
 
 ## Supporting Shots
 

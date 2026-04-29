@@ -15,12 +15,14 @@ _DUMPFILE_TARGET_BITS = 2048
 _DUMPFILE_NAMES = ("dumpfile", "dump_file", "dump_file_str")
 
 
-def sanitize_testbench(source: str) -> str:
+def sanitize_testbench(source: str, *, align_split_ref_checker: bool = False) -> str:
     text = _fix_binary_literal_widths(source)
     lines = text.splitlines()
     lines = _hoist_declarations(lines)
     lines = _widen_dumpfile_regs(lines)
     lines = _insert_check_delay(lines)
+    if align_split_ref_checker:
+        lines = _align_split_ref_checker_delay(lines)
     return "\n".join(lines)
 
 
@@ -128,6 +130,112 @@ def _insert_check_delay(lines: list[str]) -> list[str]:
             in_posedge = False
 
     return out
+
+
+def _align_split_ref_checker_delay(lines: list[str]) -> list[str]:
+    """Repair a common debug-patch race without changing initial TB generation.
+
+    Some LLM patches keep the reference model and checker in separate sample-edge
+    blocks. If the reference block updates ref_* with nonblocking assignments
+    after a #1 settle delay, a checker block with the same #1 delay samples stale
+    ref_* values and reports a persistent one-cycle DUT-ahead mismatch. In the
+    debug path, align the checker one timestep later so the reference NBA has
+    committed before comparison.
+    """
+
+    regions = _line_regions(lines)
+    ref_update_regions: dict[str, set[int]] = {}
+    ref_nba_re = re.compile(r"\b(ref_[A-Za-z_][A-Za-z0-9_]*)\b\s*<=")
+    ref_compare_re = re.compile(r"(?:!==|!=)\s*(ref_[A-Za-z_][A-Za-z0-9_]*)")
+
+    for region in regions:
+        sensitivity = region["sensitivity"]
+        if "posedge" not in sensitivity:
+            continue
+        text = "\n".join(lines[region["start"] : region["end"]])
+        refs = set(ref_nba_re.findall(text))
+        if refs:
+            for ref in refs:
+                ref_update_regions.setdefault(ref, set()).add(region["start"])
+
+    if not ref_update_regions:
+        return lines
+
+    out = list(lines)
+    for region in regions:
+        sensitivity = region["sensitivity"]
+        if "posedge" not in sensitivity:
+            continue
+        text = "\n".join(lines[region["start"] : region["end"]])
+        lowered = text.lower()
+        if "$finish(1" not in lowered and "fail" not in lowered:
+            continue
+        compared_refs = set(ref_compare_re.findall(text))
+        if not compared_refs:
+            continue
+        split_refs = {
+            ref
+            for ref in compared_refs
+            if any(start != region["start"] for start in ref_update_regions.get(ref, set()))
+        }
+        if not split_refs:
+            continue
+
+        compare_line = None
+        for idx in range(region["start"], region["end"]):
+            if ref_compare_re.search(lines[idx]):
+                compare_line = idx
+                break
+        if compare_line is None:
+            continue
+
+        delay_line = None
+        for idx in range(region["start"], compare_line):
+            if re.search(r"#\s*1\s*;", lines[idx]):
+                delay_line = idx
+        if delay_line is not None:
+            out[delay_line] = re.sub(r"#\s*1\s*;", "#2;", out[delay_line], count=1)
+        else:
+            indent = re.match(r"^(\s*)", lines[compare_line]).group(1)
+            out.insert(compare_line, f"{indent}#2;")
+            return out
+
+    return out
+
+
+def _line_regions(lines: list[str]) -> list[dict]:
+    regions: list[dict] = []
+    idx = 0
+    while idx < len(lines):
+        stripped = lines[idx].strip()
+        match = _PROC_START_RE.match(stripped)
+        if not match:
+            idx += 1
+            continue
+        start = idx
+        sensitivity = ""
+        sens_match = re.search(r"@\(([^)]*)\)", lines[idx])
+        if sens_match:
+            sensitivity = sens_match.group(1).lower()
+        if "begin" not in stripped.lower() and stripped.endswith(";"):
+            regions.append({"start": start, "end": start + 1, "sensitivity": sensitivity})
+            idx += 1
+            continue
+        depth = len(_BEGIN_RE.findall(lines[start])) - len(_END_RE.findall(lines[start]))
+        seen_begin = bool(len(_BEGIN_RE.findall(lines[start])))
+        end = start + 1
+        while end < len(lines):
+            if seen_begin and depth <= 0:
+                break
+            begin_count = len(_BEGIN_RE.findall(lines[end]))
+            end_count = len(_END_RE.findall(lines[end]))
+            depth += begin_count - end_count
+            if begin_count:
+                seen_begin = True
+            end += 1
+        regions.append({"start": start, "end": end, "sensitivity": sensitivity})
+        idx = end
+    return regions
 
 
 def _widen_dumpfile_regs(lines: list[str]) -> list[str]:
