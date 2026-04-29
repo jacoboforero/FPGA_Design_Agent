@@ -3,7 +3,7 @@ APP_SERVICE = app
 RABBIT_SERVICE = rabbitmq
 CLI_TIMEOUT ?= 0
 
-.PHONY: build up down shell deps lock lock-check demo-rag-seed cli test logs docs-check docs-check-full
+.PHONY: build up down shell deps lock lock-check demo-rag-seed cli test coverage logs docs-check docs-check-full
 
 build:
 	$(COMPOSE) build $(APP_SERVICE)
@@ -34,6 +34,9 @@ cli:
 
 test:
 	$(COMPOSE) exec $(APP_SERVICE) bash -lc "cd /workspace && poetry run pytest -q"
+
+coverage:
+	$(COMPOSE) exec $(APP_SERVICE) bash -lc "cd /workspace && poetry run pytest --cov=adapters --cov=agents --cov=apps --cov=core --cov=orchestrator --cov=workers --cov-report=term-missing --cov-report=html:htmlcov --cov-branch"
 
 logs:
 	$(COMPOSE) logs -f $(RABBIT_SERVICE)

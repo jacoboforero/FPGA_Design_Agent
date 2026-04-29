@@ -1928,6 +1928,8 @@ def _run_mode(
     baseline_cfg = get_runtime_config().model_copy(deep=True)
     run_cfg = baseline_cfg.model_copy(deep=True)
     run_cfg.llm.temperature = float(sample_cfg["temperature"])
+    run_cfg.llm.temperature_debug = float(sample_cfg["temperature"])
+    run_cfg.llm.temperature_reflect = float(sample_cfg["temperature"])
     run_cfg.llm.top_p = float(sample_cfg["top_p"])
     set_runtime_config(run_cfg)
     if run_name_prefix:

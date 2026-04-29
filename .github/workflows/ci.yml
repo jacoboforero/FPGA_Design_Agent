@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - dev
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y iverilog verilator
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: python -m pip install poetry==1.8.3
+
+      - name: Install dependencies
+        run: poetry install --with dev
+
+      - name: Validate docs
+        run: python3 scripts/validate_docs.py
+
+      - name: Run focused tests
+        env:
+          PYTHONPATH: .
+        run: |
+          poetry run pytest tests/apps -q
+          poetry run pytest tests/core -q
+          poetry run pytest tests/workers -q

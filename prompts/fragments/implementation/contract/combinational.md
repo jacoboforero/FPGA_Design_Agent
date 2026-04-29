@@ -1,1 +1,2 @@
 Combinational contract: do not use edge-triggered always blocks (no posedge/negedge). Implement with continuous assign and/or $always_keyword only, with zero internal cycle-to-cycle state.
+For truth tables, Karnaugh maps, decoders, and small mux-derived functions, preserve the prompt's bit/header ordering exactly. For 4-input-or-smaller truth tables, prefer a complete explicit case/casez table over minimized algebra when that is clearer or less error-prone. Do not implement K-map don't-care cells arbitrarily when the prompt or harness may observe X/don't-care behavior.

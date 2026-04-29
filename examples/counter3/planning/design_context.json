@@ -1,0 +1,168 @@
+{
+  "design_context_hash": "example-counter3",
+  "nodes": {
+    "counter3": {
+      "rtl_file": "rtl/counter3.sv",
+      "rtl_files": [
+        "rtl/counter3.sv"
+      ],
+      "testbench_file": "rtl/counter3_tb.sv",
+      "interface": {
+        "signals": [
+          {
+            "name": "clk",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": "clock"
+          },
+          {
+            "name": "rst_n",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": "async active-low reset"
+          },
+          {
+            "name": "en",
+            "direction": "INPUT",
+            "width": "1",
+            "semantics": "count enable"
+          },
+          {
+            "name": "count",
+            "direction": "OUTPUT",
+            "width": "3",
+            "semantics": "current count value"
+          },
+          {
+            "name": "rollover",
+            "direction": "OUTPUT",
+            "width": "1",
+            "semantics": "pulse on wrap 7->0"
+          }
+        ]
+      },
+      "uses_library": [],
+      "clocking": [
+        {
+          "clock_name": "clk",
+          "clock_polarity": "POSEDGE",
+          "reset_name": "rst_n",
+          "reset_polarity": "ACTIVE_LOW",
+          "reset_is_async": true,
+          "description": "single clock domain"
+        }
+      ],
+      "coverage_goals": {
+        "branch": 0.8,
+        "toggle": 0.7
+      },
+      "demo_behavior": "3-bit synchronous up counter with enable and one-cycle rollover pulse. Active-low asynchronous reset forces count and rollover to zero. When enabled, count increments on each rising clock edge and wraps from 7 to 0 with rollover asserted for that wrap cycle. When disabled, count holds and rollover remains low.",
+      "verification": {
+        "test_goals": [
+          "Count increments 0 through 7 and wraps to 0.",
+          "Rollover is asserted only on the enabled 7->0 transition.",
+          "Active-low asynchronous reset clears count and rollover.",
+          "Disabled cycles hold count and keep rollover low."
+        ],
+        "oracle_strategy": "Cycle-accurate reference model for count and rollover.",
+        "stimulus_strategy": "Directed reset, enable, hold, increment, wrap, and second reset sequence.",
+        "pass_fail_criteria": [
+          "count matches the reference model each checked cycle.",
+          "rollover matches the reference model each checked cycle."
+        ],
+        "coverage_targets": [
+          {
+            "coverage_id": "branch",
+            "description": "branch coverage of counter control paths",
+            "metric_type": "branch",
+            "goal": 0.8,
+            "notes": null
+          },
+          {
+            "coverage_id": "toggle",
+            "description": "toggle coverage of count bits and rollover",
+            "metric_type": "toggle",
+            "goal": 0.7,
+            "notes": null
+          }
+        ],
+        "reset_constraints": {
+          "min_cycles_after_reset": 0,
+          "ordering_notes": "async reset may assert or deassert at any time"
+        }
+      },
+      "acceptance": {
+        "required_artifacts": [
+          {
+            "name": "rtl",
+            "description": "synthesizable RTL for counter3",
+            "mandatory": true
+          },
+          {
+            "name": "testbench",
+            "description": "self-checking testbench",
+            "mandatory": true
+          },
+          {
+            "name": "lint_report",
+            "description": "verilator lint log",
+            "mandatory": true
+          },
+          {
+            "name": "sim_log",
+            "description": "simulation transcript",
+            "mandatory": true
+          },
+          {
+            "name": "coverage_report",
+            "description": "branch/toggle coverage summary",
+            "mandatory": true
+          }
+        ],
+        "acceptance_metrics": [
+          {
+            "metric_id": "branch",
+            "description": "branch coverage >= 0.8",
+            "operator": ">=",
+            "target_value": "0.8",
+            "metric_source": "coverage_report"
+          },
+          {
+            "metric_id": "toggle",
+            "description": "toggle coverage >= 0.7",
+            "operator": ">=",
+            "target_value": "0.7",
+            "metric_source": "coverage_report"
+          }
+        ],
+        "exclusions": [],
+        "synthesis_target": "fpga_generic"
+      },
+      "verification_scope": "testbench-agent",
+      "children": [],
+      "connections": [],
+      "module_contract": {
+        "node_type": "sequential_counter",
+        "style": "single_module",
+        "description": "3-bit counter with enable, async reset, and rollover pulse",
+        "allow_internal_state": true
+      },
+      "testbench_contract": {
+        "mode": "clocked_with_reset",
+        "timing_style": "posedge_clock",
+        "checker_style": "cycle_accurate_scoreboard",
+        "requires_clock": true,
+        "clock_name": "clk",
+        "clock_polarity": "POSEDGE",
+        "sample_edge": "POSEDGE",
+        "drive_edge": "NEGEDGE",
+        "requires_reset": true,
+        "reset_name": "rst_n",
+        "reset_polarity": "ACTIVE_LOW",
+        "reset_is_async": true,
+        "reset_active_expr": "!rst_n",
+        "post_reset_settle_cycles": 1
+      }
+    }
+  }
+}

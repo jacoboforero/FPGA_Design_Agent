@@ -2,10 +2,26 @@
 
 Last verified against runtime behavior: March 15, 2026.
 
-This project uses VerilogEval-compatible scoring and keeps official analyzer outputs as the final scoring record.
+This project uses VerilogEval v2-compatible scoring and keeps official analyzer outputs as the final scoring record.
 
 ## What This Page Is For
 Use this page to interpret benchmark outputs correctly and avoid invalid comparisons.
+
+## Benchmark Family
+
+The repository vendors NVIDIA's VerilogEval benchmark as a git submodule at
+`third_party/verilog-eval`. The current checked-out submodule revision is tagged
+`v2.0.0`.
+
+VerilogEval v2 is the right benchmark family for this project because it tests
+specification-to-RTL generation with functional checks, not only code
+completion. It is also the benchmark family commonly cited by public AI-for-EDA
+agent systems, so it gives this repo a recognizable evaluation surface.
+
+Do not compare a local result to another published number unless the comparison
+matches the problem set, model/provider, prompt policy, sample count,
+temperature/top-p, tool versions, and run flow. This repo records those details
+in `run_manifest.json` so full-set results can be interpreted later.
 
 ## What This Page Is Not For
 - It is not a command runbook. For command usage, see [workflows/benchmark-run.md](./workflows/benchmark-run.md).
@@ -24,6 +40,30 @@ Use this page to interpret benchmark outputs correctly and avoid invalid compari
 ## Profiles
 - **Canonical**: deterministic/low-variance settings (default `n=1`).
 - **Sampled**: higher-variance multi-sample settings (config-driven `n`, temperature, top_p).
+
+## Frontier-Model Campaign Guidance
+
+For a shareable full-set run, use a named campaign and run id, and keep the
+manifest with the final report:
+
+```bash
+make build
+make up
+make deps
+make shell
+git submodule update --init --recursive
+PYTHONPATH=. poetry run python3 apps/cli/cli.py doctor --config config/runtime.benchmark.yaml --benchmark
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run \
+  --config config/runtime.benchmark.yaml \
+  --campaign frontier_verilogeval_v2 \
+  --run-id gpt41_canonical_full \
+  --max-problems 0 \
+  --pipeline-timeout 240
+```
+
+Use `--dry-run` first when changing provider/model settings. Only publish a run
+after confirming the manifest names the intended model and the canonical
+directory contains official `summary.txt` and `summary.csv` outputs.
 
 ## Official Scoring and Supporting Artifacts
 ### Official scoring artifacts

@@ -3,7 +3,7 @@
 [tool.poetry]
 name = "multi-agent-hardware-design"
 version = "0.1.0"
-description = "A multi-agent system for accelerating hardware design."
+description = "Planning-first agentic RTL generation and verification pipeline."
 authors = ["Jacobo Forero", "Dexter Pressley", "Mateus Verffel Mayer" , "Caleb Elliott", "Andrew Chambers", "Sammy Fares"]
 readme = "README.md"
 packages = [

@@ -102,14 +102,14 @@ class LlmAgentOverrideConfig(BaseModel):
 class LlmConfig(BaseModel):
     enabled: bool = True
     provider: str = "openai"
-    default_model: str = "gpt-4.1-mini"
+    default_model: str = "gpt-4.1"
     deterministic: bool = False
     seed: Optional[int] = None
     request_timeout_s: float = 120.0
     agent_overrides: Dict[str, LlmAgentOverrideConfig] = Field(default_factory=dict)
     spec_helper_model: Optional[str] = None
     narrative_model: Optional[str] = None
-    narrative_fallback_model: str = "gpt-4.1-mini"
+    narrative_fallback_model: str = "gpt-4.1"
     json_mode: bool = True
     max_tokens: int = 10000
     temperature: float = 0.2
@@ -310,7 +310,7 @@ def _flatten_agent_llm(agent_llm: Dict[str, Any]) -> Dict[str, Any]:
     llm: Dict[str, Any] = {
         "enabled": agent_llm.get("enabled", True),
         "provider": agent_llm.get("provider", defaults.get("provider", "openai")),
-        "default_model": defaults.get("model", "gpt-4.1-mini"),
+        "default_model": defaults.get("model", "gpt-4.1"),
         "deterministic": defaults.get("deterministic", False),
         "seed": defaults.get("seed"),
         "request_timeout_s": defaults.get("request_timeout_s", 120.0),
@@ -354,7 +354,7 @@ def _flatten_agent_llm(agent_llm: Dict[str, Any]) -> Dict[str, Any]:
 
     narrator = roles.get("narrator") if isinstance(roles.get("narrator"), dict) else {}
     llm["narrative_model"] = narrator.get("model")
-    llm["narrative_fallback_model"] = narrator.get("fallback_model", "gpt-4.1-mini")
+    llm["narrative_fallback_model"] = narrator.get("fallback_model", "gpt-4.1")
     llm["narrative_max_tokens"] = narrator.get("max_tokens", 220)
     llm["narrative_temperature"] = narrator.get("temperature", 0.5)
     llm["narrative_timeout_s"] = narrator.get("timeout_s", 10.0)

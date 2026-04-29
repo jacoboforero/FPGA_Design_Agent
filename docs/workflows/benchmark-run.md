@@ -2,7 +2,7 @@
 
 Last verified against runtime behavior: March 19, 2026.
 
-This runbook covers how to run VerilogEval-compatible benchmarks in this repo and how to interpret outputs.
+This runbook covers how to run VerilogEval v2-compatible benchmarks in this repo and how to interpret outputs.
 
 This workflow is designed for researchers comparing models, settings, and system behavior in a reproducible way.
 
@@ -119,11 +119,13 @@ List discovered benchmark cases:
 PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark list-problems --config config/runtime.benchmark.yaml
 ```
 
-Canonical run (safe run directory layout):
+Canonical full-set run (safe run directory layout):
 
 ```bash
-PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign wavefix_smoke
+PYTHONPATH=. poetry run python3 apps/cli/cli.py benchmark run --config config/runtime.benchmark.yaml --campaign verilogeval_v2_full --max-problems 0
 ```
+
+Use `--dry-run` first when changing model/provider settings or run policy.
 
 Canonical + sampled:
 

@@ -39,6 +39,35 @@ def _write_minimal_vcd(path: Path) -> None:
     )
 
 
+def _write_ref_dut_vcd(path: Path) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                "$date",
+                "$end",
+                "$version",
+                "$end",
+                "$timescale 1ps $end",
+                "$scope module tb $end",
+                "$var wire 1 ! clk $end",
+                "$var wire 8 \" q_ref $end",
+                "$var wire 8 # q_dut $end",
+                "$upscope $end",
+                "$enddefinitions $end",
+                "#0",
+                "0!",
+                "b00000000 \"",
+                "bxxxxxxxx #",
+                "#20",
+                "1!",
+                "b00000000 \"",
+                "bxxxxxxxx #",
+            ]
+        )
+        + "\n"
+    )
+
+
 def test_distill_worker_falls_back_to_wave_vcd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     node_id = "TopModule"
@@ -78,3 +107,76 @@ def test_distill_worker_prefers_artifact_path_when_present(tmp_path, monkeypatch
     assert payload["waveform_path"] == str(custom_wave)
     assert payload["waveform_source"] == "artifact_path"
     assert "waveform_source=artifact_path" in result.log_output
+
+
+def test_distill_worker_extracts_verilogeval_ref_dut_pairs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    node_id = "TopModule"
+    sim_dir = Path("artifacts/task_memory") / node_id / "sim_attempt1"
+    sim_dir.mkdir(parents=True, exist_ok=True)
+    (sim_dir / "log.txt").write_text(
+        "\n".join(
+            [
+                "Hint: Output 'q' has 1 mismatches. First mismatch occurred at time 20.",
+                "Hint: Total mismatched samples is 1 out of 41 samples",
+                "Mismatches: 1 in 41 samples",
+            ]
+        )
+        + "\n"
+    )
+    _write_ref_dut_vcd(sim_dir / "wave.vcd")
+
+    worker = DistillWorker(connection_params=None, stop_event=None)
+    result = worker.handle_task(_make_task(node_id=node_id, attempt=1))
+
+    assert result.status is TaskStatus.SUCCESS
+    payload = json.loads(Path(result.distilled_dataset.data_path).read_text())
+    assert "q_ref" in payload["signal_hints"]
+    assert "q_dut" in payload["signal_hints"]
+    assert payload["reference_dut_pairs"] == [
+        {
+            "output": "q",
+            "ref_signal": "tb.q_ref",
+            "dut_signal": "tb.q_dut",
+            "width": 8,
+            "ref_value": "00000000",
+            "dut_value": "xxxxxxxx",
+            "differing_bit_indices": [7, 6, 5, 4, 3, 2, 1, 0],
+            "matches": False,
+            "samples_around_failure": [
+                {
+                    "time": 0,
+                    "ref": "00000000",
+                    "dut": "xxxxxxxx",
+                    "differing_bit_indices": [7, 6, 5, 4, 3, 2, 1, 0],
+                    "matches": False,
+                },
+                {
+                    "time": 20,
+                    "ref": "00000000",
+                    "dut": "xxxxxxxx",
+                    "differing_bit_indices": [7, 6, 5, 4, 3, 2, 1, 0],
+                    "matches": False,
+                },
+            ],
+            "io_samples_around_failure": [
+                {
+                    "time": 0,
+                    "inputs": {},
+                    "ref": "00000000",
+                    "dut": "xxxxxxxx",
+                    "differing_bit_indices": [7, 6, 5, 4, 3, 2, 1, 0],
+                    "matches": False,
+                },
+                {
+                    "time": 20,
+                    "inputs": {},
+                    "ref": "00000000",
+                    "dut": "xxxxxxxx",
+                    "differing_bit_indices": [7, 6, 5, 4, 3, 2, 1, 0],
+                    "matches": False,
+                },
+            ],
+            "context_signals_around_failure": [],
+        }
+    ]

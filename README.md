@@ -14,6 +14,45 @@ EDA tools.
 The primary output is verified Verilog RTL, along with the execution evidence
 needed to understand how it was produced and why a run passed or failed.
 
+## Relevance to AI-for-EDA / Chip Design Tools
+
+This project is an agentic AI prototype for RTL and FPGA design automation.
+
+It demonstrates:
+
+- planning-first hardware spec refinement before RTL generation
+- LLM agents for specification help, implementation, testbench generation,
+  reflection, and debug
+- deterministic EDA workers for linting, simulation, acceptance checks, and
+  failure distillation
+- RabbitMQ-backed orchestration with dependency gating, retries, and run-scoped
+  result routing
+- local tool integration with Verilator and Icarus Verilog
+- observability artifacts, task memory, token/cost tracking, and execution
+  traces
+- VerilogEval v2-backed benchmarking for reproducible AI/EDA experiments
+
+The goal is not one-shot prompt-to-Verilog generation. The goal is an
+inspectable human-in-the-loop workflow that helps hardware engineers clarify
+specs, generate RTL, verify behavior, debug failures, and preserve execution
+evidence.
+
+## Five-Minute Technical Review
+
+If you are reviewing the repo for fit rather than running the whole stack, start
+here:
+
+1. [docs/hiring-brief.md](docs/hiring-brief.md) for the one-page technical
+   summary.
+2. [examples/counter3](examples/counter3) for a compact spec, planning
+   contract, DAG, RTL, and testbench artifact pack.
+3. [docs/architecture.md](docs/architecture.md) for the planning/orchestration
+   model.
+4. [docs/workflows/failure-repair-loop.md](docs/workflows/failure-repair-loop.md)
+   for the lint/sim/debug retry path.
+5. [docs/benchmark-methodology.md](docs/benchmark-methodology.md) for the
+   VerilogEval v2 benchmarking policy.
+
 ## Why This Project Exists
 
 Manual translation of FPGA and digital hardware specifications into RTL is slow,
@@ -46,7 +85,7 @@ At a high level, a normal run looks like this:
 
 The same codebase also supports a second use case: reproducible benchmarking for
 AI/EDA research. In that mode, the repository acts as a harness for running
-VerilogEval-style experiments and comparing models or system settings under a
+VerilogEval v2 experiments and comparing models or system settings under a
 consistent workflow.
 
 ## Design Philosophy
@@ -103,20 +142,41 @@ are the most important framing ideas:
 - It is not a hosted service; the system is designed to run locally with local
   configuration, local artifacts, and local tool integration.
 
-## Current Benchmark Snapshot
+## Benchmarking
 
-The benchmark side of the repository is built around VerilogEval. The main goal
-this semester was to make the harness reproducible enough for future research,
-not to claim exhaustive model rankings. That said, limited internal runs used to
-validate the harness produced the following full-set canonical results:
+The benchmark side of the repository is built around the VerilogEval v2
+submodule at `third_party/verilog-eval` (currently pinned at `v2.0.0`). The
+harness can run canonical full-set campaigns, bind benchmark-provided oracle
+assets, and delegate final scoring to official analyzer outputs.
 
-| Model | Pass Rate | Tests Passed |
-| --- | ---: | ---: |
-| GPT-4.1 | 82.05% | 128/156 |
-| GPT-4.1 mini | 73.72% | 115/156 |
+That benchmark family matters because public AI-for-EDA systems report against
+VerilogEval-v2. This repo uses it as a reproducible evaluation harness for the
+agent pipeline, not as a claim that any local run is directly comparable without
+matching model, prompt, toolchain, and runtime policy.
 
-Treat these as system-validation snapshots, not as a complete study of model
-quality.
+### Current Benchmark Snapshot
+
+These are local full-set canonical VerilogEval-v2 snapshots scored by the
+official analyzer (`n=1`). They are meant to show system progress at a glance,
+not to claim a controlled model leaderboard.
+
+| Model / run | System state | Pass rate | Tests passed | Cost |
+| --- | --- | ---: | ---: | ---: |
+| GPT-4.1, optimized repair loop | Current full run | 87.82% | 137/156 | $8.26 |
+| GPT-4.1 | Earlier full-set snapshot | 82.05% | 128/156 | $3.73 |
+| GPT-4o | Earlier full-set baseline | 75.00% | 117/156 | $6.03 |
+| GPT-4.1 mini | Earlier full-set snapshot | 73.72% | 115/156 | $4.47 |
+
+The latest GPT-4.1 run is +9 solved cases over the earlier GPT-4.1 full-set
+snapshot and +20 over the GPT-4o full-set baseline. In paper context, this is
+above the single-shot/model-only GPT-4o and GPT-4.1 reference numbers we found,
+but still below top reported agentic systems such as ChipAgents and MAGE. See
+[`docs/benchmark-optimization-log-20260429.md`](docs/benchmark-optimization-log-20260429.md)
+for run artifacts, caveats, and paper links.
+
+Generated benchmark and interactive run outputs live under `artifacts/` and are
+ignored by git. Shareable, compact examples belong under `examples/`; see
+[`examples/counter3`](examples/counter3) for a curated artifact pack.
 
 ## Quick Start
 
@@ -158,6 +218,9 @@ Generated outputs are written under:
 - `artifacts/task_memory/`
 - `artifacts/observability/`
 
+The repository keeps those outputs local. Commit small curated examples under
+`examples/` instead of committing generated run trees.
+
 ## Recommended Reading Order
 
 If you want to understand the project rather than immediately run it, this is
@@ -198,7 +261,21 @@ If you want the full docs map after that, start at
 - `core/`: shared schemas, runtime config, prompting, and broker utilities
 - `config/`: runtime manifests and domain configuration
 - `docs/`: architecture notes, runbooks, and methodology
+- `examples/`: small curated review artifacts that replace generated run dumps
+- `packaging/homebrew/`: experimental Homebrew/demo packaging
+- `apps/vscode-extension/` and `apps/ui_backend/`: experimental editor/UI
+  surfaces
 - `tests/`: unit and workflow-level validation
+
+## Status And License
+
+This is a research/capstone prototype, not a hosted production service. The core
+CLI, agent orchestration, EDA-worker pipeline, benchmark flow, and docs are the
+main review surface. The Homebrew packaging, VS Code extension, and UI backend
+are experimental surfaces.
+
+This repository is currently published as all rights reserved. See
+[LICENSE](LICENSE).
 
 ## Common Entry Points
 

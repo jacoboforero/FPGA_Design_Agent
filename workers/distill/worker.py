@@ -10,6 +10,7 @@ import threading
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pika
 from core.schemas.contracts import DistilledDataset, ResultMessage, TaskMessage, TaskStatus
@@ -132,7 +133,10 @@ class DistillWorker(threading.Thread):
         fail_line_idx, fail_line = _extract_failure_line(sim_text)
         failure_signal_snapshot = _extract_failure_signal_snapshot(fail_line)
         log_excerpt = _extract_log_excerpt(sim_text, fail_line_idx)
-        signal_hints = _extract_signal_hints(sim_text, fail_line_idx)
+        signal_hints = _extend_signal_hints_from_context(
+            _extract_signal_hints(sim_text, fail_line_idx),
+            task.context,
+        )
         waveform_path, waveform_source = _resolve_waveform_path(sim_stage_dir)
         waveform_present = waveform_path is not None
         waveform_str = str(waveform_path) if waveform_path is not None else None
@@ -146,6 +150,7 @@ class DistillWorker(threading.Thread):
                 signal_hints=signal_hints,
             )
         waveform_failure_snapshot = _extract_waveform_failure_snapshot(waveform_excerpt, signal_hints)
+        reference_dut_pairs = _extract_reference_dut_pairs(waveform_excerpt)
         distilled_path = Path("artifacts/task_memory") / node_id / _stage_dir("distill", attempt) / "distilled_dataset.json"
         distilled_path.parent.mkdir(parents=True, exist_ok=True)
         distilled_payload = {
@@ -162,6 +167,7 @@ class DistillWorker(threading.Thread):
             "waveform_path": waveform_str,
             "waveform_source": waveform_source,
             "signal_hints": signal_hints,
+            "reference_dut_pairs": reference_dut_pairs,
             "waveform_excerpt": waveform_excerpt,
             "waveform_failure_snapshot": waveform_failure_snapshot,
         }
@@ -212,6 +218,7 @@ _FAIL_TIME_RE = re.compile(r"\btime\b\s*=?\s*(\d+)", re.IGNORECASE)
 _FAIL_LINE_RE = re.compile(r"\b(FAIL|ERROR)\b", re.IGNORECASE)
 _SIGNAL_HINT_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=")
 _FAIL_KV_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z0-9_xXzZ']+)")
+_OUTPUT_HINT_RE = re.compile(r"\bOutput\s+['\"]([^'\"]+)['\"]\s+has\b", re.IGNORECASE)
 
 _DEFAULT_SIGNAL_HINTS = {
     "clk",
@@ -323,15 +330,42 @@ def _extract_signal_hints(text: str | None, fail_idx: int | None) -> list[str]:
     candidates: list[str] = []
     if fail_idx is not None and 0 <= fail_idx < len(lines):
         candidates.append(lines[fail_idx])
-    candidates += [line for line in lines if _FAIL_LINE_RE.search(line)]
+    candidates += [line for line in lines if _FAIL_LINE_RE.search(line) or _OUTPUT_HINT_RE.search(line)]
     hints: set[str] = set()
     for line in candidates:
         for match in _SIGNAL_HINT_RE.finditer(line):
             hints.add(match.group(1))
+        for output_name in _OUTPUT_HINT_RE.findall(line):
+            cleaned = output_name.strip()
+            if not cleaned:
+                continue
+            hints.add(cleaned)
+            hints.add(f"{cleaned}_ref")
+            hints.add(f"{cleaned}_dut")
     if not hints:
         hints = set(_DEFAULT_SIGNAL_HINTS)
     else:
         hints |= _DEFAULT_SIGNAL_HINTS
+    return sorted(hints)
+
+
+def _extend_signal_hints_from_context(signal_hints: list[str], context: dict) -> list[str]:
+    hints = {str(hint).strip() for hint in signal_hints if str(hint).strip()}
+    iface = context.get("interface") if isinstance(context, dict) else None
+    signals = iface.get("signals") if isinstance(iface, dict) else None
+    if not isinstance(signals, list):
+        return sorted(hints)
+    for signal in signals:
+        if not isinstance(signal, dict):
+            continue
+        name = str(signal.get("name", "")).strip()
+        if not name:
+            continue
+        hints.add(name)
+        direction = str(signal.get("direction", "")).strip().lower()
+        if direction in {"output", "out"}:
+            hints.add(f"{name}_ref")
+            hints.add(f"{name}_dut")
     return sorted(hints)
 
 
@@ -363,6 +397,7 @@ def _distill_waveform_excerpt(
             end_time = before_time + after_time
 
         id_to_name: dict[str, str] = {}
+        id_to_width: dict[str, int] = {}
         id_to_leaf: dict[str, str] = {}
         id_to_leaf_base: dict[str, str] = {}
         scope_stack: list[str] = []
@@ -380,6 +415,10 @@ def _distill_waveform_excerpt(
                     parts = line.split()
                     if len(parts) >= 5:
                         var_id = parts[3]
+                        try:
+                            id_to_width[var_id] = int(parts[2])
+                        except Exception:
+                            id_to_width[var_id] = 1
                         ref = parts[4]
                         full = ".".join(scope_stack + [ref]) if scope_stack else ref
                         id_to_name[var_id] = full
@@ -485,6 +524,7 @@ def _distill_waveform_excerpt(
                 {
                     "name": id_to_name.get(var_id, var_id),
                     "id": var_id,
+                    "width": id_to_width.get(var_id, 1),
                     "initial_value": initial_values[var_id],
                     "pre_window_value": pre_window_values[var_id],
                     "pre_window_transition": pre_window_transition[var_id],
@@ -530,6 +570,309 @@ def _extract_waveform_failure_snapshot(waveform_excerpt: dict | None, signal_hin
             continue
         snapshot[name] = str(value)
     return snapshot
+
+
+def _extract_reference_dut_pairs(waveform_excerpt: dict | None) -> list[dict[str, Any]]:
+    if not isinstance(waveform_excerpt, dict):
+        return []
+    selected = waveform_excerpt.get("selected_signals")
+    if not isinstance(selected, list):
+        return []
+
+    by_leaf: dict[str, dict] = {}
+    context_items: list[dict] = []
+    for item in selected:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        leaf = name.split(".")[-1].split("[", 1)[0]
+        if leaf:
+            by_leaf[leaf] = item
+            if not leaf.endswith("_ref") and not leaf.endswith("_dut"):
+                context_items.append(item)
+
+    failure_time = waveform_excerpt.get("failure_time")
+    if not isinstance(failure_time, int):
+        failure_time = None
+    pairs: list[dict[str, Any]] = []
+    for leaf, ref_item in sorted(by_leaf.items()):
+        if not leaf.endswith("_ref"):
+            continue
+        output_name = leaf[: -len("_ref")]
+        dut_item = by_leaf.get(f"{output_name}_dut")
+        if not isinstance(dut_item, dict):
+            continue
+        width = max(_signal_width(ref_item), _signal_width(dut_item), 1)
+        ref_value = _waveform_value_at_focus(ref_item, width=width)
+        dut_value = _waveform_value_at_focus(dut_item, width=width)
+        pairs.append(
+            {
+                "output": output_name,
+                "ref_signal": str(ref_item.get("name", "")),
+                "dut_signal": str(dut_item.get("name", "")),
+                "width": width,
+                "ref_value": ref_value,
+                "dut_value": dut_value,
+                "differing_bit_indices": _differing_bit_indices(ref_value, dut_value),
+                "matches": (ref_value == dut_value) if ref_value is not None and dut_value is not None else None,
+                "samples_around_failure": _paired_signal_history(
+                    ref_item,
+                    dut_item,
+                    failure_time=failure_time,
+                    width=width,
+                ),
+                "io_samples_around_failure": _paired_io_history(
+                    ref_item,
+                    dut_item,
+                    context_items,
+                    failure_time=failure_time,
+                    width=width,
+                ),
+                "context_signals_around_failure": _context_signal_history(
+                    context_items,
+                    failure_time=failure_time,
+                ),
+            }
+        )
+    return pairs
+
+
+def _paired_signal_history(
+    ref_signal: dict,
+    dut_signal: dict,
+    *,
+    failure_time: int | None,
+    width: int,
+    max_before: int = 6,
+    max_after: int = 8,
+) -> list[dict[str, Any]]:
+    ref_changes = _normalized_changes(ref_signal.get("changes"))
+    dut_changes = _normalized_changes(dut_signal.get("changes"))
+    if not ref_changes and not dut_changes:
+        return []
+    selected_times = _focus_times(
+        ref_changes,
+        dut_changes,
+        failure_time=failure_time,
+        max_before=max_before,
+        max_after=max_after,
+    )
+    samples: list[dict[str, Any]] = []
+    for time in selected_times:
+        ref_value = _normalize_wave_value(_value_at_time(ref_changes, time), width=width)
+        dut_value = _normalize_wave_value(_value_at_time(dut_changes, time), width=width)
+        samples.append(
+            {
+                "time": time,
+                "ref": ref_value,
+                "dut": dut_value,
+                "differing_bit_indices": _differing_bit_indices(ref_value, dut_value),
+                "matches": (ref_value == dut_value) if ref_value is not None and dut_value is not None else None,
+            }
+        )
+    return samples
+
+
+def _paired_io_history(
+    ref_signal: dict,
+    dut_signal: dict,
+    context_signals: list[dict],
+    *,
+    failure_time: int | None,
+    width: int,
+    max_before: int = 6,
+    max_after: int = 8,
+    max_context_signals: int = 10,
+) -> list[dict[str, Any]]:
+    ref_changes = _normalized_changes(ref_signal.get("changes"))
+    dut_changes = _normalized_changes(dut_signal.get("changes"))
+    if not ref_changes and not dut_changes:
+        return []
+    selected_times = _focus_times(
+        ref_changes,
+        dut_changes,
+        failure_time=failure_time,
+        max_before=max_before,
+        max_after=max_after,
+    )
+    contexts: list[tuple[str, int, list[tuple[int, str]]]] = []
+    for signal in context_signals:
+        if len(contexts) >= max_context_signals:
+            break
+        name = str(signal.get("name", "")).strip()
+        if not name:
+            continue
+        leaf = name.split(".")[-1].split("[", 1)[0]
+        if leaf.lower() in {"clk", "clock"}:
+            continue
+        contexts.append((leaf, _signal_width(signal), _normalized_changes(signal.get("changes"))))
+    rows: list[dict[str, Any]] = []
+    for time in selected_times:
+        ref_value = _normalize_wave_value(_value_at_time(ref_changes, time), width=width)
+        dut_value = _normalize_wave_value(_value_at_time(dut_changes, time), width=width)
+        inputs: dict[str, str | None] = {}
+        for leaf, signal_width, changes in contexts:
+            inputs[leaf] = _normalize_wave_value(_value_at_time(changes, time), width=signal_width)
+        rows.append(
+            {
+                "time": time,
+                "inputs": inputs,
+                "ref": ref_value,
+                "dut": dut_value,
+                "differing_bit_indices": _differing_bit_indices(ref_value, dut_value),
+                "matches": (ref_value == dut_value) if ref_value is not None and dut_value is not None else None,
+            }
+        )
+    return rows
+
+
+def _focus_times(
+    left_changes: list[tuple[int, str]],
+    right_changes: list[tuple[int, str]],
+    *,
+    failure_time: int | None,
+    max_before: int,
+    max_after: int,
+) -> list[int]:
+    times = sorted({time for time, _ in left_changes} | {time for time, _ in right_changes})
+    if not times:
+        return []
+    focus = failure_time if failure_time is not None else times[0]
+    before = [time for time in times if time <= focus][-max_before:]
+    after = [time for time in times if time > focus][:max_after]
+    return before + after
+
+
+def _context_signal_history(
+    signals: list[dict],
+    *,
+    failure_time: int | None,
+    max_signals: int = 10,
+) -> list[dict[str, Any]]:
+    context: list[dict[str, Any]] = []
+    for signal in signals:
+        if len(context) >= max_signals:
+            break
+        name = str(signal.get("name", "")).strip()
+        if not name:
+            continue
+        leaf = name.split(".")[-1].split("[", 1)[0]
+        if leaf.lower() in {"clk", "clock"}:
+            continue
+        width = _signal_width(signal)
+        context.append(
+            {
+                "signal": name,
+                "width": width,
+                "value": _waveform_value_at_focus(signal, width=width),
+                "samples_around_failure": _single_signal_history(
+                    signal,
+                    failure_time=failure_time,
+                    width=width,
+                ),
+            }
+        )
+    return context
+
+
+def _single_signal_history(
+    signal: dict,
+    *,
+    failure_time: int | None,
+    width: int,
+    max_before: int = 4,
+    max_after: int = 4,
+) -> list[dict[str, Any]]:
+    changes = _normalized_changes(signal.get("changes"))
+    if not changes:
+        return []
+    times = [time for time, _ in changes]
+    focus = failure_time if failure_time is not None else times[0]
+    selected_times = [time for time in times if time <= focus][-max_before:]
+    selected_times += [time for time in times if time > focus][:max_after]
+    return [
+        {
+            "time": time,
+            "value": _normalize_wave_value(_value_at_time(changes, time), width=width),
+        }
+        for time in selected_times
+    ]
+
+
+def _normalized_changes(value: Any) -> list[tuple[int, str]]:
+    if not isinstance(value, list):
+        return []
+    changes: list[tuple[int, str]] = []
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        try:
+            time = int(item[0])
+        except Exception:
+            continue
+        if item[1] is None:
+            continue
+        changes.append((time, str(item[1])))
+    return sorted(changes, key=lambda pair: pair[0])
+
+
+def _value_at_time(changes: list[tuple[int, str]], time: int) -> str | None:
+    value: str | None = None
+    for change_time, change_value in changes:
+        if change_time > time:
+            break
+        value = change_value
+    return value
+
+
+def _differing_bit_indices(ref_value: str | None, dut_value: str | None) -> list[int]:
+    if ref_value is None or dut_value is None:
+        return []
+    ref_bits = str(ref_value).strip().lower()
+    dut_bits = str(dut_value).strip().lower()
+    if not ref_bits or not dut_bits:
+        return []
+    if not re.fullmatch(r"[01xz]+", ref_bits) or not re.fullmatch(r"[01xz]+", dut_bits):
+        return []
+    width = max(len(ref_bits), len(dut_bits))
+    ref_bits = ref_bits.zfill(width)
+    dut_bits = dut_bits.zfill(width)
+    differing: list[int] = []
+    for offset, (ref_bit, dut_bit) in enumerate(zip(ref_bits, dut_bits)):
+        if ref_bit != dut_bit:
+            differing.append(width - offset - 1)
+    return differing
+
+
+def _signal_width(signal: dict) -> int:
+    try:
+        width = int(signal.get("width") or 1)
+    except Exception:
+        width = 1
+    return max(1, width)
+
+
+def _waveform_value_at_focus(signal: dict, *, width: int | None = None) -> str | None:
+    for key in ("value_at_failure_time", "last_value", "initial_value", "pre_window_value"):
+        value = signal.get(key)
+        if value is not None:
+            return _normalize_wave_value(str(value), width=width)
+    return None
+
+
+def _normalize_wave_value(value: str | None, *, width: int | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return text
+    if width is None or width <= 1 or len(text) >= width:
+        return text
+    if re.fullmatch(r"[01]+", text):
+        return text.zfill(width)
+    return text
 
 
 def _distill_log(

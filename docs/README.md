@@ -12,6 +12,8 @@ When examples use `PYTHONPATH=. poetry run python3 ...`, use that exact form unl
 - [vision-and-ux.md](./vision-and-ux.md): goals, product intent, and intended user experience.
 - [overview.md](./overview.md): end-to-end lifecycle in plain language.
 - [cli.md](./cli.md): command surface and decision matrix.
+- [hiring-brief.md](./hiring-brief.md): one-page AI-for-EDA project brief for external technical reviewers.
+- [../examples/counter3](../examples/counter3): compact checked-in example artifacts.
 
 ## Quick Start by Role
 ### If you are a hardware engineer
@@ -26,8 +28,9 @@ Start here:
 1. [workflows/benchmark-run.md](./workflows/benchmark-run.md)
 2. [workflows/benchmark-campaigns.md](./workflows/benchmark-campaigns.md)
 3. [benchmark-methodology.md](./benchmark-methodology.md)
-4. [observability.md](./observability.md)
-5. [workflows/artifact-hygiene.md](./workflows/artifact-hygiene.md)
+4. [benchmark-optimization-log-20260429.md](./benchmark-optimization-log-20260429.md)
+5. [observability.md](./observability.md)
+6. [workflows/artifact-hygiene.md](./workflows/artifact-hygiene.md)
 
 ## System Design
 - [architecture.md](./architecture.md): runtime components, state machine, and execution flow.
@@ -39,11 +42,14 @@ Start here:
 ## Operations
 - [workflows/interactive-run.md](./workflows/interactive-run.md): engineer runbook with execution checkpoints and troubleshooting.
 - [workflows/failure-repair-loop.md](./workflows/failure-repair-loop.md): retry and repair behavior.
-- [workflows/benchmark-run.md](./workflows/benchmark-run.md): VerilogEval benchmark runbook.
+- [workflows/benchmark-run.md](./workflows/benchmark-run.md): VerilogEval v2 benchmark runbook.
 - [workflows/benchmark-campaigns.md](./workflows/benchmark-campaigns.md): benchmark campaign YAML authoring and execution.
 - [benchmark-methodology.md](./benchmark-methodology.md): benchmark interpretation and comparison guidance.
+- [benchmark-optimization-log-20260429.md](./benchmark-optimization-log-20260429.md): GPT-4o/GPT-4.1 VerilogEval-v2 optimization results and comparison notes.
 - [observability.md](./observability.md): where run telemetry and cost logs go.
 - [workflows/artifact-hygiene.md](./workflows/artifact-hygiene.md): indexing and organizing historical artifacts.
+- [case-studies/example-run.md](./case-studies/example-run.md): concrete spec-to-RTL walkthrough.
+- [demo-script.md](./demo-script.md): two-minute demo outline for project walkthroughs.
 
 ## Reference
 - [reference/runtime-config.md](./reference/runtime-config.md): high-impact runtime config keys.

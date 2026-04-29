@@ -89,6 +89,11 @@ class DebugWorker(AgentWorkerBase):
         tb_lint_log_prompt = _truncate_prompt_text(tb_lint_log, max_chars=8000)
         distilled_prompt = _truncate_prompt_text(distilled, max_chars=10000)
         reflection_prompt = _truncate_prompt_text(reflection, max_chars=10000)
+        counterexample_history = _collect_counterexample_history(task_memory_root, sim_attempt)
+        counterexample_history_prompt = _truncate_prompt_text(
+            json.dumps(counterexample_history, indent=2),
+            max_chars=9000,
+        )
         tb_contract = _testbench_contract_for_context(ctx)
         rag_query = _build_debug_rag_query(
             node_id=node_id,
@@ -145,6 +150,13 @@ class DebugWorker(AgentWorkerBase):
             "  an unconditional timing/event control at the top of each iteration, especially in dump/window helpers.\n"
             "- If attempt_history is provided, avoid repeating a previously attempted patch strategy for the same failure_signature.\n"
             "- If stuck=true or a failure signature repeats, your patch MUST change strategy materially and explain the delta in summary.\n"
+            "- For functional failures, treat every item in counterexample history as a constraint. A repaired truth table, K-map, state machine, or datapath must satisfy all listed input/ref/dut observations, not only the latest failure.\n"
+            "- When io_samples_around_failure are present, treat each row as an observed input-to-reference constraint at that time; your patch must satisfy those rows before applying algebraic simplification.\n"
+            "- When samples_around_failure are present, reason from the sequence of ref/dut samples across time, not just the single focus value. For sequential logic, derive the next-state transition that explains the whole observed sequence and the listed input/reset context signals.\n"
+            "- For edge detectors/capture registers, reset may clear the captured output while still needing to seed previous-input history from the current input so transitions immediately after reset release are not missed.\n"
+            "- When reference_dut_pairs include differing_bit_indices, use those Verilog bit indices directly. Do not infer packed-vector bit positions from left-to-right string order.\n"
+            "- For Icarus-compatible state-machine patches, prefer localparam logic state encodings over typedef enum/casts unless the existing RTL already relies on enums.\n"
+            "- For truth tables, Karnaugh maps, decoders, and small mux-derived combinational functions, preserve the prompt's header/bit ordering exactly. Prefer a complete case/casez table or direct mux table over minimized algebra if mismatches repeat or counterexamples contradict the simplified expression.\n"
             "- If waveform dumping uses a cycle window, do NOT treat DUMP_START=0 as \"disabled\"; some benches accidentally $dumpoff forever.\n"
             "- If the context includes child modules and connection wiring, preserve the integration structure; only fix wiring or glue logic as needed.\n"
             f"{_debug_testbench_guidance(tb_contract)}"
@@ -159,6 +171,8 @@ class DebugWorker(AgentWorkerBase):
             system += (
                 "- RTL-only debug mode is active: do not modify testbench files.\n"
                 "  touched_files MUST include only 'rtl' and tb_lines MUST be null.\n"
+                "- In RTL-only benchmark debug, treat the provided benchmark testbench as the oracle harness. Even if the failure looks like a testbench race, produce a material RTL patch that matches the observed contract instead of recommending testbench edits.\n"
+                "- Do not return RTL that is semantically identical to the current RTL. If the only observed failure is an early X/known-value mismatch, consider deterministic state/output initialization or reset behavior that is consistent with the specification and failure evidence.\n"
             )
         if rag_context.strip():
             system += (
@@ -184,6 +198,8 @@ class DebugWorker(AgentWorkerBase):
             f"{tb_lint_log_prompt}\n\n"
             "Distilled dataset (if any):\n"
             f"{distilled_prompt}\n\n"
+            "Counterexample history (compact, oldest->newest):\n"
+            f"{counterexample_history_prompt}\n\n"
             "Reflection insights (if any):\n"
             f"{reflection_prompt}\n"
         )
@@ -534,6 +550,70 @@ def _read_optional_text(path: Path) -> str:
     return ""
 
 
+def _collect_counterexample_history(task_memory_root: Path, current_attempt: int | None, *, max_items: int = 6) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for path in sorted(task_memory_root.glob("distill_attempt*/distilled_dataset.json")):
+        attempt = _parse_attempt(path.parent.name.rsplit("attempt", 1)[-1])
+        if current_attempt is not None and attempt is not None and attempt > current_attempt:
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        items.append(
+            {
+                "attempt": attempt,
+                "failure_cycle": payload.get("failure_cycle"),
+                "failure_time": payload.get("failure_time"),
+                "failure_line": payload.get("failure_line"),
+                "waveform_failure_snapshot": _compact_mapping(payload.get("waveform_failure_snapshot"), limit=18),
+                "reference_dut_pairs": _compact_ref_dut_pairs(payload.get("reference_dut_pairs"), limit=8),
+            }
+        )
+    return items[-max_items:]
+
+
+def _compact_mapping(value: Any, *, limit: int) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key in sorted(value):
+        if len(out) >= limit:
+            break
+        val = value.get(key)
+        if val is None:
+            continue
+        out[str(key)] = str(val)
+    return out
+
+
+def _compact_ref_dut_pairs(value: Any, *, limit: int) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in value:
+        if len(out) >= limit:
+            break
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            {
+                "output": item.get("output"),
+                "width": item.get("width"),
+                "ref_value": item.get("ref_value"),
+                "dut_value": item.get("dut_value"),
+                "differing_bit_indices": item.get("differing_bit_indices"),
+                "matches": item.get("matches"),
+                "samples_around_failure": item.get("samples_around_failure"),
+                "io_samples_around_failure": item.get("io_samples_around_failure"),
+                "context_signals_around_failure": item.get("context_signals_around_failure"),
+            }
+        )
+    return out
+
+
 def _sanitize_verilog(source: str, *, kind: str, rtl_language: str) -> str:
     lines = []
     for line in source.splitlines():
@@ -733,6 +813,7 @@ def _run_local_validation(
 
     if need_rtl_lint:
         checks.append(_run_rtl_lint_check(ctx=ctx, rtl_paths=rtl_paths, rtl_path=rtl_path))
+        checks.append(_run_rtl_icarus_check(rtl_paths=rtl_paths))
     if need_tb_lint:
         checks.append(_run_tb_lint_check(ctx=ctx, rtl_paths=rtl_paths, tb_path=tb_path))
 
@@ -842,6 +923,32 @@ def _run_rtl_lint_check(*, ctx: dict, rtl_paths: list[str], rtl_path: Path) -> d
         "ok": True,
         "output": merged_output,
     }
+
+
+def _run_rtl_icarus_check(*, rtl_paths: list[str]) -> dict:
+    name = "rtl_icarus"
+    missing = [path for path in rtl_paths if not Path(path).exists()]
+    if missing:
+        return {"name": name, "ok": False, "output": f"RTL missing for local Icarus validation: {missing}"}
+
+    runtime_cfg = get_runtime_config()
+    iverilog = runtime_cfg.tools.iverilog_path or shutil.which("iverilog")
+    if not iverilog:
+        return {"name": name, "ok": False, "output": "Icarus (iverilog) not found for local RTL validation."}
+
+    cmd = [iverilog, "-g2012", "-g2005-sv", "-tnull", *rtl_paths]
+    timeout_s = float(runtime_cfg.debug.local_lint_timeout_s)
+    try:
+        completed = _run_subprocess(cmd, timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        return {"name": name, "ok": False, "output": f"Icarus RTL validation timed out: {exc}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"name": name, "ok": False, "output": f"Icarus RTL validation failed: {exc}"}
+
+    output = _format_tool_output(completed.stdout, completed.stderr)
+    if completed.returncode != 0:
+        return {"name": name, "ok": False, "output": output or "Icarus RTL validation failed."}
+    return {"name": name, "ok": True, "output": output or "Icarus RTL validation passed."}
 
 
 def _run_tb_lint_check(*, ctx: dict, rtl_paths: list[str], tb_path: Path) -> dict:

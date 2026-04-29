@@ -470,7 +470,7 @@ class ExecutionNarrator:
     @staticmethod
     def _init_llm_gateway() -> Optional[object]:
         # Keep generation quality high while making progress output responsive.
-        # If main model is GPT-5 and no override is provided, default narrator to gpt-4.1-mini.
+        # If main model is GPT-5 and no override is provided, default narrator to gpt-4.1.
         llm_cfg = get_runtime_config().llm
         explicit_model = str(llm_cfg.narrative_model or "").strip()
         if explicit_model:
@@ -480,7 +480,7 @@ class ExecutionNarrator:
         if provider == "openai":
             main_model = str(llm_cfg.default_model or "").strip().lower()
             if main_model.startswith("gpt-5"):
-                fast_model = str(llm_cfg.narrative_fallback_model or "gpt-4.1-mini").strip()
+                fast_model = str(llm_cfg.narrative_fallback_model or "gpt-4.1").strip()
                 return init_llm_gateway(model_override=fast_model)
         return init_llm_gateway()
 

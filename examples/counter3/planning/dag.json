@@ -1,0 +1,28 @@
+{
+  "example": {
+    "name": "counter3",
+    "description": "Single-module DAG for the curated counter example.",
+    "source_spec": "spec/counter3_basic.txt"
+  },
+  "nodes": [
+    {
+      "id": "counter3",
+      "type": "module",
+      "deps": [],
+      "state": "PENDING",
+      "artifacts": {
+        "rtl_file": "rtl/counter3.sv",
+        "testbench_file": "rtl/counter3_tb.sv"
+      },
+      "metrics": {},
+      "stage_order": [
+        "implement",
+        "lint",
+        "testbench",
+        "tb_lint",
+        "simulate",
+        "accept"
+      ]
+    }
+  ]
+}
